@@ -2227,7 +2227,7 @@ def main():
         st.markdown("### 📊 Resultados por base")
         max_results = st.slider(
             "Máximo resultados por base:", 
-            min_value=10, max_value=200, value=50, step=10,
+            min_value=10, max_value=1000, value=50, step=10,
             help="Máximo de artículos por base de datos"
         )
         
