@@ -73,6 +73,8 @@ EMAIL_CONFIG = EmailConfig()
 
 def validate_email(email):
     """Valida el formato de un email"""
+    if not email or email == "":
+        return False
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
@@ -2008,6 +2010,9 @@ class IntegratedScientificVerifier:
     
     def generate_html_report(self) -> str:
         """Genera un reporte HTML de los resultados para enviar por correo"""
+        if self.results.empty:
+            return "<p>No hay resultados para generar reporte.</p>"
+        
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -2053,21 +2058,28 @@ class IntegratedScientificVerifier:
         """
         
         for idx, row in self.results.iterrows():
+            # Manejar valores nulos o vacíos
+            titulo = str(row.get('titulo', '')) if pd.notna(row.get('titulo')) else "Título no disponible"
+            base_datos = str(row.get('base_datos', '')) if pd.notna(row.get('base_datos')) else "Desconocida"
+            año = str(row.get('año', '')) if pd.notna(row.get('año')) else ""
+            veredicto = str(row.get('veredicto', '')) if pd.notna(row.get('veredicto')) else "NO DISPONIBLE"
+            confianza = float(row.get('confianza', 0)) if pd.notna(row.get('confianza')) else 0
+            
             verdict_class = ""
-            if 'CORROBORA' in row['veredicto']:
+            if 'CORROBORA' in veredicto:
                 verdict_class = "verdict-assert"
-            elif 'CONTRADICE' in row['veredicto']:
+            elif 'CONTRADICE' in veredicto:
                 verdict_class = "verdict-reject"
-            elif 'NO CONCLUYENTE' in row['veredicto']:
+            elif 'NO CONCLUYENTE' in veredicto:
                 verdict_class = "verdict-inconclusive"
             
             html += f"""
                 <tr>
-                    <td>{row['base_datos']}</td>
-                    <td>{row['titulo'][:100]}...</td>
-                    <td>{row['año']}</td>
-                    <td class="{verdict_class}">{row['veredicto']}</td>
-                    <td>{row['confianza']:.1%}</td>
+                    <td>{base_datos}</td>
+                    <td>{titulo[:100]}...</td>
+                    <td>{año}</td>
+                    <td class="{verdict_class}">{veredicto}</td>
+                    <td>{confianza:.1%}</td>
                 </tr>
             """
         
@@ -2114,6 +2126,10 @@ def get_verdict_class(verdict: str) -> str:
 
 def enviar_resultados_email(destinatario, integrator):
     """Envía los resultados del análisis por correo electrónico"""
+    
+    if integrator is None or integrator.results is None or integrator.results.empty:
+        st.warning("No hay resultados para enviar por correo.")
+        return False
     
     # Generar reportes
     reporte_txt = integrator.generate_report()
@@ -2579,7 +2595,7 @@ def main():
     # Sección para enviar resultados por correo (después del análisis)
     if st.session_state.integrator is not None and not st.session_state.integrator.results.empty:
         st.markdown("---")
-        st.markdown("## 📧 ENVIAR RESULTADOS POR CORREО")
+        st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
         st.markdown('<div class="email-box">', unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns([1, 2, 1])
