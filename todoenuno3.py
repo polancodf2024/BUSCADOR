@@ -1453,7 +1453,7 @@ class ScientificSearchEngine:
                 f"?db=pubmed"
                 f"&term={encoded_query}"
                 f"&retmode=json"
-                f"&retmax={min(200, max_results)}"
+                f"&retmax={min(1000, max_results)}"
                 f"&sort=relevance"
                 f"&tool=streamlit_app"
                 f"&email={self.email}"
@@ -1621,7 +1621,7 @@ class ScientificSearchEngine:
         
         return results[:max_results]
     
-    def search_all(self, query: str, max_results_per_db: int = 200, selected_dbs: list = None, 
+    def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
         """Busca en todas las bases de datos seleccionadas con alto volumen"""
         
@@ -1797,7 +1797,7 @@ class IntegratedScientificVerifier:
             'inconclusos': 0
         }
     
-    def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 200, 
+    def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
                      selected_dbs: list = None, year_range: tuple = None,
                      progress_callback=None) -> pd.DataFrame:
         """
@@ -2564,7 +2564,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.0 | ALTO VOLUMEN: Hasta 200 artículos por base | Análisis AI avanzado</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.0 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado</p>
     </div>
     """, unsafe_allow_html=True)
 
