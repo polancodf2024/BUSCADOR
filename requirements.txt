@@ -1,10 +1,37 @@
-# requirements.txt para Python 3.13
+# ============================================================================
+# REQUIREMENTS.TXT PARA HIPERLECTOR - Buscador Semántico con IA Avanzada
+# Versión compatible con Python 3.8+
+# ============================================================================
+
+# Core
 streamlit==1.41.1
 pandas==2.2.3
 numpy==2.2.4
 requests==2.32.3
+
+# Visualización
 plotly==6.0.1
+streamlit-option-menu==0.3.13
+
+# Procesamiento de texto
 nltk==3.9.1
+scikit-learn==1.6.1
+
+# Traducción
 deep-translator==1.11.4
+
+# Exportación
 openpyxl==3.1.5
+
+# Networking
 urllib3==2.3.0
+
+# Email (built-in, no requiere instalación adicional)
+# smtplib, email, ssl vienen con Python
+
+# ============================================================================
+# NOTAS:
+# - scikit-learn se usa para TF-IDF y similitud de coseno
+# - nltk descargará automáticamente punkt y stopwords al iniciar
+# - deep-translator usa Google Translate (gratuito)
+# ============================================================================

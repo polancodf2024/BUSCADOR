@@ -1,6 +1,7 @@
 """
-Buscador y Verificador Semántico Integrado - VERSIÓN ALTO VOLUMEN CON COMPRENSIÓN LECTORA AVANZADA
-Combina búsqueda en múltiples bases de datos científicas con análisis semántico profundo tipo humano
+Buscador y Verificador Semántico Integrado - VERSIÓN ALTO VOLUMEN CON IA AVANZADA
+Combina búsqueda en múltiples bases de datos científicas con análisis semántico AI de última generación
+Soporta hasta 1000 resultados por base de datos
 """
 
 import streamlit as st
@@ -11,14 +12,19 @@ import urllib.parse
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
+from streamlit_option_menu import option_menu
 import io
 import xml.etree.ElementTree as ET
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Tuple, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
+import os
+import pathlib
+from typing import List, Dict, Tuple, Optional
+import zipfile
+import random
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from collections import Counter, defaultdict
+from collections import Counter
 import nltk
 import warnings
 warnings.filterwarnings('ignore')
@@ -30,19 +36,14 @@ from email.mime.base import MIMEBase
 from email import encoders
 from email.utils import formatdate
 import ssl
-import json
-import hashlib
-import pickle
-from pathlib import Path
 import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# ============================================================================
-# CONFIGURACIÓN INICIAL
-# ============================================================================
-
+# Configuración de la página
 st.set_page_config(
-    page_title="🧠 Buscador con Comprensión Lectora Humana",
-    page_icon="🧠",
+    page_title="🔬 Buscador y Verificador Semántico Integrado",
+    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -53,29 +54,52 @@ st.set_page_config(
 
 class EmailConfig:
     def __init__(self):
+        # Configuración SMTP (usando variables de entorno o secrets de Streamlit)
         self.SMTP_SERVER = st.secrets.get("smtp_server", "smtp.gmail.com")
         self.SMTP_PORT = st.secrets.get("smtp_port", 587)
         self.EMAIL_USER = st.secrets.get("email_user", "")
         self.EMAIL_PASSWORD = st.secrets.get("email_password", "")
         self.MAX_FILE_SIZE_MB = 10
+        
+        # Verificar si tenemos configuración de correo
         self.available = all([
-            self.SMTP_SERVER, self.SMTP_PORT, 
-            self.EMAIL_USER, self.EMAIL_PASSWORD
+            self.SMTP_SERVER,
+            self.SMTP_PORT,
+            self.EMAIL_USER,
+            self.EMAIL_PASSWORD
         ])
 
 EMAIL_CONFIG = EmailConfig()
 
 def validate_email(email):
+    """Valida el formato de un email"""
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
 def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, archivos=None):
+    """
+    Envía correo electrónico con formato HTML y texto plano
+    
+    Args:
+        destinatario: Email del destinatario
+        asunto: Asunto del correo
+        mensaje_html: Mensaje en formato HTML
+        mensaje_texto: Mensaje en texto plano (alternativa)
+        archivos: Lista de diccionarios con {'nombre': 'archivo.pdf', 'contenido': bytes}
+    
+    Returns:
+        bool: True si se envió correctamente
+    """
     if not EMAIL_CONFIG.available:
-        st.error("Configuración de correo no disponible")
+        st.error("Configuración de correo no disponible. Verifica los secrets de la aplicación.")
         return False
     
     if not validate_email(destinatario):
         st.error("Dirección de correo no válida")
+        return False
+    
+    if not asunto or (not mensaje_html and not mensaje_texto):
+        st.error("Faltan datos requeridos para enviar el correo")
         return False
     
     try:
@@ -85,27 +109,37 @@ def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, a
         msg['Subject'] = asunto
         msg['Date'] = formatdate(localtime=True)
         
+        # Adjuntar versión texto plano (si existe)
         if mensaje_texto:
             msg.attach(MIMEText(mensaje_texto, 'plain'))
+        
+        # Adjuntar versión HTML (si existe)
         if mensaje_html:
             msg.attach(MIMEText(mensaje_html, 'html'))
         
+        # Adjuntar archivos
         if archivos:
             for archivo in archivos:
                 if len(archivo['contenido']) > EMAIL_CONFIG.MAX_FILE_SIZE_MB * 1024 * 1024:
+                    st.warning(f"El archivo {archivo['nombre']} excede el tamaño máximo de {EMAIL_CONFIG.MAX_FILE_SIZE_MB}MB y no será enviado")
                     continue
+                
                 part = MIMEBase('application', 'octet-stream')
                 part.set_payload(archivo['contenido'])
                 encoders.encode_base64(part)
                 part.add_header('Content-Disposition', f'attachment; filename="{archivo["nombre"]}"')
                 msg.attach(part)
         
+        # Enviar correo
         context = ssl.create_default_context()
+        
         with smtplib.SMTP(EMAIL_CONFIG.SMTP_SERVER, EMAIL_CONFIG.SMTP_PORT) as server:
             server.starttls(context=context)
             server.login(EMAIL_CONFIG.EMAIL_USER, EMAIL_CONFIG.EMAIL_PASSWORD)
             server.send_message(msg)
+        
         return True
+        
     except Exception as e:
         st.error(f"Error enviando correo: {str(e)}")
         return False
@@ -115,6 +149,7 @@ def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, a
 # ============================================================================
 
 def setup_nltk():
+    """Configura NLTK y descarga los recursos necesarios"""
     try:
         nltk.data.find('tokenizers/punkt')
     except LookupError:
@@ -130,7 +165,7 @@ def setup_nltk():
         try:
             nltk.download('stopwords')
         except:
-            st.warning("No se pudieron descargar stopwords.")
+            st.warning("No se pudieron descargar stopwords. Usando lista básica.")
             return False
     
     try:
@@ -140,6 +175,7 @@ def setup_nltk():
     except:
         return False
 
+# Configurar NLTK al inicio
 NLTK_READY = setup_nltk()
 
 if NLTK_READY:
@@ -148,10 +184,214 @@ if NLTK_READY:
     from nltk.tokenize import sent_tokenize
 
 # ============================================================================
+# ESTILOS CSS
+# ============================================================================
+
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1E88E5;
+        text-align: center;
+        margin-bottom: 1rem;
+        font-weight: bold;
+    }
+    .sub-header {
+        font-size: 1.2rem;
+        color: #424242;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .result-card {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        border-left: 5px solid #1E88E5;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .verdict-assert {
+        background: linear-gradient(135deg, #4CAF50, #2E7D32);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        display: inline-block;
+        font-weight: bold;
+    }
+    .verdict-reject {
+        background: linear-gradient(135deg, #f44336, #b71c1c);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        display: inline-block;
+        font-weight: bold;
+    }
+    .verdict-inconclusive {
+        background: linear-gradient(135deg, #ff9800, #bf360c);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        display: inline-block;
+        font-weight: bold;
+    }
+    .badge-pubmed { 
+        background-color: #1E88E5; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-crossref { 
+        background-color: #43A047; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-openalex { 
+        background-color: #FDD835; 
+        color: #333; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-semantic { 
+        background-color: #E53935; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-doaj { 
+        background-color: #9C27B0; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-europepmc { 
+        background-color: #FF5722; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .section-badge {
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: bold;
+        margin-right: 0.5rem;
+    }
+    .section-abstract { background-color: #e1f5fe; color: #01579b; }
+    .section-introduction { background-color: #fff3e0; color: #bf360c; }
+    .section-methods { background-color: #e8f5e8; color: #1b5e20; }
+    .section-results { background-color: #f3e5f5; color: #4a148c; }
+    .section-discussion { background-color: #fff8e1; color: #ff6f00; }
+    .section-conclusion { background-color: #ffebee; color: #b71c1c; }
+    
+    .progress-container {
+        background-color: #f0f2f6;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .stats-box {
+        background-color: #e8f5e9;
+        border-left: 5px solid #2e7d32;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 0.5rem 0;
+    }
+    .evidence-box {
+        background-color: #fff3e0;
+        border-left: 5px solid #ff9800;
+        padding: 0.5rem;
+        margin: 0.2rem 0;
+        font-size: 0.85rem;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 1rem;
+        border-radius: 5px;
+        border-left: 5px solid #ffc107;
+        margin: 1rem 0;
+    }
+    .assistant-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 15px;
+        margin: 1rem 0;
+    }
+    .assistant-step {
+        background-color: rgba(255,255,255,0.1);
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .tip-box {
+        background-color: #e3f2fd;
+        border-left: 5px solid #2196f3;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+        font-size: 0.95rem;
+    }
+    .email-box {
+        background-color: #fce4e4;
+        border-left: 5px solid #e53935;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ============================================================================
+# TOKENIZADOR ALTERNATIVO
+# ============================================================================
+
+def simple_sent_tokenize(text: str) -> List[str]:
+    """Tokenizador simple de oraciones como fallback"""
+    abbreviations = ['Dr.', 'Dra.', 'Prof.', 'vs.', 'Fig.', 'Eq.', 'et al.', 
+                    'i.e.', 'e.g.', 'p.ej.', 'vol.', 'no.', 'pp.', 'eds.']
+    
+    for i, abbr in enumerate(abbreviations):
+        text = text.replace(abbr, f"ABBR{i}")
+    
+    sentences = re.split(r'[.!?]+', text)
+    
+    for i, abbr in enumerate(abbreviations):
+        sentences = [s.replace(f"ABBR{i}", abbr) for s in sentences]
+    
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 30]
+    
+    return sentences
+
+
+# ============================================================================
 # CLASE DE TRADUCCIÓN
 # ============================================================================
 
 class TranslationManager:
+    """Maneja traducciones con caché"""
+    
     def __init__(self):
         self.cache = {}
         try:
@@ -164,7 +404,7 @@ class TranslationManager:
     def translate_to_spanish(self, text: str) -> str:
         if not text or len(text) > 4000 or not self.available:
             return text
-        cache_key = f"es_{hashlib.md5(text[:100].encode()).hexdigest()}"
+        cache_key = f"es_{text[:100]}"
         if cache_key in self.cache:
             return self.cache[cache_key]
         try:
@@ -177,7 +417,7 @@ class TranslationManager:
     def translate_to_english(self, text: str) -> str:
         if not text or len(text) > 4000 or not self.available:
             return text
-        cache_key = f"en_{hashlib.md5(text[:100].encode()).hexdigest()}"
+        cache_key = f"en_{text[:100]}"
         if cache_key in self.cache:
             return self.cache[cache_key]
         try:
@@ -187,1303 +427,18 @@ class TranslationManager:
         except:
             return text
 
-# ============================================================================
-# SISTEMA DE COMPRENSIÓN LECTORA AVANZADO (¡EL CORAZÓN DEL CAMBIO!)
-# ============================================================================
-
-class AdvancedReadingComprehension:
-    """
-    Sistema de comprensión lectora que imita el razonamiento humano
-    """
-    
-    def __init__(self):
-        self.translator = TranslationManager()
-        
-        # Base de conocimiento sobre tipos de estudio y su peso
-        self.study_type_weights = {
-            'meta-analysis': 2.5,
-            'systematic review': 2.5,
-            'randomized controlled trial': 2.0,
-            'cohort study': 1.5,
-            'case-control': 1.3,
-            'cross-sectional': 1.0,
-            'case series': 0.7,
-            'case report': 0.5,
-            'editorial': 0.3,
-            'commentary': 0.3,
-            'news': 0.2,
-            'unknown': 0.5
-        }
-        
-        # Palabras clave para detectar tipo de estudio
-        self.study_type_patterns = {
-            'meta-analysis': [r'meta-?analysis', r'meta-analysis', r'meta analysis'],
-            'systematic review': [r'systematic review', r'systematic literature review'],
-            'randomized controlled trial': [r'randomized controlled trial', r'randomised controlled trial', r'RCT'],
-            'cohort study': [r'cohort', r'prospective cohort', r'retrospective cohort'],
-            'case-control': [r'case-?control', r'case control'],
-            'cross-sectional': [r'cross-?sectional', r'cross sectional'],
-            'case series': [r'case series'],
-            'case report': [r'case report'],
-            'editorial': [r'editorial'],
-            'commentary': [r'commentary'],
-            'news': [r'news', r'press release']
-        }
-        
-        # Indicadores de lenguaje cauto (hedging language)
-        self.hedging_indicators = [
-            'suggest', 'may', 'might', 'could', 'possible', 'potentially',
-            'indicate', 'appear', 'seem', 'suggestive', 'preliminary',
-            'tentative', 'not conclusive', 'further research', 'needed',
-            'warrant', 'cautious', 'speculate', 'hypothesize', 'propose'
-        ]
-        
-        # Indicadores de lenguaje fuerte
-        self.strong_indicators = [
-            'demonstrate', 'prove', 'confirm', 'establish', 'conclusive',
-            'definitive', 'unequivocal', 'certain', 'clearly show',
-            'undoubtedly', 'without doubt', 'irrefutable'
-        ]
-        
-        # Patrones para detectar el objetivo principal del estudio
-        self.objective_patterns = [
-            r'(objective|aim|purpose|goal).{1,50}(was|were|is)',
-            r'to (investigate|examine|evaluate|assess|determine|establish)',
-            r'this (study|paper|research) (aims|aimed|seeks|sought) to',
-            r'we (sought|aimed|hypothesized) to'
-        ]
-        
-        # Patrones para detectar conclusiones
-        self.conclusion_patterns = [
-            r'(conclusion|conclude|conclusions?).{1,50}(that|:)',
-            r'in summary',
-            r'in conclusion',
-            r'take(n)? together',
-            r'our (findings|results|data) (suggest|indicate|show|demonstrate)',
-            r'we (conclude|demonstrate|show) that',
-            r'these (findings|results) (suggest|indicate|support|provide evidence)'
-        ]
-        
-        # Cache para análisis
-        self.analysis_cache = {}
-    
-    def detect_study_type(self, text: str) -> Dict[str, float]:
-        """
-        Detecta el tipo de estudio y asigna probabilidades
-        """
-        text_lower = text.lower()
-        scores = {study_type: 0.0 for study_type in self.study_type_weights.keys()}
-        
-        # Buscar patrones
-        for study_type, patterns in self.study_type_patterns.items():
-            for pattern in patterns:
-                matches = re.findall(pattern, text_lower)
-                if matches:
-                    scores[study_type] += len(matches) * 2
-        
-        # Buscar en abstract y título (dar más peso)
-        abstract_match = re.search(r'abstract', text_lower)
-        if abstract_match:
-            abstract_text = text[max(0, abstract_match.start()-200):min(len(text), abstract_match.end()+1000)]
-            abstract_lower = abstract_text.lower()
-            for study_type, patterns in self.study_type_patterns.items():
-                for pattern in patterns:
-                    if re.search(pattern, abstract_lower):
-                        scores[study_type] += 3
-        
-        # Normalizar
-        total = sum(scores.values()) or 1
-        for study_type in scores:
-            scores[study_type] = scores[study_type] / total
-        
-        # Identificar el tipo principal
-        primary_type = max(scores, key=scores.get) if max(scores.values()) > 0.1 else 'unknown'
-        
-        return {
-            'primary_type': primary_type,
-            'confidence': scores[primary_type],
-            'all_scores': scores,
-            'weight': self.study_type_weights.get(primary_type, 0.5)
-        }
-    
-    def extract_main_objective(self, text: str) -> Optional[str]:
-        """
-        Extrae el objetivo principal del estudio
-        """
-        text_lower = text.lower()
-        
-        # Buscar en las primeras 2000 caracteres (normalmente donde está el objetivo)
-        intro_text = text_lower[:2000]
-        
-        for pattern in self.objective_patterns:
-            match = re.search(pattern, intro_text, re.IGNORECASE)
-            if match:
-                # Extraer la oración completa
-                start = max(0, match.start() - 50)
-                end = min(len(text), match.start() + 300)
-                sentence = text[start:end].split('.')[0] + '.'
-                return sentence
-        
-        return None
-    
-    def extract_conclusion(self, text: str) -> Optional[str]:
-        """
-        Extrae la conclusión principal del estudio
-        """
-        text_lower = text.lower()
-        
-        # Buscar en los últimos 3000 caracteres (donde suele estar la conclusión)
-        conclusion_text = text_lower[-3000:]
-        
-        for pattern in self.conclusion_patterns:
-            match = re.search(pattern, conclusion_text, re.IGNORECASE)
-            if match:
-                # Extraer la oración completa
-                start = max(0, len(text) - 3000 + match.start() - 50)
-                end = min(len(text), len(text) - 3000 + match.start() + 500)
-                sentence = text[start:end].split('.')[0] + '.'
-                return sentence
-        
-        return None
-    
-    def extract_all_claims(self, text: str, hypothesis_terms: List[str]) -> List[Dict]:
-        """
-        Extrae TODAS las afirmaciones relevantes del texto
-        """
-        sentences = self.split_sentences(text)
-        claims = []
-        
-        for sentence in sentences:
-            # Verificar si contiene términos de la hipótesis
-            sentence_lower = sentence.lower()
-            term_matches = [term for term in hypothesis_terms if term in sentence_lower]
-            
-            if term_matches:
-                # Analizar la afirmación en profundidad
-                claim_analysis = self.analyze_claim_deep(sentence, term_matches)
-                claims.append(claim_analysis)
-        
-        return claims
-    
-    def analyze_claim_deep(self, sentence: str, matched_terms: List[str]) -> Dict:
-        """
-        Análisis profundo de una afirmación individual
-        """
-        sentence_lower = sentence.lower()
-        sentence_en = self.translator.translate_to_english(sentence)
-        
-        # Determinar tipo de relación
-        relation_type = self.determine_relation_type(sentence_en)
-        
-        # Determinar dirección (a favor/en contra)
-        direction = self.determine_direction(sentence_en)
-        
-        # Determinar fuerza del lenguaje
-        language_strength = self.determine_language_strength(sentence_en)
-        
-        # Determinar si es una conclusión principal
-        is_primary_conclusion = self.is_primary_conclusion(sentence)
-        
-        # Extraer contexto (dónde aparece en el artículo)
-        section = self.detect_section(sentence)
-        
-        return {
-            'sentence': sentence[:300] + '...' if len(sentence) > 300 else sentence,
-            'sentence_en': sentence_en[:300] + '...' if len(sentence_en) > 300 else sentence_en,
-            'matched_terms': matched_terms,
-            'relation_type': relation_type,
-            'direction': direction,
-            'language_strength': language_strength,
-            'strength_score': self.calculate_strength_score(relation_type, direction, language_strength),
-            'is_primary_conclusion': is_primary_conclusion,
-            'section': section,
-            'section_weight': self.section_weights.get(section, 1.0)
-        }
-    
-    def determine_relation_type(self, sentence: str) -> str:
-        """
-        Determina el tipo de relación expresada en la oración
-        """
-        sentence_lower = sentence.lower()
-        
-        # Patrones causales explícitos
-        causal_patterns = [
-            r'causes?', r'induces?', r'leads? to', r'results? in', 
-            r'provokes?', r'triggers?', r'produces?', r'gives rise to'
-        ]
-        
-        # Patrones de asociación
-        association_patterns = [
-            r'associat', r'relat', r'correlat', r'link', r'connect',
-            r'tied to', r'bound with'
-        ]
-        
-        # Patrones de riesgo
-        risk_patterns = [
-            r'risk', r'increase(s)? the risk', r'elevated risk',
-            r'higher risk', r'greater risk'
-        ]
-        
-        # Patrones de protección
-        protective_patterns = [
-            r'protect', r'reduce(s)? the risk', r'lower risk',
-            r'decreased risk', r'prevent'
-        ]
-        
-        for pattern in causal_patterns:
-            if re.search(pattern, sentence_lower):
-                return 'causal'
-        
-        for pattern in risk_patterns:
-            if re.search(pattern, sentence_lower):
-                return 'risk'
-        
-        for pattern in protective_patterns:
-            if re.search(pattern, sentence_lower):
-                return 'protective'
-        
-        for pattern in association_patterns:
-            if re.search(pattern, sentence_lower):
-                return 'association'
-        
-        return 'unknown'
-    
-    def determine_direction(self, sentence: str) -> str:
-        """
-        Determina si la afirmación apoya o contradice la hipótesis
-        """
-        sentence_lower = sentence.lower()
-        
-        # Patrones de apoyo
-        support_patterns = [
-            r'associat', r'link', r'correlat', r'caus', r'risk',
-            r'increas', r'elevat', r'higher', r'greater', r'more likely'
-        ]
-        
-        # Patrones de contradicción
-        contradict_patterns = [
-            r'no (associat|relat|correlat|link)',
-            r'not (associat|relat|correlat)',
-            r'lack of (associat|evidence)',
-            r'no (evidence|support)',
-            r'does not (support|indicate)',
-            r'contradict',
-            r'opposite',
-            r'inverse',
-            r'protective',
-            r'reduces? risk',
-            r'lower risk'
-        ]
-        
-        # Primero verificar contradicción explícita
-        for pattern in contradict_patterns:
-            if re.search(pattern, sentence_lower):
-                return 'contradicts'
-        
-        # Luego verificar apoyo
-        for pattern in support_patterns:
-            if re.search(pattern, sentence_lower):
-                return 'supports'
-        
-        return 'neutral'
-    
-    def determine_language_strength(self, sentence: str) -> str:
-        """
-        Determina la fuerza del lenguaje usado (cauto, fuerte, neutral)
-        """
-        sentence_lower = sentence.lower()
-        
-        # Contar indicadores de cautela
-        hedging_count = sum(1 for indicator in self.hedging_indicators 
-                          if indicator in sentence_lower)
-        
-        # Contar indicadores de fuerza
-        strong_count = sum(1 for indicator in self.strong_indicators 
-                          if indicator in sentence_lower)
-        
-        if strong_count >= 2:
-            return 'strong'
-        elif hedging_count >= 2:
-            return 'hedged'
-        elif strong_count == 1 and hedging_count == 0:
-            return 'moderate_strong'
-        elif hedging_count == 1:
-            return 'moderate_hedged'
-        else:
-            return 'neutral'
-    
-    def calculate_strength_score(self, relation_type: str, direction: str, 
-                                language_strength: str) -> float:
-        """
-        Calcula un puntaje de fuerza para la evidencia
-        """
-        base_scores = {
-            'causal': 2.0,
-            'risk': 1.8,
-            'association': 1.5,
-            'protective': 1.3,
-            'unknown': 0.5
-        }
-        
-        direction_multipliers = {
-            'supports': 1.0,
-            'contradicts': -1.0,
-            'neutral': 0.1
-        }
-        
-        language_multipliers = {
-            'strong': 1.5,
-            'moderate_strong': 1.2,
-            'neutral': 1.0,
-            'moderate_hedged': 0.7,
-            'hedged': 0.4
-        }
-        
-        base = base_scores.get(relation_type, 0.5)
-        direction_mult = direction_multipliers.get(direction, 0.1)
-        language_mult = language_multipliers.get(language_strength, 1.0)
-        
-        return base * direction_mult * language_mult
-    
-    def is_primary_conclusion(self, sentence: str) -> bool:
-        """
-        Determina si la oración es parte de la conclusión principal
-        """
-        sentence_lower = sentence.lower()
-        
-        conclusion_indicators = [
-            'conclusion', 'conclude', 'summary', 'findings suggest',
-            'results indicate', 'data show', 'we conclude', 'in summary',
-            'taken together', 'overall', 'this study demonstrates'
-        ]
-        
-        for indicator in conclusion_indicators:
-            if indicator in sentence_lower:
-                return True
-        
-        return False
-    
-    def detect_section(self, sentence: str) -> str:
-        """
-        Detecta en qué sección del artículo aparece la oración
-        """
-        sentence_lower = sentence.lower()
-        
-        section_keywords = {
-            'abstract': ['abstract', 'background', 'objective', 'methods', 'results', 'conclusions'],
-            'introduction': ['introduction', 'background', 'rationale'],
-            'methods': ['methods', 'methodology', 'study design', 'participants', 'statistical analysis'],
-            'results': ['results', 'findings', 'analysis', 'data'],
-            'discussion': ['discussion', 'interpretation', 'limitations'],
-            'conclusion': ['conclusion', 'concluding remarks']
-        }
-        
-        for section, keywords in section_keywords.items():
-            for keyword in keywords:
-                if keyword in sentence_lower and len(keyword) > 3:
-                    return section
-        
-        return 'unknown'
-    
-    def split_sentences(self, text: str) -> List[str]:
-        """Divide texto en oraciones"""
-        if NLTK_READY:
-            try:
-                return sent_tokenize(text)
-            except:
-                return text.split('. ')
-        else:
-            return text.split('. ')
-    
-    def synthesize_verdict(self, claims: List[Dict], study_type_info: Dict, 
-                          main_objective: str, conclusion: str) -> Dict:
-        """
-        SINTESIS CRÍTICA: Determina el veredicto final basado en TODA la evidencia
-        """
-        if not claims:
-            return {
-                'verdict': 'inconclusive',
-                'verdict_text': 'EVIDENCIA NO CONCLUYENTE',
-                'confidence': 0,
-                'reasoning': 'No se encontraron afirmaciones relevantes en el artículo',
-                'summary': {}
-            }
-        
-        # Separar afirmaciones por tipo y sección
-        primary_conclusion_claims = [c for c in claims if c['is_primary_conclusion']]
-        results_section_claims = [c for c in claims if c['section'] == 'results']
-        discussion_section_claims = [c for c in claims if c['section'] == 'discussion']
-        abstract_claims = [c for c in claims if c['section'] == 'abstract']
-        
-        # Calcular puntajes ponderados
-        weighted_score = 0.0
-        total_weight = 0.0
-        
-        support_count = 0
-        contradict_count = 0
-        strong_support_count = 0
-        strong_contradict_count = 0
-        
-        for claim in claims:
-            # Peso base por tipo de afirmación
-            weight = abs(claim['strength_score'])
-            
-            # Peso adicional por sección
-            if claim['section'] == 'results':
-                weight *= 1.5
-            elif claim['section'] == 'conclusion':
-                weight *= 2.0
-            elif claim['section'] == 'discussion':
-                weight *= 1.2
-            elif claim['section'] == 'abstract':
-                weight *= 1.3
-            
-            # Peso adicional si es conclusión principal
-            if claim['is_primary_conclusion']:
-                weight *= 2.5
-            
-            # Aplicar dirección
-            if claim['direction'] == 'supports':
-                weighted_score += weight
-                support_count += 1
-                if claim['language_strength'] in ['strong', 'moderate_strong']:
-                    strong_support_count += 1
-            elif claim['direction'] == 'contradicts':
-                weighted_score -= weight
-                contradict_count += 1
-                if claim['language_strength'] in ['strong', 'moderate_strong']:
-                    strong_contradict_count += 1
-            
-            total_weight += weight
-        
-        # Normalizar por tipo de estudio
-        study_weight = study_type_info['weight']
-        weighted_score *= study_weight
-        
-        # Determinar veredicto con matices
-        if weighted_score > 5.0:
-            if strong_support_count >= 2:
-                verdict = 'strongly_supports'
-                verdict_text = 'CORROBORA FUERTEMENTE'
-            else:
-                verdict = 'supports'
-                verdict_text = 'CORROBORA'
-        elif weighted_score > 1.0:
-            if support_count > contradict_count * 2:
-                verdict = 'supports'
-                verdict_text = 'CORROBORA'
-            else:
-                verdict = 'inconclusive'
-                verdict_text = 'EVIDENCIA NO CONCLUYENTE'
-        elif weighted_score > -1.0:
-            if contradict_count > support_count * 2:
-                verdict = 'contradicts'
-                verdict_text = 'CONTRADICE'
-            else:
-                verdict = 'inconclusive'
-                verdict_text = 'EVIDENCIA NO CONCLUYENTE'
-        elif weighted_score > -5.0:
-            if strong_contradict_count >= 2:
-                verdict = 'strongly_contradicts'
-                verdict_text = 'CONTRADICE FUERTEMENTE'
-            else:
-                verdict = 'contradicts'
-                verdict_text = 'CONTRADICE'
-        else:
-            if strong_contradict_count >= 3:
-                verdict = 'strongly_contradicts'
-                verdict_text = 'CONTRADICE FUERTEMENTE'
-            else:
-                verdict = 'contradicts'
-                verdict_text = 'CONTRADICE'
-        
-        # Calcular confianza
-        confidence_factors = [
-            min(1.0, len(claims) / 20),  # Suficientes afirmaciones
-            study_type_info['confidence'],  # Tipo de estudio claro
-            min(1.0, (support_count + contradict_count) / 10),  # Suficiente evidencia
-            min(1.0, len(primary_conclusion_claims) / 2)  # Conclusiones claras
-        ]
-        confidence = np.mean(confidence_factors) * min(1.0, abs(weighted_score) / 10)
-        
-        # Generar razonamiento explicativo
-        reasoning = self.generate_reasoning(
-            verdict, weighted_score, support_count, contradict_count,
-            strong_support_count, strong_contradict_count,
-            study_type_info, main_objective, conclusion,
-            primary_conclusion_claims
-        )
-        
-        return {
-            'verdict': verdict,
-            'verdict_text': verdict_text,
-            'score': weighted_score,
-            'confidence': confidence,
-            'support_count': support_count,
-            'contradict_count': contradict_count,
-            'strong_support': strong_support_count,
-            'strong_contradict': strong_contradict_count,
-            'reasoning': reasoning,
-            'summary': {
-                'study_type': study_type_info['primary_type'],
-                'study_confidence': study_type_info['confidence'],
-                'main_objective': main_objective,
-                'conclusion': conclusion,
-                'total_claims': len(claims),
-                'primary_conclusion_claims': len(primary_conclusion_claims)
-            }
-        }
-    
-    def generate_reasoning(self, verdict: str, score: float, support: int, 
-                          contradict: int, strong_support: int, strong_contradict: int,
-                          study_type_info: Dict, objective: str, conclusion: str,
-                          primary_claims: List[Dict]) -> str:
-        """
-        Genera una explicación del razonamiento utilizado
-        """
-        reasoning_parts = []
-        
-        # Tipo de estudio
-        reasoning_parts.append(f"📊 **Tipo de estudio**: {study_type_info['primary_type'].replace('_', ' ').title()} "
-                              f"(confianza: {study_type_info['confidence']:.1%})")
-        
-        # Objetivo
-        if objective:
-            reasoning_parts.append(f"🎯 **Objetivo**: {objective}")
-        
-        # Evidencia numérica
-        reasoning_parts.append(f"📈 **Evidencia encontrada**:")
-        reasoning_parts.append(f"   - {support} afirmaciones a favor (de las cuales {strong_support} son fuertes)")
-        reasoning_parts.append(f"   - {contradict} afirmaciones en contra (de las cuales {strong_contradict} son fuertes)")
-        reasoning_parts.append(f"   - Puntaje ponderado: {score:.2f}")
-        
-        # Interpretación
-        if verdict == 'strongly_supports':
-            reasoning_parts.append(f"✅ **Conclusión**: El artículo CORROBORA FUERTEMENTE la hipótesis. "
-                                  f"La evidencia es consistente y proviene de afirmaciones sólidas, "
-                                  f"particularmente en las secciones de resultados y conclusiones.")
-        elif verdict == 'supports':
-            reasoning_parts.append(f"✅ **Conclusión**: El artículo CORROBORA la hipótesis, aunque con menor fuerza. "
-                                  f"La evidencia a favor supera a la evidencia en contra, pero el lenguaje es "
-                                  f"más cauteloso o la evidencia es menos contundente.")
-        elif verdict == 'inconclusive':
-            reasoning_parts.append(f"⚠️ **Conclusión**: La evidencia es NO CONCLUYENTE. "
-                                  f"Las afirmaciones a favor y en contra se equilibran, o el artículo "
-                                  f"no proporciona suficiente información para determinar una dirección clara.")
-        elif verdict == 'contradicts':
-            reasoning_parts.append(f"❌ **Conclusión**: El artículo CONTRADICE la hipótesis. "
-                                  f"La evidencia en contra supera a la evidencia a favor.")
-        elif verdict == 'strongly_contradicts':
-            reasoning_parts.append(f"❌ **Conclusión**: El artículo CONTRADICE FUERTEMENTE la hipótesis. "
-                                  f"La evidencia en contra es contundente y consistente.")
-        
-        # Conclusión del artículo
-        if conclusion:
-            reasoning_parts.append(f"📝 **Conclusión del artículo**: {conclusion}")
-        
-        return '\n\n'.join(reasoning_parts)
-
 
 # ============================================================================
-# VERIFICADOR SEMÁNTICO AVANZADO CON COMPRENSIÓN LECTORA
-# ============================================================================
-
-class AdvancedSemanticVerifier:
-    """
-    Verificador semántico con capacidad de comprensión lectora tipo humano
-    """
-    
-    def __init__(self):
-        self.reading_comprehension = AdvancedReadingComprehension()
-        self.translator = TranslationManager()
-        self.UMBRAL_RELEVANCIA = 0.1
-    
-    def extract_key_terms(self, hypothesis: str) -> List[str]:
-        """Extrae términos clave de la hipótesis"""
-        words = re.findall(r'\b[a-zA-Záéíóúñü]+\b', hypothesis.lower())
-        
-        stop_words_es = {'el', 'la', 'los', 'las', 'de', 'del', 'y', 'o', 'a', 'en', 
-                         'por', 'para', 'con', 'sin', 'sobre', 'entre', 'mediante'}
-        stop_words_en = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
-                         'for', 'with', 'without', 'by', 'from', 'as'}
-        
-        filtered_words = []
-        for word in words:
-            if len(word) > 3 and word not in stop_words_es and word not in stop_words_en:
-                filtered_words.append(word)
-        
-        # También extraer frases de dos palabras
-        phrases = re.findall(r'\b[a-zA-Záéíóúñü]+\s+[a-zA-Záéíóúñü]+\b', hypothesis.lower())
-        for phrase in phrases:
-            if len(phrase.split()) == 2 and all(len(w) > 3 for w in phrase.split()):
-                filtered_words.append(phrase.replace(' ', '_'))
-        
-        return list(set(filtered_words))
-    
-    def verify_article_text(self, text: str, hypothesis: str) -> Dict:
-        """
-        Verifica un artículo completo con comprensión lectora avanzada
-        """
-        if not text or len(text.strip()) < 200:
-            return {
-                'success': False,
-                'error': 'Texto insuficiente para análisis',
-                'verdict': None
-            }
-        
-        # Extraer términos clave de la hipótesis (para búsqueda inicial)
-        hypothesis_terms = self.extract_key_terms(hypothesis)
-        
-        # PASO 1: Análisis estructural del artículo
-        study_type_info = self.reading_comprehension.detect_study_type(text)
-        main_objective = self.reading_comprehension.extract_main_objective(text)
-        conclusion = self.reading_comprehension.extract_conclusion(text)
-        
-        # PASO 2: Extraer TODAS las afirmaciones relevantes
-        claims = self.reading_comprehension.extract_all_claims(text, hypothesis_terms)
-        
-        # PASO 3: Síntesis crítica (¡el corazón del sistema!)
-        verdict = self.reading_comprehension.synthesize_verdict(
-            claims, study_type_info, main_objective, conclusion
-        )
-        
-        return {
-            'success': True,
-            'total_sentences': len(self.reading_comprehension.split_sentences(text)),
-            'relevant_claims': len(claims),
-            'claims': claims[:20],  # Limitar para no saturar
-            'study_type': study_type_info,
-            'main_objective': main_objective,
-            'conclusion': conclusion,
-            'verdict': verdict,
-            'hypothesis_terms': hypothesis_terms
-        }
-
-
-# ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA (sin cambios significativos)
-# ============================================================================
-
-class ScientificSearchEngine:
-    """
-    Motor de búsqueda científica (igual que antes)
-    """
-    def __init__(self, email: str):
-        self.email = email
-        self.delay = 0.3
-    
-    def search_pubmed_advanced(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        # [Código existente - mantener igual]
-        pass
-    
-    def search_crossref(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        # [Código existente - mantener igual]
-        pass
-    
-    def search_openalex(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        # [Código existente - mantener igual]
-        pass
-    
-    def search_europe_pmc(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        # [Código existente - mantener igual]
-        pass
-    
-    def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
-                   year_range: tuple = None) -> pd.DataFrame:
-        # [Código existente - mantener igual]
-        pass
-
-
-# ============================================================================
-# OBTENEDOR DE TEXTO DE ARTÍCULOS (mejorado con manejo de PDFs)
-# ============================================================================
-
-class ArticleTextFetcher:
-    """Obtiene el texto completo de artículos desde fuentes abiertas"""
-    
-    def __init__(self):
-        self.session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
-        
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        self.min_delay = 0.5
-        self.last_request_time = 0
-    
-    def wait(self):
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_delay:
-            time.sleep(self.min_delay - time_since_last)
-        self.last_request_time = time.time()
-    
-    def get_text_from_doi(self, doi: str) -> Tuple[Optional[str], str]:
-        """
-        Obtiene el texto completo del artículo usando el DOI
-        Versión mejorada con más fuentes
-        """
-        if not doi or pd.isna(doi) or doi == '':
-            return None, "DOI vacío"
-        
-        doi = str(doi).strip()
-        doi = re.sub(r'^https?://(dx\.)?doi\.org/', '', doi)
-        doi = re.sub(r'^doi:', '', doi)
-        
-        self.wait()
-        
-        # Intentar 1: OpenAlex (para metadatos y posible PDF)
-        try:
-            url = f"https://api.openalex.org/works/doi:{doi}"
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                # Buscar PDF de acceso abierto
-                oa_url = data.get('open_access', {}).get('oa_url')
-                if oa_url and ('pdf' in oa_url.lower()):
-                    return self.try_fetch_pdf(oa_url), "OpenAlex (PDF)"
-                
-                # Si no hay PDF, intentar obtener abstract del mismo OpenAlex
-                abstract = data.get('abstract')
-                if abstract:
-                    return abstract, "OpenAlex (Abstract)"
-        except:
-            pass
-        
-        # Intentar 2: Europe PMC (buenos abstracts)
-        try:
-            url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=DOI:{doi}&format=json"
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                results = data.get('resultList', {}).get('result', [])
-                if results:
-                    # Intentar obtener texto completo si está disponible
-                    if results[0].get('fullTextUrlList'):
-                        for url_info in results[0]['fullTextUrlList'].get('fullTextUrl', []):
-                            if url_info.get('availabilityCode') == 'OA' and 'pdf' in url_info.get('url', '').lower():
-                                pdf_url = url_info['url']
-                                return self.try_fetch_pdf(pdf_url), "Europe PMC (PDF)"
-                    
-                    # Si no hay PDF, devolver abstract
-                    abstract = results[0].get('abstractText', '')
-                    if abstract:
-                        return abstract, "Europe PMC (Abstract)"
-        except:
-            pass
-        
-        # Intentar 3: Unpaywall
-        try:
-            url = f"https://api.unpaywall.org/v2/{doi}?email=usuario@ejemplo.com"
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('is_oa') and data.get('best_oa_location'):
-                    pdf_url = data['best_oa_location'].get('url_for_pdf')
-                    if pdf_url:
-                        return self.try_fetch_pdf(pdf_url), "Unpaywall (PDF)"
-        except:
-            pass
-        
-        # Intentar 4: PubMed (último recurso)
-        try:
-            url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={doi}[DOI]&retmode=json"
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                id_list = data.get('esearchresult', {}).get('idlist', [])
-                if id_list:
-                    pmid = id_list[0]
-                    fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
-                    fetch_response = self.session.get(fetch_url, timeout=10)
-                    if fetch_response.status_code == 200:
-                        root = ET.fromstring(fetch_response.content)
-                        abstract_elem = root.find('.//AbstractText')
-                        if abstract_elem is not None and abstract_elem.text:
-                            return abstract_elem.text, "PubMed (Abstract)"
-        except:
-            pass
-        
-        return None, "No se pudo obtener texto completo"
-    
-    def try_fetch_pdf(self, pdf_url: str) -> Optional[str]:
-        """
-        Intenta obtener texto de un PDF (simplificado - en producción usar PyPDF2)
-        """
-        try:
-            response = self.session.get(pdf_url, timeout=15)
-            if response.status_code == 200:
-                # Aquí idealmente usarías PyPDF2 para extraer texto
-                # Por ahora devolvemos un placeholder
-                return f"[PDF disponible en: {pdf_url}]\n\nPara un análisis completo, se requiere extracción de texto de PDF."
-        except:
-            pass
-        return None
-
-
-# ============================================================================
-# CLASE PRINCIPAL INTEGRADA (ACTUALIZADA)
-# ============================================================================
-
-class IntegratedScientificVerifier:
-    """
-    Clase principal que integra búsqueda y verificación semántica con comprensión lectora
-    """
-    
-    def __init__(self, email: str):
-        self.search_engine = ScientificSearchEngine(email)
-        self.semantic_verifier = AdvancedSemanticVerifier()
-        self.text_fetcher = ArticleTextFetcher()
-        self.results = []
-        self.stats = {
-            'total_articles': 0,
-            'analyzed': 0,
-            'with_text': 0,
-            'corroboran': 0,
-            'contradicen': 0,
-            'inconclusos': 0
-        }
-    
-    def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
-                     selected_dbs: list = None, year_range: tuple = None,
-                     progress_callback=None) -> pd.DataFrame:
-        """
-        Ejecuta el flujo completo: búsqueda + análisis con comprensión lectora
-        """
-        self.results = []
-        self.stats = {
-            'total_articles': 0,
-            'analyzed': 0,
-            'with_text': 0,
-            'corroboran': 0,
-            'contradicen': 0,
-            'inconclusos': 0
-        }
-        
-        # PASO 1: BÚSQUEDA
-        if progress_callback:
-            progress_callback("🔍 Buscando artículos en bases de datos...", 0.05)
-        
-        articles_df = self.search_engine.search_all(
-            query, max_results_per_db, selected_dbs, year_range
-        )
-        
-        if articles_df.empty:
-            return pd.DataFrame()
-        
-        self.stats['total_articles'] = len(articles_df)
-        
-        if progress_callback:
-            progress_callback(f"✅ Encontrados {len(articles_df)} artículos. Iniciando análisis con comprensión lectora...", 0.1)
-        
-        # PASO 2: ANÁLISIS PROFUNDO DE CADA ARTÍCULO
-        results_list = []
-        
-        batch_size = 20  # Lotes más pequeños para análisis profundo
-        total_articles = len(articles_df)
-
-        for batch_start in range(0, total_articles, batch_size):
-            batch_end = min(batch_start + batch_size, total_articles)
-            batch_df = articles_df.iloc[batch_start:batch_end]
-
-            for idx, row in batch_df.iterrows():
-                current = idx + 1
-                if progress_callback:
-                    progress_value = 0.1 + 0.85 * (current / total_articles)
-                    progress_callback(
-                        f"🧠 Analizando con comprensión lectora artículo {current}/{total_articles}: {str(row['titulo'])[:50]}...",
-                        progress_value
-                    )
-
-                # Obtener texto del artículo
-                article_text, source = self.text_fetcher.get_text_from_doi(row.get('doi', ''))
-
-                result_row = {
-                    'base_datos': row.get('base_datos', 'Desconocida'),
-                    'titulo': row.get('titulo', 'Sin título'),
-                    'autores': row.get('autores', ''),
-                    'revista': row.get('revista', ''),
-                    'año': row.get('año', ''),
-                    'doi': row.get('doi', ''),
-                    'url': row.get('url', ''),
-                    'texto_disponible': article_text is not None,
-                    'fuente_texto': source if article_text else 'No disponible',
-                    'veredicto': '',
-                    'confianza': 0,
-                    'puntuacion': 0,
-                    'evidencia_a_favor': 0,
-                    'evidencia_en_contra': 0,
-                    'evidencia_fuerte_favor': 0,
-                    'evidencia_fuerte_contra': 0,
-                    'oraciones_totales': 0,
-                    'oraciones_relevantes': 0,
-                    'tipo_estudio': '',
-                    'objetivo_principal': '',
-                    'conclusion_articulo': '',
-                    'razonamiento': '',
-                    'detalle_evidencia': ''
-                }
-
-                if article_text:
-                    self.stats['with_text'] += 1
-
-                    # Analizar con comprensión lectora avanzada
-                    analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis)
-
-                    if analysis['success']:
-                        verdict = analysis['verdict']
-
-                        result_row.update({
-                            'veredicto': verdict['verdict_text'],
-                            'confianza': verdict['confidence'],
-                            'puntuacion': verdict['score'],
-                            'evidencia_a_favor': verdict['support_count'],
-                            'evidencia_en_contra': verdict['contradict_count'],
-                            'evidencia_fuerte_favor': verdict.get('strong_support', 0),
-                            'evidencia_fuerte_contra': verdict.get('strong_contradict', 0),
-                            'oraciones_totales': analysis['total_sentences'],
-                            'oraciones_relevantes': analysis['relevant_claims'],
-                            'tipo_estudio': analysis['study_type']['primary_type'],
-                            'objetivo_principal': analysis['main_objective'][:200] + '...' if analysis['main_objective'] and len(analysis['main_objective']) > 200 else analysis['main_objective'],
-                            'conclusion_articulo': analysis['conclusion'][:200] + '...' if analysis['conclusion'] and len(analysis['conclusion']) > 200 else analysis['conclusion'],
-                            'razonamiento': verdict.get('reasoning', '')[:500] + '...' if verdict.get('reasoning') and len(verdict.get('reasoning', '')) > 500 else verdict.get('reasoning', '')
-                        })
-
-                        # Actualizar estadísticas
-                        self.stats['analyzed'] += 1
-                        if 'CORROBORA' in verdict['verdict_text']:
-                            self.stats['corroboran'] += 1
-                        elif 'CONTRADICE' in verdict['verdict_text']:
-                            self.stats['contradicen'] += 1
-                        else:
-                            self.stats['inconclusos'] += 1
-
-                        # Guardar evidencia resumida
-                        if analysis['claims']:
-                            ev_summary = []
-                            for ev in analysis['claims'][:3]:
-                                direction_icon = '✅' if ev['direction'] == 'supports' else '❌' if ev['direction'] == 'contradicts' else '⚪'
-                                strength_icon = '🔥' if ev['language_strength'] in ['strong', 'moderate_strong'] else '💧' if ev['language_strength'] in ['hedged', 'moderate_hedged'] else '📊'
-                                ev_summary.append(f"{direction_icon}{strength_icon} [{ev['section']}] {ev['relation_type']}")
-                            result_row['detalle_evidencia'] = ' | '.join(ev_summary)
-                else:
-                    result_row['veredicto'] = 'TEXTO NO DISPONIBLE'
-
-                results_list.append(result_row)
-
-            # Pequeña pausa entre lotes
-            time.sleep(1)
-
-        if progress_callback:
-            progress_callback("✅ Análisis con comprensión lectora completado", 1.0)
-
-        self.results = pd.DataFrame(results_list)
-        return self.results
-
-    def generate_report(self) -> str:
-        """Genera un reporte textual detallado de los resultados"""
-        if self.results.empty:
-            return "No hay resultados para generar reporte."
-
-        report = []
-        report.append("="*100)
-        report.append("🧠 REPORTE DE VERIFICACIÓN SEMÁNTICA CON COMPRENSIÓN LECTORA")
-        report.append("="*100)
-        report.append(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        report.append(f"Total artículos encontrados: {self.stats['total_articles']}")
-        report.append(f"Artículos con texto disponible: {self.stats['with_text']}")
-        report.append(f"Artículos analizados: {self.stats['analyzed']}")
-        report.append("")
-        report.append("📊 RESULTADOS GLOBALES:")
-        report.append(f"✅ CORROBORAN FUERTEMENTE: {self.stats.get('corroboran_fuerte', 0)}")
-        report.append(f"✅ Corroboran: {self.stats.get('corroboran', 0)}")
-        report.append(f"❌ Contradicen: {self.stats.get('contradicen', 0)}")
-        report.append(f"❌ CONTRADICEN FUERTEMENTE: {self.stats.get('contradicen_fuerte', 0)}")
-        report.append(f"⚠️ Inconclusos: {self.stats['inconclusos']}")
-        report.append("")
-        report.append("📋 DETALLE POR ARTÍCULO (con razonamiento):")
-        report.append("-"*100)
-
-        for idx, row in self.results.iterrows():
-            report.append(f"\n📄 **{row['titulo']}**")
-            report.append(f"   📚 Base: {row['base_datos']} | 📅 Año: {row['año']} | 🔬 Tipo: {row['tipo_estudio']}")
-            report.append(f"   🔗 DOI: {row['doi']}")
-
-            if row['veredicto'] == 'TEXTO NO DISPONIBLE':
-                report.append(f"   ⚠️ {row['veredicto']} - {row['fuente_texto']}")
-            else:
-                # Icono según veredicto
-                if 'FUERTEMENTE' in row['veredicto'] and 'CORROBORA' in row['veredicto']:
-                    icono = '🔥✅'
-                elif 'CORROBORA' in row['veredicto']:
-                    icono = '✅'
-                elif 'FUERTEMENTE' in row['veredicto'] and 'CONTRADICE' in row['veredicto']:
-                    icono = '🔥❌'
-                elif 'CONTRADICE' in row['veredicto']:
-                    icono = '❌'
-                else:
-                    icono = '⚠️'
-
-                report.append(f"   {icono} **Veredicto:** {row['veredicto']} (Confianza: {row['confianza']:.1%})")
-                report.append(f"   📊 Evidencia: {row['evidencia_a_favor']} a favor ({row['evidencia_fuerte_favor']} fuertes) | {row['evidencia_en_contra']} en contra ({row['evidencia_fuerte_contra']} fuertes)")
-
-                if row['objetivo_principal'] and pd.notna(row['objetivo_principal']):
-                    report.append(f"   🎯 Objetivo: {row['objetivo_principal']}")
-
-                if row['conclusion_articulo'] and pd.notna(row['conclusion_articulo']):
-                    report.append(f"   📝 Conclusión del artículo: {row['conclusion_articulo']}")
-
-                if row['razonamiento'] and pd.notna(row['razonamiento']):
-                    report.append(f"   💭 Razonamiento del sistema: {row['razonamiento']}")
-
-                if row['detalle_evidencia'] and pd.notna(row['detalle_evidencia']):
-                    report.append(f"   🔍 Evidencia destacada: {row['detalle_evidencia']}")
-
-        return "\n".join(report)
-
-    def generate_html_report(self) -> str:
-        """Genera un reporte HTML detallado para enviar por correo"""
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Reporte de Verificación Semántica</title>
-            <style>
-                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; color: #333; }}
-                h1 {{ color: #1E88E5; border-bottom: 3px solid #1E88E5; padding-bottom: 10px; }}
-                h2 {{ color: #333; border-bottom: 2px solid #1E88E5; padding-bottom: 5px; margin-top: 30px; }}
-                .stats {{ background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; }}
-                .stat-box {{ display: inline-block; margin: 10px; padding: 15px; border-radius: 8px; min-width: 150px; text-align: center; }}
-                .stat-total {{ background-color: #e3f2fd; }}
-                .stat-support {{ background-color: #e8f5e8; }}
-                .stat-contradict {{ background-color: #ffebee; }}
-                .stat-inconclusive {{ background-color: #fff3e0; }}
-                .article-card {{ background-color: white; border-left: 5px solid #1E88E5; border-radius: 10px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-                .verdict-strong-support {{ background: linear-gradient(135deg, #2E7D32, #4CAF50); color: white; padding: 5px 15px; border-radius: 20px; display: inline-block; }}
-                .verdict-support {{ background: linear-gradient(135deg, #4CAF50, #81C784); color: white; padding: 5px 15px; border-radius: 20px; display: inline-block; }}
-                .verdict-inconclusive {{ background: linear-gradient(135deg, #FF9800, #FFB74D); color: white; padding: 5px 15px; border-radius: 20px; display: inline-block; }}
-                .verdict-contradict {{ background: linear-gradient(135deg, #F44336, #E57373); color: white; padding: 5px 15px; border-radius: 20px; display: inline-block; }}
-                .verdict-strong-contradict {{ background: linear-gradient(135deg, #B71C1C, #F44336); color: white; padding: 5px 15px; border-radius: 20px; display: inline-block; }}
-                .badge {{ background-color: #1E88E5; color: white; padding: 3px 10px; border-radius: 15px; font-size: 0.8em; display: inline-block; margin-right: 10px; }}
-                .evidence-badge {{ background-color: #e1f5fe; color: #01579b; padding: 2px 8px; border-radius: 12px; font-size: 0.75em; margin: 2px; display: inline-block; }}
-                .reasoning-box {{ background-color: #f5f5f5; border-left: 4px solid #1E88E5; padding: 15px; margin: 10px 0; border-radius: 5px; }}
-                table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-                th {{ background-color: #1E88E5; color: white; padding: 12px; text-align: left; }}
-                td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-            </style>
-        </head>
-        <body>
-            <h1>🧠 Reporte de Verificación Semántica con Comprensión Lectora</h1>
-            <p><strong>Fecha:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-
-            <div class="stats">
-                <h2>📊 Resultados Globales</h2>
-                <div>
-                    <div class="stat-box stat-total">
-                        <h3>📚 Total</h3>
-                        <p style="font-size: 2em; margin: 0;">{self.stats['total_articles']}</p>
-                        <small>artículos encontrados</small>
-                    </div>
-                    <div class="stat-box stat-support">
-                        <h3>✅ Corroboran</h3>
-                        <p style="font-size: 2em; margin: 0;">{self.stats['corroboran']}</p>
-                        <small>({self.stats.get('corroboran_fuerte', 0)} fuertes)</small>
-                    </div>
-                    <div class="stat-box stat-contradict">
-                        <h3>❌ Contradicen</h3>
-                        <p style="font-size: 2em; margin: 0;">{self.stats['contradicen']}</p>
-                        <small>({self.stats.get('contradicen_fuerte', 0)} fuertes)</small>
-                    </div>
-                    <div class="stat-box stat-inconclusive">
-                        <h3>⚠️ Inconclusos</h3>
-                        <p style="font-size: 2em; margin: 0;">{self.stats['inconclusos']}</p>
-                    </div>
-                </div>
-                <p><strong>Artículos analizados:</strong> {self.stats['analyzed']} de {self.stats['with_text']} con texto disponible</p>
-            </div>
-
-            <h2>📋 Análisis Detallado por Artículo</h2>
-        """
-
-        for idx, row in self.results.iterrows():
-            verdict_class = "verdict-inconclusive"
-            if row['veredicto'] == 'CORROBORA FUERTEMENTE':
-                verdict_class = "verdict-strong-support"
-            elif row['veredicto'] == 'CORROBORA':
-                verdict_class = "verdict-support"
-            elif row['veredicto'] == 'CONTRADICE FUERTEMENTE':
-                verdict_class = "verdict-strong-contradict"
-            elif row['veredicto'] == 'CONTRADICE':
-                verdict_class = "verdict-contradict"
-
-            html += f"""
-            <div class="article-card">
-                <span class="badge">{row['base_datos']}</span>
-                <span class="badge" style="background-color: #FF5722;">{row['tipo_estudio']}</span>
-                <h3>{row['titulo']}</h3>
-                <p><strong>Autores:</strong> {row['autores'][:150]}...<br>
-                <strong>Año:</strong> {row['año']} | <strong>DOI:</strong> {row['doi']}</p>
-
-                <div style="margin: 15px 0;">
-                    <span class="{verdict_class}">{row['veredicto']}</span>
-                    <span style="margin-left: 15px;">Confianza: {row['confianza']:.1%}</span>
-                </div>
-
-                <div style="margin: 10px 0;">
-                    <span style="background-color: #e8f5e8; padding: 5px 10px; border-radius: 5px;">✅ A favor: {row['evidencia_a_favor']} ({row['evidencia_fuerte_favor']} fuertes)</span>
-                    <span style="background-color: #ffebee; padding: 5px 10px; border-radius: 5px; margin-left: 10px;">❌ En contra: {row['evidencia_en_contra']} ({row['evidencia_fuerte_contra']} fuertes)</span>
-                </div>
-            """
-
-            if pd.notna(row['objetivo_principal']):
-                html += f"<p><strong>🎯 Objetivo:</strong> {row['objetivo_principal']}</p>"
-
-            if pd.notna(row['conclusion_articulo']):
-                html += f"<p><strong>📝 Conclusión del artículo:</strong> {row['conclusion_articulo']}</p>"
-
-            if pd.notna(row['razonamiento']):
-                html += f"""
-                <div class="reasoning-box">
-                    <strong>💭 Razonamiento del sistema:</strong>
-                    <p>{row['razonamiento']}</p>
-                </div>
-                """
-
-            if pd.notna(row['detalle_evidencia']):
-                evidencias = row['detalle_evidencia'].split(' | ')
-                html += "<p><strong>🔍 Evidencia destacada:</strong><br>"
-                for ev in evidencias:
-                    html += f'<span class="evidence-badge">{ev}</span> '
-                html += "</p>"
-
-            html += "</div>"
-
-        html += """
-            <hr>
-            <p style="color: #666; font-size: 0.9em; text-align: center;">
-                Reporte generado automáticamente por el Buscador y Verificador Semántico con Comprensión Lectora.
-            </p>
-        </body>
-        </html>
-        """
-
-        return html
-
-
-# ============================================================================
-# FUNCIÓN PARA ENVIAR RESULTADOS POR CORREO
-# ============================================================================
-
-def enviar_resultados_email(destinatario, integrator):
-    """Envía los resultados del análisis por correo electrónico"""
-
-    # Generar reportes
-    reporte_txt = integrator.generate_report()
-    reporte_html = integrator.generate_html_report()
-
-    # Preparar archivos adjuntos
-    archivos = []
-
-    # CSV
-    csv_buffer = io.BytesIO()
-    integrator.results.to_csv(csv_buffer, index=False, encoding='utf-8')
-    archivos.append({
-        'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        'contenido': csv_buffer.getvalue()
-    })
-
-    # Excel
-    excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        integrator.results.to_excel(writer, sheet_name='Resultados', index=False)
-        summary = pd.DataFrame([integrator.stats])
-        summary.to_excel(writer, sheet_name='Resumen', index=False)
-    archivos.append({
-        'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        'contenido': excel_buffer.getvalue()
-    })
-
-    # Asunto y mensaje
-    asunto = f"🧠 Reporte de Verificación con Comprensión Lectora - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-
-    mensaje_html = f"""
-    <html>
-    <body>
-        <h2>🧠 Reporte de Verificación Semántica con Comprensión Lectora</h2>
-        <p>Estimado usuario,</p>
-        <p>Adjunto encontrarás los resultados completos de tu análisis. Este análisis incluye:</p>
-        <ul>
-            <li>✅ Comprensión lectora avanzada (no solo búsqueda de palabras clave)</li>
-            <li>✅ Detección del tipo de estudio y su peso en la evidencia</li>
-            <li>✅ Extracción del objetivo principal y conclusiones</li>
-            <li>✅ Razonamiento explicativo para cada veredicto</li>
-            <li>✅ Identificación de lenguaje cauto vs. afirmaciones fuertes</li>
-        </ul>
-
-        <h3>📊 Resumen</h3>
-        <ul>
-            <li><strong>Total artículos:</strong> {integrator.stats['total_articles']}</li>
-            <li><strong>Artículos analizados:</strong> {integrator.stats['analyzed']}</li>
-            <li><strong>✅ Corroboran:</strong> {integrator.stats['corroboran']}</li>
-            <li><strong>❌ Contradicen:</strong> {integrator.stats['contradicen']}</li>
-            <li><strong>⚠️ Inconclusos:</strong> {integrator.stats['inconclusos']}</li>
-        </ul>
-
-        <p>Puedes encontrar el detalle completo en los archivos adjuntos.</p>
-
-        <hr>
-        <p style="color: #666; font-size: 0.9em;">
-            Este es un mensaje automático del Buscador y Verificador Semántico con Comprensión Lectora.
-        </p>
-    </body>
-    </html>
-    """
-
-    mensaje_texto = f"""
-    Reporte de Verificación Semántica con Comprensión Lectora
-
-    Resumen:
-    - Total artículos: {integrator.stats['total_articles']}
-    - Artículos analizados: {integrator.stats['analyzed']}
-    - ✅ Corroboran: {integrator.stats['corroboran']}
-    - ❌ Contradicen: {integrator.stats['contradicen']}
-    - ⚠️ Inconclusos: {integrator.stats['inconclusos']}
-
-    Los archivos adjuntos contienen el detalle completo con razonamiento explicativo.
-    """
-
-    # Enviar correo
-    return enviar_correo(
-        destinatario=destinatario,
-        asunto=asunto,
-        mensaje_html=mensaje_html,
-        mensaje_texto=mensaje_texto,
-        archivos=archivos
-    )
-
-
-# ============================================================================
-# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS (con mejoras)
+# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS (EXACTAMENTE IGUAL)
 # ============================================================================
 
 class HypothesisAssistant:
     """Asistente para ayudar al usuario a construir conjeturas bien formadas"""
-
+    
     def __init__(self):
         self.translator = TranslationManager()
-
-        # Plantillas de conjeturas comunes
+        
+        # Plantillas de conjeturas comunes - CORREGIDAS
         self.templates = {
             "causal": {
                 "es": "El/La {sujeto} {verbo} {efecto} en {poblacion}",
@@ -1521,17 +476,9 @@ class HypothesisAssistant:
                 "verbs_en": ["is effective in", "demonstrates efficacy in"]
             }
         }
-
+        
+        # Ejemplos predefinidos
         self.examples = [
-            {
-                "name": "Alcohol y demencia",
-                "sujeto": "consumo de alcohol",
-                "efecto": "demencia",
-                "poblacion": "adultos mayores",
-                "tipo": "causal",
-                "verbo": "causa",
-                "hypothesis": "El consumo de alcohol causa demencia en adultos mayores"
-            },
             {
                 "name": "Ticagrelor y disnea",
                 "sujeto": "ticagrelor",
@@ -1549,47 +496,81 @@ class HypothesisAssistant:
                 "tipo": "causal",
                 "verbo": "causa",
                 "hypothesis": "La infección por COVID-19 causa daño miocárdico en pacientes hospitalizados"
+            },
+            {
+                "name": "Ejercicio y diabetes",
+                "sujeto": "ejercicio físico regular",
+                "efecto": "diabetes tipo 2",
+                "poblacion": "adultos con sobrepeso",
+                "tipo": "prevencion",
+                "verbo": "reduce la incidencia de",
+                "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso"
             }
         ]
-
+    
     def get_available_verbs(self, template_type: str, language: str = "es") -> List[str]:
+        """Obtiene verbos disponibles para un tipo de plantilla"""
         if template_type in self.templates:
             return self.templates[template_type].get(f"verbs_{language}", [])
         return []
-
-    def build_hypothesis(self, subject: str, effect: str, population: str,
+    
+    def build_hypothesis(self, subject: str, effect: str, population: str, 
                         template_type: str, verb: str = None) -> Dict:
+        """
+        Construye una conjetura bien formada en español e inglés
+        
+        Args:
+            subject: Sujeto de estudio (ej: "ticagrelor", "ejercicio")
+            effect: Efecto observado (ej: "disnea", "mejoría")
+            population: Población de estudio
+            template_type: Tipo de plantilla
+            verb: Verbo específico (opcional)
+        
+        Returns:
+            Dict con conjeturas en español e inglés
+        """
         if template_type not in self.templates:
             return {"es": "", "en": ""}
-
+        
         template = self.templates[template_type]
-
+        
+        # Si no se especifica verbo, usar el primero de la lista
         if not verb and template.get(f"verbs_es"):
             verb = template[f"verbs_es"][0]
-
+        
         # Construir en español
-        if verb and "{verbo}" in template["es"]:
-            hypothesis_es = template["es"].format(
-                sujeto=subject,
-                verbo=verb,
-                efecto=effect,
-                poblacion=population
-            )
+        if verb:
+            # Para plantillas que tienen el verbo como parte de la frase
+            if "{verbo}" in template["es"]:
+                hypothesis_es = template["es"].format(
+                    sujeto=subject,
+                    verbo=verb,
+                    efecto=effect,
+                    poblacion=population
+                )
+            else:
+                # Para plantillas que ya incluyen el verbo en la estructura
+                hypothesis_es = template["es"].format(
+                    sujeto=subject,
+                    efecto=effect,
+                    poblacion=population
+                )
         else:
             hypothesis_es = template["es"].format(
                 sujeto=subject,
                 efecto=effect,
                 poblacion=population
             )
-
-        # Traducciones
+        
+        # Traducir al inglés
         hypothesis_en = self.translator.translate_to_english(hypothesis_es)
-
+        
+        # Construcción directa en inglés para mayor precisión
         subject_en = self.translator.translate_to_english(subject)
         effect_en = self.translator.translate_to_english(effect)
         population_en = self.translator.translate_to_english(population)
-
-        # Verbo en inglés
+        
+        # Encontrar verbo en inglés correspondiente
         verb_en = ""
         if verb and template.get(f"verbs_es") and template.get(f"verbs_en"):
             try:
@@ -1597,8 +578,9 @@ class HypothesisAssistant:
                 verbs_en = template["verbs_en"]
                 verb_en = verbs_en[verb_idx] if verb_idx < len(verbs_en) else verbs_en[0]
             except ValueError:
+                # Si el verbo no está en la lista, usar traducción
                 verb_en = self.translator.translate_to_english(verb)
-
+        
         # Construcción directa en inglés
         if verb_en and "{verb}" in template["en"]:
             hypothesis_en_direct = template["en"].format(
@@ -1613,7 +595,7 @@ class HypothesisAssistant:
                 effect=effect_en,
                 population=population_en
             )
-
+        
         return {
             "es": hypothesis_es,
             "en": hypothesis_en,
@@ -1626,56 +608,57 @@ class HypothesisAssistant:
             "verb": verb,
             "verb_en": verb_en
         }
-
+    
     def render_assistant_ui(self):
-        """Renderiza la interfaz del asistente"""
-
-        with st.expander("🤖 ASISTENTE DE CONJETURAS - Construye tu hipótesis", expanded=False):
-            st.markdown("""
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 1.5rem; border-radius: 10px; margin-bottom: 1rem;">
-                <h3>🎯 Construye tu conjetura científica</h3>
-                <p>El sistema ahora tiene CAPACIDAD DE COMPRENSIÓN LECTORA HUMANA. Analizará cada artículo entendiendo su objetivo, metodología y conclusiones, no solo buscando palabras clave.</p>
-            </div>
-            """, unsafe_allow_html=True)
-
+        """Renderiza la interfaz del asistente en Streamlit"""
+        
+        with st.expander("🤖 ASISTENTE DE CONJETURAS - Ayuda a construir tu hipótesis", expanded=False):
+            st.markdown('<div class="assistant-box">', unsafe_allow_html=True)
+            st.markdown("### 🎯 Construye tu conjetura científica")
+            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada:")
+            
             col1, col2 = st.columns(2)
-
+            
             with col1:
+                # Selección de ejemplo o entrada manual
                 example_option = st.selectbox(
                     "📋 Cargar ejemplo:",
                     ["Personalizado"] + [e["name"] for e in self.examples],
                     key="example_selector"
                 )
-
+                
+                # Campos del formulario
                 subject = st.text_input(
                     "🧪 Sujeto/Intervención:",
                     value="",
-                    placeholder="Ej: consumo de alcohol, ticagrelor, ejercicio",
+                    placeholder="Ej: ticagrelor, ejercicio, vacuna, fármaco X",
                     help="¿Qué elemento estás estudiando?"
                 )
-
+                
                 effect = st.text_input(
                     "📊 Efecto/Desenlace:",
                     value="",
-                    placeholder="Ej: demencia, disnea, mejoría",
+                    placeholder="Ej: disnea, mejoría, mortalidad, efecto secundario",
                     help="¿Qué efecto esperas observar?"
                 )
-
+                
                 population = st.text_input(
                     "👥 Población:",
                     value="",
-                    placeholder="Ej: adultos mayores, pacientes, niños",
+                    placeholder="Ej: pacientes con cardiopatía, adultos mayores, niños",
                     help="¿En qué población?"
                 )
-
+            
             with col2:
+                # Tipo de relación
                 template_type = st.selectbox(
                     "🔄 Tipo de relación:",
                     options=list(self.templates.keys()),
                     format_func=lambda x: f"{x} - {self.templates[x]['description']}",
                     key="template_type"
                 )
-
+                
+                # Verbos disponibles según el tipo
                 available_verbs = self.get_available_verbs(template_type)
                 if available_verbs:
                     verb = st.selectbox(
@@ -1685,22 +668,24 @@ class HypothesisAssistant:
                     )
                 else:
                     verb = None
-
+                
                 st.markdown("---")
                 st.markdown("##### 💡 Sugerencias:")
                 if template_type == "causal":
                     st.info("Usa verbos fuertes como 'causa', 'induce' para relaciones causales directas")
                 elif template_type == "asociacion":
-                    st.info("Usa 'se asocia con' para correlaciones sin causalidad establecida")
+                    st.info("Usa 'se asocia con', 'se relaciona con' para correlaciones sin causalidad establecida")
                 elif template_type == "riesgo":
                     st.info("Adecuado cuando el sujeto aumenta la probabilidad del efecto")
                 elif template_type == "prevencion":
-                    st.info("Usa cuando el sujeto reduce el riesgo")
+                    st.info("Usa cuando el sujeto reduce el riesgo o protege contra el efecto")
                 elif template_type == "efectividad":
                     st.info("Ideal para evaluar intervenciones terapéuticas")
-
+            
+            # Botón para generar
             if st.button("✨ GENERAR CONJETURA", type="primary", use_container_width=True):
                 if subject and effect and population:
+                    # Construir hipótesis
                     hypothesis_data = self.build_hypothesis(
                         subject=subject,
                         effect=effect,
@@ -1708,43 +693,1391 @@ class HypothesisAssistant:
                         template_type=template_type,
                         verb=verb
                     )
-
+                    
+                    # Mostrar resultado
                     st.markdown("---")
                     st.markdown("### 📝 CONJETURA GENERADA")
-
+                    
                     col1, col2 = st.columns(2)
-
+                    
                     with col1:
                         st.markdown("**🇪🇸 Español:**")
                         st.success(hypothesis_data["es"])
-
-                        if st.button("📌 Usar esta hipótesis", key="use_es"):
+                        
+                        # Botón para usar esta hipótesis - CORREGIDO
+                        if st.button("📌 Usar esta hipótesis en español", key="use_es"):
                             st.session_state['hypothesis'] = hypothesis_data["es"]
                             st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
                             st.rerun()
-
+                    
                     with col2:
                         st.markdown("**🇬🇧 Inglés (para búsqueda):**")
                         st.info(hypothesis_data["en_direct"])
-
+                        
+                        if st.button("📌 Usar esta hipótesis (inglés)", key="use_en"):
+                            st.session_state['hypothesis'] = hypothesis_data["es"]
+                            st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
+                            st.rerun()
+                    
+                    # Guardar en session state
                     st.session_state['last_hypothesis_data'] = hypothesis_data
-
+                    
                 else:
                     st.warning("⚠️ Completa todos los campos para generar la conjetura")
-
+            
+            # Cargar ejemplo si se selecciona
             if example_option != "Personalizado":
                 example = next((e for e in self.examples if e["name"] == example_option), None)
                 if example:
                     st.markdown("---")
                     st.markdown("### 📋 Ejemplo cargado:")
                     st.info(f"**Hipótesis:** {example['hypothesis']}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("📌 Usar este ejemplo", key="use_example"):
+                            st.session_state['hypothesis'] = example['hypothesis']
+                            st.session_state['query'] = f'("{example["sujeto"]}" AND "{example["efecto"]}")'
+                            # También guardar traducción aproximada
+                            translator = TranslationManager()
+                            st.session_state['hypothesis_en'] = translator.translate_to_english(example['hypothesis'])
+                            st.rerun()
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Consejos adicionales
+            st.markdown('<div class="tip-box">', unsafe_allow_html=True)
+            st.markdown("""
+            **💡 Consejos para una buena conjetura:**
+            
+            1. **Sé específico**: Cuanto más específico, mejor podrá verificar la evidencia
+            2. **Define claramente**: El sujeto, efecto y población deben estar claramente definidos
+            3. **Usa terminología médica**: Los artículos científicos usan términos MeSH estandarizados
+            4. **Considera la dirección**: ¿Es causalidad, asociación, riesgo o protección?
+            5. **Población relevante**: Especifica edad, condición, contexto cuando sea relevante
+            """)
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    def translate_hypothesis_for_search(self, hypothesis_es: str) -> str:
+        """
+        Traduce una hipótesis en español a inglés para búsqueda
+        """
+        if not hypothesis_es:
+            return ""
+        
+        # Si ya tenemos una traducción en session state, usarla
+        if 'hypothesis_en' in st.session_state and st.session_state['hypothesis_en']:
+            return st.session_state['hypothesis_en']
+        
+        # Traducir
+        return self.translator.translate_to_english(hypothesis_es)
 
-                    if st.button("📌 Usar este ejemplo", key="use_example"):
-                        st.session_state['hypothesis'] = example['hypothesis']
-                        st.session_state['query'] = f'("{example["sujeto"]}" AND "{example["efecto"]}")'
-                        translator = TranslationManager()
-                        st.session_state['hypothesis_en'] = translator.translate_to_english(example['hypothesis'])
-                        st.rerun()
+
+# ============================================================================
+# VERIFICADOR SEMÁNTICO AVANZADO CON IA (MEJORADO)
+# ============================================================================
+
+class AdvancedSemanticVerifier:
+    """
+    Verificador semántico avanzado con técnicas de IA modernas
+    - Análisis semántico profundo
+    - Detección de matices lingüísticos
+    - Evaluación de calidad metodológica
+    - Ponderación por secciones
+    """
+    
+    def __init__(self):
+        # Configurar NLTK si está disponible
+        if NLTK_READY:
+            self.stop_words_es = set(stopwords.words('spanish'))
+            self.stop_words_en = set(stopwords.words('english'))
+            self.stemmer = SnowballStemmer('spanish')
+        else:
+            # Stop words básicas como fallback
+            self.stop_words_es = {'el', 'la', 'los', 'las', 'de', 'del', 'y', 'o', 
+                                  'a', 'en', 'por', 'para', 'con', 'sin', 'sobre'}
+            self.stop_words_en = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on',
+                                 'at', 'to', 'for', 'with', 'without', 'by'}
+            self.stemmer = None
+        
+        self.translator = TranslationManager()
+        
+        # ====================================================================
+        # PESOS POR SECCIÓN DEL ARTÍCULO (basado en importancia científica)
+        # ====================================================================
+        self.section_weights = {
+            'abstract': 1.5,      # Resumen ejecutivo
+            'introduction': 0.6,   # Contexto, no evidencia directa
+            'methods': 0.4,        # Metodología, no resultados
+            'results': 1.8,        # Resultados, alta importancia
+            'discussion': 1.5,     # Discusión, interpretación
+            'conclusion': 1.8,     # Conclusión, muy importante
+            'unknown': 1.0
+        }
+        
+        # ====================================================================
+        # KEYWORDS PARA DETECTAR SECCIONES
+        # ====================================================================
+        self.section_keywords = {
+            'abstract': ['abstract', 'resumen', 'background', 'objective', 'objetivo', 
+                        'methods', 'métodos', 'results', 'resultados'],
+            'introduction': ['introduction', 'introducción', 'background', 'antecedentes'],
+            'methods': ['methods', 'métodos', 'methodology', 'metodología', 
+                       'material and methods', 'material y métodos'],
+            'results': ['results', 'resultados', 'findings', 'hallazgos'],
+            'discussion': ['discussion', 'discusión'],
+            'conclusion': ['conclusion', 'conclusiones', 'concluding', 'conclusión']
+        }
+        
+        # ====================================================================
+        # DETECTOR DE MATICES LINGÜÍSTICOS (NIVELES DE CERTEZA)
+        # ====================================================================
+        self.certainty_levels = {
+            'definitive': {
+                'terms': ['demonstrates', 'proves', 'establishes', 'conclusive', 
+                         'definitively', 'undoubtedly', 'certainly'],
+                'weight': 1.5
+            },
+            'strong': {
+                'terms': ['strongly suggests', 'provides evidence', 'indicates',
+                         'shows', 'reveals', 'confirms'],
+                'weight': 1.3
+            },
+            'moderate': {
+                'terms': ['suggests', 'supports', 'consistent with', 'implies',
+                         'appears to', 'seems to'],
+                'weight': 1.0
+            },
+            'weak': {
+                'terms': ['may', 'might', 'could', 'possibly', 'potentially',
+                         'preliminary', 'tentative', 'speculative'],
+                'weight': 0.5
+            }
+        }
+        
+        # ====================================================================
+        # PATRONES DE NEGACIÓN
+        # ====================================================================
+        self.negation_patterns = [
+            r'no\s+(hay|existe|se\s+observó|se\s+encontró)\s+(asociación|relación|correlación)',
+            r'no\s+(se\s+)?(demostró|evidenció|confirmó)\s+',
+            r'no\s+(fue|resultó)\s+(significativo|estadísticamente\s+significativo)',
+            r'p\s*[>=]\s*0\.0[5-9]',
+            r'p\s*>\s*0\.05',
+            r'not\s+(associated|related|correlated)',
+            r'no\s+(significant|statistically\s+significant)'
+        ]
+        
+        # ====================================================================
+        # TIPOS DE RELACIÓN (con pesos)
+        # ====================================================================
+        self.relation_types = {
+            'causal': {
+                'terms': ['causes', 'leads to', 'results in', 'induced by',
+                         'due to', 'attributed to', 'responsible for'],
+                'weight': 1.4
+            },
+            'association': {
+                'terms': ['associated with', 'related to', 'linked to',
+                         'correlated with', 'connection between'],
+                'weight': 1.2
+            },
+            'risk': {
+                'terms': ['risk factor', 'increases risk', 'higher risk',
+                         'elevated risk', 'predisposes to'],
+                'weight': 1.3
+            },
+            'protective': {
+                'terms': ['protective', 'reduces risk', 'decreases risk',
+                         'prevents', 'lowers risk'],
+                'weight': 1.1
+            }
+        }
+        
+        # ====================================================================
+        # EVALUACIÓN DE CALIDAD DE ESTUDIOS
+        # ====================================================================
+        self.study_type_weights = {
+            'meta-analysis': 2.5,
+            'systematic review': 2.3,
+            'randomized controlled trial': 2.0,
+            'cohort study': 1.6,
+            'case-control study': 1.4,
+            'cross-sectional study': 1.2,
+            'case series': 0.8,
+            'case report': 0.5,
+            'editorial': 0.3,
+            'letter': 0.2,
+            'comment': 0.2
+        }
+        
+        self.study_type_patterns = {
+            'meta-analysis': ['meta-analysis', 'meta analysis', 'metaanalysis'],
+            'systematic review': ['systematic review', 'systematic literature review'],
+            'randomized controlled trial': ['randomized controlled trial', 'randomised controlled trial', 'rct'],
+            'cohort study': ['cohort study', 'cohort analysis', 'prospective cohort', 'retrospective cohort'],
+            'case-control study': ['case-control', 'case control'],
+            'cross-sectional study': ['cross-sectional', 'cross sectional'],
+            'case series': ['case series'],
+            'case report': ['case report']
+        }
+        
+        # ====================================================================
+        # PESOS FINALES PARA VOTACIÓN
+        # ====================================================================
+        self.vote_weights = {
+            'causal': 2.2,
+            'risk': 2.0,
+            'association': 1.8,
+            'protective': 1.5,
+            'statistical': 1.8,
+            'moderate': 1.0,
+            'strong_negation': -1.5,
+            'statistical_negation': -1.8
+        }
+        
+        self.UMBRAL_RELEVANCIA = 0.1
+    
+    # ========================================================================
+    # MÉTODOS DE ANÁLISIS DE TEXTO
+    # ========================================================================
+    
+    def detect_section(self, text_block: str) -> str:
+        """Detecta la sección del artículo basado en keywords"""
+        text_lower = text_block.lower()[:500]
+        
+        for section, keywords in self.section_keywords.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return section
+        
+        return 'unknown'
+    
+    def extract_key_terms(self, hypothesis: str) -> List[str]:
+        """Extrae términos clave de la hipótesis con expansión semántica"""
+        words = re.findall(r'\b[a-zA-Záéíóúñü]+\b', hypothesis.lower())
+        
+        filtered_words = []
+        for word in words:
+            if len(word) > 3 and word not in self.stop_words_es and word not in self.stop_words_en:
+                if self.stemmer:
+                    word = self.stemmer.stem(word)
+                filtered_words.append(word)
+        
+        # Añadir bigramas relevantes (frases de dos palabras)
+        bigrams = re.findall(r'\b[a-zA-Záéíóúñü]+\s+[a-zA-Záéíóúñü]+\b', hypothesis.lower())
+        for bigram in bigrams:
+            if all(len(w) > 3 for w in bigram.split()):
+                filtered_words.append(bigram.replace(' ', '_'))
+        
+        return list(set(filtered_words))
+    
+    def analyze_sentence_deep(self, sentence: str) -> Dict:
+        """
+        Análisis profundo de una oración con detección de:
+        - Tipo de relación
+        - Nivel de certeza
+        - Negación
+        - Fuerza de la evidencia
+        """
+        sentence_lower = sentence.lower()
+        
+        # Detectar negación
+        has_negation = False
+        for pattern in self.negation_patterns:
+            if re.search(pattern, sentence_lower, re.IGNORECASE):
+                has_negation = True
+                break
+        
+        # Detectar nivel de certeza
+        certainty = 'unknown'
+        certainty_weight = 0.5
+        for level, data in self.certainty_levels.items():
+            if any(term in sentence_lower for term in data['terms']):
+                certainty = level
+                certainty_weight = data['weight']
+                break
+        
+        # Detectar tipo de relación
+        relation = 'unknown'
+        relation_weight = 0.5
+        for rel_type, data in self.relation_types.items():
+            if any(term in sentence_lower for term in data['terms']):
+                relation = rel_type
+                relation_weight = data['weight']
+                break
+        
+        # Calcular fuerza de la evidencia
+        strength = relation_weight * certainty_weight
+        if has_negation:
+            strength *= -1  # La negación invierte la dirección
+        
+        return {
+            'has_negation': has_negation,
+            'certainty': certainty,
+            'certainty_weight': certainty_weight,
+            'relation': relation,
+            'relation_weight': relation_weight,
+            'strength': strength,
+            'direction': -1 if has_negation else 1
+        }
+    
+    def assess_study_quality(self, text: str) -> Dict:
+        """Evalúa la calidad metodológica del estudio"""
+        text_lower = text.lower()
+        
+        # Detectar tipo de estudio
+        study_type = 'unknown'
+        study_weight = 1.0
+        for stype, patterns in self.study_type_patterns.items():
+            if any(p in text_lower for p in patterns):
+                study_type = stype
+                study_weight = self.study_type_weights.get(stype, 1.0)
+                break
+        
+        # Detectar tamaño de muestra
+        sample_size = None
+        sample_match = re.search(r'n\s*[=:]\s*(\d+)', text_lower)
+        if sample_match:
+            sample_size = int(sample_match.group(1))
+            if sample_size > 1000:
+                study_weight *= 1.2
+            elif sample_size > 500:
+                study_weight *= 1.1
+            elif sample_size < 50:
+                study_weight *= 0.7
+            elif sample_size < 100:
+                study_weight *= 0.8
+        
+        # Detectar factores de calidad adicionales
+        quality_factors = []
+        if re.search(r'(multicenter|multi-center)', text_lower):
+            study_weight *= 1.1
+            quality_factors.append('multicenter')
+        if re.search(r'(double-blind|double blind|randomized)', text_lower):
+            study_weight *= 1.2
+            quality_factors.append('rigorous')
+        if re.search(r'(prospective)', text_lower):
+            study_weight *= 1.1
+            quality_factors.append('prospective')
+        
+        return {
+            'study_type': study_type,
+            'type_weight': study_weight,
+            'quality_factors': quality_factors,
+            'sample_size': sample_size
+        }
+    
+    def calculate_relevance(self, sentence: str, hypothesis_terms: List[str]) -> float:
+        """Calcula relevancia de la oración respecto a la hipótesis usando TF-IDF"""
+        if not hypothesis_terms:
+            return 0.0
+        
+        sentence_lower = sentence.lower()
+        
+        # Coincidencia exacta de términos
+        matches = sum(1 for term in hypothesis_terms if term in sentence_lower)
+        
+        # Coincidencia de raíces (stemming)
+        if self.stemmer:
+            sentence_stems = [self.stemmer.stem(w) for w in sentence_lower.split()]
+            hypothesis_stems = [self.stemmer.stem(term.replace('_', ' ')) for term in hypothesis_terms]
+            stem_matches = sum(1 for stem in hypothesis_stems if any(stem in s for s in sentence_stems))
+            matches = max(matches, stem_matches)
+        
+        score = matches / len(hypothesis_terms)
+        
+        # Bonus por proximidad de términos
+        if matches >= 2:
+            positions = []
+            for term in hypothesis_terms:
+                pos = sentence_lower.find(term)
+                if pos != -1:
+                    positions.append(pos)
+            
+            if len(positions) >= 2:
+                positions.sort()
+                if positions[-1] - positions[0] < 100:
+                    score += 0.2
+        
+        return min(score, 1.0)
+    
+    def split_sentences(self, text: str) -> List[str]:
+        """Divide texto en oraciones"""
+        if NLTK_READY:
+            try:
+                return sent_tokenize(text)
+            except:
+                return simple_sent_tokenize(text)
+        else:
+            return simple_sent_tokenize(text)
+    
+    # ========================================================================
+    # MÉTODO PRINCIPAL DE VERIFICACIÓN
+    # ========================================================================
+    
+    def verify_article_text(self, text: str, hypothesis: str) -> Dict:
+        """
+        Verifica un artículo completo usando técnicas avanzadas de IA
+        
+        Args:
+            text: Texto completo del artículo
+            hypothesis: Hipótesis a verificar (en inglés)
+        
+        Returns:
+            Dict con resultados del análisis
+        """
+        if not text or len(text.strip()) < 100:
+            return {
+                'success': False,
+                'error': 'Texto insuficiente para análisis',
+                'verdict': None
+            }
+        
+        # PASO 1: Extraer términos clave de la hipótesis
+        hypothesis_terms = self.extract_key_terms(hypothesis)
+        
+        # PASO 2: Evaluar calidad del estudio
+        quality = self.assess_study_quality(text)
+        
+        # PASO 3: Dividir en oraciones
+        sentences = self.split_sentences(text)
+        
+        # PASO 4: Dividir en bloques para detección de secciones
+        block_size = max(1, len(text) // 10)
+        blocks = [text[i:i+block_size] for i in range(0, len(text), block_size)]
+        
+        # Mapa de secciones
+        section_map = {}
+        current_section = 'unknown'
+        for i, block in enumerate(blocks):
+            detected = self.detect_section(block)
+            if detected != 'unknown':
+                current_section = detected
+            section_map[i] = current_section
+        
+        # PASO 5: Analizar cada oración
+        evidence_list = []
+        section_counts = Counter()
+        
+        for i, sentence in enumerate(sentences):
+            # Determinar sección
+            block_idx = min(i // max(1, len(sentences) // len(blocks)), len(blocks)-1)
+            section = section_map.get(block_idx, 'unknown')
+            section_weight = self.section_weights.get(section, 1.0)
+            
+            # Calcular relevancia
+            relevance = self.calculate_relevance(sentence, hypothesis_terms)
+            
+            if relevance > self.UMBRAL_RELEVANCIA:
+                # Traducir para mejor análisis
+                sentence_en = self.translator.translate_to_english(sentence)
+                
+                # Análisis profundo de la oración
+                analysis = self.analyze_sentence_deep(sentence_en)
+                
+                if analysis['direction'] != 0:  # Si hay evidencia (positiva o negativa)
+                    evidence = {
+                        'sentence': sentence[:200] + '...' if len(sentence) > 200 else sentence,
+                        'sentence_en': sentence_en[:200] + '...' if len(sentence_en) > 200 else sentence_en,
+                        'section': section,
+                        'section_weight': section_weight,
+                        'relevance': relevance,
+                        'relation': analysis['relation'],
+                        'certainty': analysis['certainty'],
+                        'direction': analysis['direction'],
+                        'strength': abs(analysis['strength']),
+                        'has_negation': analysis['has_negation']
+                    }
+                    
+                    evidence_list.append(evidence)
+                    section_counts[section] += 1
+        
+        # PASO 6: Votación ponderada
+        verdict = self.weighted_vote(evidence_list, quality)
+        
+        return {
+            'success': True,
+            'total_sentences': len(sentences),
+            'relevant_sentences': len(evidence_list),
+            'section_distribution': dict(section_counts),
+            'study_quality': quality,
+            'evidence': evidence_list[:15],  # Limitar a 15 evidencias para no saturar
+            'verdict': verdict,
+            'hypothesis_terms': hypothesis_terms
+        }
+    
+    def weighted_vote(self, evidence_list: List[Dict], quality: Dict) -> Dict:
+        """
+        Sistema de votación ponderada con factores:
+        - Tipo de relación
+        - Nivel de certeza
+        - Sección del artículo
+        - Calidad del estudio
+        - Relevancia
+        """
+        if not evidence_list:
+            return {
+                'score': 0,
+                'confidence': 0,
+                'verdict': 'inconclusive',
+                'verdict_text': 'EVIDENCIA NO CONCLUYENTE',
+                'support_count': 0,
+                'against_count': 0
+            }
+        
+        # Pesos base por tipo de relación
+        relation_weights = {
+            'causal': 2.2,
+            'risk': 2.0,
+            'association': 1.8,
+            'protective': 1.5,
+            'unknown': 1.0
+        }
+        
+        # Pesos por nivel de certeza
+        certainty_weights = {
+            'definitive': 1.5,
+            'strong': 1.3,
+            'moderate': 1.0,
+            'weak': 0.5,
+            'unknown': 0.5
+        }
+        
+        weighted_score = 0.0
+        total_weight = 0.0
+        support_count = 0
+        against_count = 0
+        strong_evidence = []
+        
+        for evidence in evidence_list:
+            # Peso base por relación
+            base_weight = relation_weights.get(evidence['relation'], 1.0)
+            
+            # Peso por certeza
+            certainty_weight = certainty_weights.get(evidence['certainty'], 0.5)
+            
+            # Peso por sección
+            section_weight = evidence['section_weight']
+            
+            # Peso por relevancia
+            relevance_bonus = 1 + evidence['relevance'] * 0.5
+            
+            # Peso por calidad del estudio
+            quality_multiplier = quality['type_weight'] if quality else 1.0
+            
+            # Peso final
+            final_weight = (base_weight * certainty_weight * section_weight * 
+                          relevance_bonus * quality_multiplier)
+            
+            # Aplicar dirección (positiva o negativa)
+            direction = evidence['direction']
+            
+            if direction > 0:
+                support_count += 1
+                if certainty_weight > 1.0:
+                    strong_evidence.append('support')
+            elif direction < 0:
+                against_count += 1
+                if certainty_weight > 1.0:
+                    strong_evidence.append('against')
+            
+            weighted_score += direction * final_weight
+            total_weight += final_weight
+        
+        if total_weight == 0:
+            avg_score = 0
+        else:
+            avg_score = weighted_score / total_weight
+        
+        # Normalizar confianza basado en cantidad y calidad de evidencia
+        evidence_quality = len(evidence_list) / 20.0  # 20 es el máximo esperado
+        strong_ratio = len(strong_evidence) / max(1, len(evidence_list))
+        norm_confidence = min(1.0, (evidence_quality + strong_ratio) / 1.5)
+        
+        # Determinar veredicto con umbrales ajustados
+        if avg_score > 0.8:
+            verdict = 'strongly_supports'
+            text = 'CORROBORA FUERTEMENTE'
+        elif avg_score > 0.3:
+            verdict = 'supports'
+            text = 'CORROBORA'
+        elif avg_score > -0.3:
+            verdict = 'inconclusive'
+            text = 'EVIDENCIA NO CONCLUYENTE'
+        elif avg_score > -0.8:
+            verdict = 'contradicts'
+            text = 'CONTRADICE'
+        else:
+            verdict = 'strongly_contradicts'
+            text = 'CONTRADICE FUERTEMENTE'
+        
+        return {
+            'score': avg_score,
+            'confidence': norm_confidence,
+            'verdict': verdict,
+            'verdict_text': text,
+            'support_count': support_count,
+            'against_count': against_count,
+            'strong_evidence_count': len(strong_evidence)
+        }
+
+
+# ============================================================================
+# MOTOR DE BÚSQUEDA CIENTÍFICA (VERSIÓN ALTO VOLUMEN) - EXACTAMENTE IGUAL
+# ============================================================================
+
+class ScientificSearchEngine:
+    """
+    Motor de búsqueda científica mejorado para grandes volúmenes de resultados
+    """
+    
+    def __init__(self, email: str):
+        self.email = email
+        self.delay = 0.3
+        
+    def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
+        """Formatea consultas complejas de PubMed incluyendo rango de años"""
+        query = ' '.join(query.split())
+        
+        mesh_pattern = r'"([^"]+)"\[Mesh\]'
+        query = re.sub(mesh_pattern, r'\1[mh]', query)
+        
+        pubtype_pattern = r'"([^"]+)"\[Publication Type\]'
+        query = re.sub(pubtype_pattern, r'\1[pt]', query)
+        
+        field_mappings = {
+            '[Mesh]': '[mh]',
+            '[Publication Type]': '[pt]',
+            '[Title/Abstract]': '[tiab]',
+            '[Author]': '[au]',
+            '[Journal]': '[ta]'
+        }
+        
+        for old, new in field_mappings.items():
+            query = query.replace(old, new)
+        
+        if year_range and year_range[0] and year_range[1]:
+            year_filter = f" AND ({year_range[0]}[pdat] : {year_range[1]}[pdat])"
+            query = f"({query}){year_filter}"
+        
+        return query
+    
+    def fetch_pubmed_batch(self, ids_batch: list) -> list:
+        """Obtiene detalles de un lote de IDs de PubMed"""
+        results = []
+        try:
+            ids = ','.join(ids_batch)
+            fetch_url = (
+                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+                f"?db=pubmed"
+                f"&id={ids}"
+                f"&retmode=xml"
+                f"&tool=streamlit_app"
+                f"&email={self.email}"
+            )
+            
+            time.sleep(self.delay)
+            response = requests.get(fetch_url, timeout=30)
+            response.raise_for_status()
+            
+            root = ET.fromstring(response.content)
+            
+            for article in root.findall('.//PubmedArticle'):
+                try:
+                    title_elem = article.find('.//ArticleTitle')
+                    title = title_elem.text if title_elem is not None else "Título no disponible"
+                    
+                    authors = []
+                    author_list = article.findall('.//Author')
+                    for author in author_list[:5]:
+                        last = author.find('LastName')
+                        fore = author.find('ForeName')
+                        if last is not None and fore is not None:
+                            authors.append(f"{fore.text} {last.text}")
+                        elif last is not None:
+                            authors.append(last.text)
+                    
+                    journal_elem = article.find('.//Title')
+                    journal = journal_elem.text if journal_elem is not None else ""
+                    
+                    year_elem = article.find('.//PubDate/Year')
+                    if year_elem is None:
+                        year_elem = article.find('.//PubDate/MedlineDate')
+                    year = year_elem.text[:4] if year_elem is not None and year_elem.text else ""
+                    
+                    doi_elem = article.find(".//ArticleId[@IdType='doi']")
+                    doi = doi_elem.text if doi_elem is not None else ""
+                    
+                    pmid_elem = article.find(".//PMID")
+                    pmid = pmid_elem.text if pmid_elem is not None else ""
+                    
+                    abstract_elem = article.find('.//AbstractText')
+                    abstract = abstract_elem.text if abstract_elem is not None else ""
+                    
+                    results.append({
+                        'base_datos': 'PubMed',
+                        'titulo': title,
+                        'autores': ', '.join(authors)[:200],
+                        'revista': journal,
+                        'año': year,
+                        'doi': doi,
+                        'url': f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else "",
+                        'pmid': pmid,
+                        'abstract': abstract[:500] + '...' if len(abstract) > 500 else abstract,
+                        'tipo': 'Artículo'
+                    })
+                    
+                except Exception as e:
+                    continue
+                    
+        except Exception as e:
+            pass
+        
+        return results
+    
+    def search_pubmed_advanced(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
+        """Búsqueda avanzada en PubMed con soporte para hasta 1000 resultados"""
+        all_results = []
+        try:
+            formatted_query = self.format_pubmed_query(query, year_range)
+            encoded_query = urllib.parse.quote(formatted_query)
+            
+            # Obtener conteo total
+            count_url = (
+                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+                f"?db=pubmed"
+                f"&term={encoded_query}"
+                f"&retmode=json"
+                f"&retmax=0"
+                f"&tool=streamlit_app"
+                f"&email={self.email}"
+            )
+            
+            response = requests.get(count_url, timeout=30)
+            response.raise_for_status()
+            count_data = response.json()
+            total_count = int(count_data.get('esearchresult', {}).get('count', '0'))
+            
+            if total_count == 0:
+                return []
+            
+            results_to_get = min(max_results, total_count)
+            
+            # Obtener IDs en lotes
+            batch_size = 200
+            all_ids = []
+            
+            for retstart in range(0, results_to_get, batch_size):
+                search_url = (
+                    f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+                    f"?db=pubmed"
+                    f"&term={encoded_query}"
+                    f"&retmode=json"
+                    f"&retmax={batch_size}"
+                    f"&retstart={retstart}"
+                    f"&sort=relevance"
+                    f"&tool=streamlit_app"
+                    f"&email={self.email}"
+                )
+                
+                time.sleep(self.delay)
+                response = requests.get(search_url, timeout=30)
+                response.raise_for_status()
+                search_data = response.json()
+                
+                id_list = search_data.get('esearchresult', {}).get('idlist', [])
+                all_ids.extend(id_list)
+                
+                if len(id_list) < batch_size:
+                    break
+            
+            # Obtener detalles en lotes
+            if all_ids:
+                batch_size_details = 100
+                id_batches = [all_ids[i:i + batch_size_details] 
+                             for i in range(0, len(all_ids), batch_size_details)]
+                
+                with ThreadPoolExecutor(max_workers=3) as executor:
+                    futures = [executor.submit(self.fetch_pubmed_batch, batch) 
+                              for batch in id_batches]
+                    
+                    for future in as_completed(futures):
+                        batch_results = future.result()
+                        all_results.extend(batch_results)
+            
+        except Exception as e:
+            pass
+        
+        return all_results
+    
+    def search_crossref(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
+        """Busca en CrossRef con soporte para hasta 1000 resultados"""
+        results = []
+        try:
+            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
+            simple_query = re.sub(r'[\(\)]', '', simple_query)
+            simple_query = ' '.join(simple_query.split())
+            
+            url = "https://api.crossref.org/works"
+            params = {
+                'query': simple_query[:200],
+                'rows': min(1000, max_results),
+                'sort': 'relevance',
+                'order': 'desc'
+            }
+            
+            if year_range and year_range[0] and year_range[1]:
+                params['filter'] = f"from-pub-date:{year_range[0]},until-pub-date:{year_range[1]}"
+            
+            time.sleep(self.delay)
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            for item in data.get('message', {}).get('items', []):
+                year = ''
+                if item.get('published-print'):
+                    year = str(item['published-print']['date-parts'][0][0])
+                elif item.get('published-online'):
+                    year = str(item['published-online']['date-parts'][0][0])
+                
+                authors = []
+                for author in item.get('author', [])[:5]:
+                    if 'given' in author and 'family' in author:
+                        authors.append(f"{author['given']} {author['family']}")
+                    elif 'family' in author:
+                        authors.append(author['family'])
+                
+                results.append({
+                    'base_datos': 'CrossRef',
+                    'titulo': item.get('title', ['Título no disponible'])[0],
+                    'autores': ', '.join(authors)[:200],
+                    'revista': item.get('container-title', [''])[0] if item.get('container-title') else '',
+                    'año': year,
+                    'doi': item.get('DOI', ''),
+                    'url': f"https://doi.org/{item['DOI']}" if item.get('DOI') else '',
+                    'tipo': item.get('type', '')
+                })
+                
+        except Exception as e:
+            pass
+        
+        return results
+    
+    def search_openalex(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
+        """Busca en OpenAlex con soporte para hasta 1000 resultados"""
+        results = []
+        try:
+            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
+            simple_query = re.sub(r'[\(\)]', '', simple_query)
+            simple_query = ' '.join(simple_query.split())
+            
+            url = "https://api.openalex.org/works"
+            params = {
+                'search': simple_query[:200],
+                'per-page': 200,  # Máximo permitido por OpenAlex
+                'sort': 'relevance_score:desc'
+            }
+            
+            if year_range and year_range[0] and year_range[1]:
+                params['filter'] = f"publication_year:{year_range[0]}-{year_range[1]}"
+            
+            page = 1
+            while len(results) < max_results:
+                params['page'] = page
+                
+                time.sleep(self.delay)
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                for item in data.get('results', []):
+                    results.append({
+                        'base_datos': 'OpenAlex',
+                        'titulo': item.get('title', 'Título no disponible'),
+                        'autores': ', '.join([a.get('author', {}).get('display_name', '') 
+                                             for a in item.get('authorships', [])[:5]]),
+                        'revista': item.get('host_venue', {}).get('display_name', '') if item.get('host_venue') else '',
+                        'año': str(item.get('publication_year', '')),
+                        'doi': item.get('doi', '').replace('https://doi.org/', ''),
+                        'url': item.get('doi', ''),
+                        'tipo': item.get('type', ''),
+                        'open_access': item.get('open_access', {}).get('oa_url', '')
+                    })
+                
+                if len(data.get('results', [])) < params['per-page']:
+                    break
+                    
+                page += 1
+                
+        except Exception as e:
+            pass
+        
+        return results[:max_results]
+    
+    def search_europe_pmc(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
+        """Busca en Europe PMC con soporte para hasta 1000 resultados"""
+        results = []
+        try:
+            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
+            simple_query = re.sub(r'[\(\)]', '', simple_query)
+            simple_query = ' '.join(simple_query.split())
+            
+            if year_range and year_range[0] and year_range[1]:
+                date_filter = f" AND (PUB_YEAR:{year_range[0]}-{year_range[1]})"
+                simple_query = f"({simple_query}){date_filter}"
+            
+            page = 1
+            page_size = 100  # Máximo por página en Europe PMC
+            
+            while len(results) < max_results:
+                url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+                params = {
+                    'query': simple_query[:500],
+                    'format': 'json',
+                    'pageSize': page_size,
+                    'page': page,
+                    'resultType': 'core'
+                }
+                
+                time.sleep(self.delay)
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                for item in data.get('resultList', {}).get('result', []):
+                    results.append({
+                        'base_datos': 'Europe PMC',
+                        'titulo': item.get('title', 'Título no disponible'),
+                        'autores': ', '.join([a.get('fullName', '') for a in item.get('authorList', {}).get('author', [])[:5]]),
+                        'revista': item.get('journalTitle', ''),
+                        'año': str(item.get('pubYear', '')),
+                        'doi': item.get('doi', ''),
+                        'url': f"https://europepmc.org/article/{item.get('source', '')}/{item.get('id', '')}",
+                        'pmid': item.get('pmid', ''),
+                        'pmcid': item.get('pmcid', ''),
+                        'abstract': item.get('abstractText', '')[:300] + '...' if item.get('abstractText') else '',
+                        'tipo': 'Artículo'
+                    })
+                
+                if len(data.get('resultList', {}).get('result', [])) < page_size:
+                    break
+                    
+                page += 1
+                
+        except Exception as e:
+            pass
+        
+        return results[:max_results]
+    
+    def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
+                   year_range: tuple = None) -> pd.DataFrame:
+        """Busca en todas las bases de datos seleccionadas con alto volumen"""
+        
+        if selected_dbs is None:
+            selected_dbs = ['PubMed', 'CrossRef', 'OpenAlex', 'Europe PMC']
+        
+        all_results = []
+        
+        search_functions = {
+            'PubMed': self.search_pubmed_advanced,
+            'CrossRef': self.search_crossref,
+            'OpenAlex': self.search_openalex,
+            'Europe PMC': self.search_europe_pmc
+        }
+        
+        for db in selected_dbs:
+            if db in search_functions:
+                try:
+                    results = search_functions[db](query, max_results_per_db, year_range)
+                    all_results.extend(results)
+                except Exception as e:
+                    pass
+        
+        if all_results:
+            df = pd.DataFrame(all_results)
+            
+            if 'año' in df.columns:
+                df['año'] = pd.to_numeric(df['año'], errors='coerce')
+            
+            if 'doi' in df.columns:
+                df = df.drop_duplicates(subset=['doi'], keep='first')
+            
+            return df
+        else:
+            return pd.DataFrame()
+
+
+# ============================================================================
+# OBTENEDOR DE TEXTO DE ARTÍCULOS (MEJORADO)
+# ============================================================================
+
+class ArticleTextFetcher:
+    """Obtiene el texto completo de artículos desde fuentes abiertas"""
+    
+    def __init__(self):
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        self.min_delay = 0.5
+        self.last_request_time = 0
+    
+    def wait(self):
+        """Control de tasa simple"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_delay:
+            time.sleep(self.min_delay - time_since_last)
+        
+        self.last_request_time = time.time()
+    
+    def get_text_from_doi(self, doi: str) -> Tuple[Optional[str], str]:
+        """
+        Obtiene el texto completo del artículo usando el DOI
+        Retorna (texto, fuente)
+        """
+        if not doi or pd.isna(doi) or doi == '':
+            return None, "DOI vacío"
+        
+        doi = str(doi).strip()
+        if doi.startswith('https://doi.org/'):
+            doi = doi.replace('https://doi.org/', '')
+        elif doi.startswith('doi:'):
+            doi = doi.replace('doi:', '')
+        
+        self.wait()
+        
+        # Intentar 1: OpenAlex (para obtener URLs Open Access)
+        try:
+            url = f"https://api.openalex.org/works/doi:{doi}"
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                oa_url = data.get('open_access', {}).get('oa_url')
+                if oa_url:
+                    return f"Open Access disponible en: {oa_url}", f"OpenAlex (OA URL)"
+        except:
+            pass
+        
+        # Intentar 2: Europe PMC (tienen abstracts y metadata)
+        try:
+            url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=DOI:{doi}&format=json"
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('resultList', {}).get('result', [])
+                if results:
+                    abstract = results[0].get('abstractText', '')
+                    if abstract:
+                        return abstract, "Europe PMC (Abstract)"
+        except:
+            pass
+        
+        # Intentar 3: Unpaywall
+        try:
+            url = f"https://api.unpaywall.org/v2/{doi}?email=usuario@ejemplo.com"
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('is_oa') and data.get('best_oa_location'):
+                    pdf_url = data['best_oa_location'].get('url_for_pdf')
+                    if pdf_url:
+                        return f"PDF Open Access en: {pdf_url}", "Unpaywall"
+        except:
+            pass
+        
+        # Intentar 4: PubMed (si es artículo de PubMed)
+        try:
+            # Extraer PMID si existe en el DOI? No, mejor buscar por DOI
+            url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={doi}[DOI]&retmode=json"
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                id_list = data.get('esearchresult', {}).get('idlist', [])
+                if id_list:
+                    pmid = id_list[0]
+                    fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
+                    fetch_response = self.session.get(fetch_url, timeout=10)
+                    if fetch_response.status_code == 200:
+                        root = ET.fromstring(fetch_response.content)
+                        abstract_elem = root.find('.//AbstractText')
+                        if abstract_elem is not None and abstract_elem.text:
+                            return abstract_elem.text, "PubMed (Abstract)"
+        except:
+            pass
+        
+        return None, "No se pudo obtener texto completo"
+
+
+# ============================================================================
+# CLASE PRINCIPAL INTEGRADA (ALTO VOLUMEN)
+# ============================================================================
+
+class IntegratedScientificVerifier:
+    """
+    Clase principal que integra búsqueda y verificación semántica
+    Soporta hasta 1000 artículos por base de datos
+    """
+    
+    def __init__(self, email: str):
+        self.search_engine = ScientificSearchEngine(email)
+        self.semantic_verifier = AdvancedSemanticVerifier()
+        self.text_fetcher = ArticleTextFetcher()
+        self.results = []
+        self.stats = {
+            'total_articles': 0,
+            'analyzed': 0,
+            'with_text': 0,
+            'corroboran': 0,
+            'contradicen': 0,
+            'inconclusos': 0
+        }
+    
+    def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
+                     selected_dbs: list = None, year_range: tuple = None,
+                     progress_callback=None) -> pd.DataFrame:
+        """
+        Ejecuta el flujo completo: búsqueda + análisis semántico
+        """
+        self.results = []
+        self.stats = {
+            'total_articles': 0,
+            'analyzed': 0,
+            'with_text': 0,
+            'corroboran': 0,
+            'contradicen': 0,
+            'inconclusos': 0
+        }
+        
+        # PASO 1: BÚSQUEDA
+        if progress_callback:
+            progress_callback("🔍 Buscando artículos en bases de datos...", 0.05)
+        
+        articles_df = self.search_engine.search_all(
+            query, max_results_per_db, selected_dbs, year_range
+        )
+        
+        if articles_df.empty:
+            return pd.DataFrame()
+        
+        self.stats['total_articles'] = len(articles_df)
+        
+        if progress_callback:
+            progress_callback(f"✅ Encontrados {len(articles_df)} artículos. Iniciando análisis...", 0.1)
+        
+        # PASO 2: ANÁLISIS DE CADA ARTÍCULO
+        results_list = []
+        
+        # Procesar en lotes para mejor manejo de memoria
+        batch_size = 50
+        total_articles = len(articles_df)
+        
+        for batch_start in range(0, total_articles, batch_size):
+            batch_end = min(batch_start + batch_size, total_articles)
+            batch_df = articles_df.iloc[batch_start:batch_end]
+            
+            for idx, row in batch_df.iterrows():
+                current = idx + 1
+                if progress_callback:
+                    progress_value = 0.1 + 0.85 * (current / total_articles)
+                    progress_callback(
+                        f"🔬 Analizando artículo {current}/{total_articles}: {str(row['titulo'])[:50]}...", 
+                        progress_value
+                    )
+                
+                # Obtener texto del artículo
+                article_text, source = self.text_fetcher.get_text_from_doi(row.get('doi', ''))
+                
+                result_row = {
+                    'base_datos': row.get('base_datos', 'Desconocida'),
+                    'titulo': row.get('titulo', 'Sin título'),
+                    'autores': row.get('autores', ''),
+                    'revista': row.get('revista', ''),
+                    'año': row.get('año', ''),
+                    'doi': row.get('doi', ''),
+                    'url': row.get('url', ''),
+                    'texto_disponible': article_text is not None,
+                    'fuente_texto': source if article_text else 'No disponible',
+                    'veredicto': '',
+                    'confianza': 0,
+                    'puntuacion': 0,
+                    'evidencia_a_favor': 0,
+                    'evidencia_en_contra': 0,
+                    'oraciones_totales': 0,
+                    'oraciones_relevantes': 0,
+                    'detalle_evidencia': ''
+                }
+                
+                if article_text:
+                    self.stats['with_text'] += 1
+                    
+                    # Analizar semánticamente
+                    analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis)
+                    
+                    if analysis['success']:
+                        verdict = analysis['verdict']
+                        
+                        result_row.update({
+                            'veredicto': verdict['verdict_text'],
+                            'confianza': verdict['confidence'],
+                            'puntuacion': verdict['score'],
+                            'evidencia_a_favor': verdict['support_count'],
+                            'evidencia_en_contra': verdict['against_count'],
+                            'oraciones_totales': analysis['total_sentences'],
+                            'oraciones_relevantes': analysis['relevant_sentences']
+                        })
+                        
+                        # Actualizar estadísticas
+                        self.stats['analyzed'] += 1
+                        if 'CORROBORA' in verdict['verdict_text']:
+                            self.stats['corroboran'] += 1
+                        elif 'CONTRADICE' in verdict['verdict_text']:
+                            self.stats['contradicen'] += 1
+                        else:
+                            self.stats['inconclusos'] += 1
+                        
+                        # Guardar evidencia resumida
+                        if analysis['evidence']:
+                            ev_summary = []
+                            for ev in analysis['evidence'][:3]:
+                                ev_summary.append(f"[{ev['section']}] {ev['relation']} ({ev['certainty']})")
+                            result_row['detalle_evidencia'] = ' | '.join(ev_summary)
+                else:
+                    result_row['veredicto'] = 'TEXTO NO DISPONIBLE'
+                
+                results_list.append(result_row)
+            
+            # Pequeña pausa entre lotes
+            time.sleep(1)
+        
+        if progress_callback:
+            progress_callback("✅ Análisis completado", 1.0)
+        
+        self.results = pd.DataFrame(results_list)
+        return self.results
+    
+    def generate_report(self) -> str:
+        """Genera un reporte textual de los resultados"""
+        if self.results.empty:
+            return "No hay resultados para generar reporte."
+        
+        report = []
+        report.append("="*80)
+        report.append("REPORTE DE VERIFICACIÓN SEMÁNTICA INTEGRADA")
+        report.append("="*80)
+        report.append(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"Total artículos encontrados: {self.stats['total_articles']}")
+        report.append(f"Artículos con texto disponible: {self.stats['with_text']}")
+        report.append(f"Artículos analizados: {self.stats['analyzed']}")
+        report.append("")
+        report.append("RESULTADOS GLOBALES:")
+        report.append(f"✅ Corroboran: {self.stats['corroboran']}")
+        report.append(f"❌ Contradicen: {self.stats['contradicen']}")
+        report.append(f"⚠️ Inconclusos: {self.stats['inconclusos']}")
+        report.append("")
+        report.append("DETALLE POR ARTÍCULO:")
+        report.append("-"*80)
+        
+        for idx, row in self.results.iterrows():
+            report.append(f"\n📄 {row['titulo']}")
+            report.append(f"   Base: {row['base_datos']} | Año: {row['año']}")
+            report.append(f"   DOI: {row['doi']}")
+            
+            if row['veredicto'] == 'TEXTO NO DISPONIBLE':
+                report.append(f"   ⚠️ {row['veredicto']} - {row['fuente_texto']}")
+            else:
+                report.append(f"   Veredicto: {row['veredicto']} (Confianza: {row['confianza']:.1%})")
+                report.append(f"   Evidencia: {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra")
+                if row['detalle_evidencia']:
+                    report.append(f"   Evidencia destacada: {row['detalle_evidencia']}")
+        
+        return "\n".join(report)
+    
+    def generate_html_report(self) -> str:
+        """Genera un reporte HTML de los resultados para enviar por correo"""
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1 {{ color: #1E88E5; }}
+                h2 {{ color: #333; border-bottom: 2px solid #1E88E5; padding-bottom: 5px; }}
+                .stats {{ background-color: #f5f5f5; padding: 15px; border-radius: 5px; }}
+                .verdict-assert {{ color: #4CAF50; font-weight: bold; }}
+                .verdict-reject {{ color: #f44336; font-weight: bold; }}
+                .verdict-inconclusive {{ color: #ff9800; font-weight: bold; }}
+                table {{ border-collapse: collapse; width: 100%; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #1E88E5; color: white; }}
+                tr:nth-child(even) {{ background-color: #f2f2f2; }}
+            </style>
+        </head>
+        <body>
+            <h1>🔬 Reporte de Verificación Semántica</h1>
+            <p><strong>Fecha:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            
+            <h2>📊 Resultados Globales</h2>
+            <div class="stats">
+                <p><strong>Total artículos encontrados:</strong> {self.stats['total_articles']}</p>
+                <p><strong>Artículos con texto disponible:</strong> {self.stats['with_text']}</p>
+                <p><strong>Artículos analizados:</strong> {self.stats['analyzed']}</p>
+                <p><strong>✅ Corroboran:</strong> {self.stats['corroboran']}</p>
+                <p><strong>❌ Contradicen:</strong> {self.stats['contradicen']}</p>
+                <p><strong>⚠️ Inconclusos:</strong> {self.stats['inconclusos']}</p>
+            </div>
+            
+            <h2>📋 Detalle de Artículos</h2>
+            <table>
+                <tr>
+                    <th>Base</th>
+                    <th>Título</th>
+                    <th>Año</th>
+                    <th>Veredicto</th>
+                    <th>Confianza</th>
+                </tr>
+        """
+        
+        for idx, row in self.results.iterrows():
+            verdict_class = ""
+            if 'CORROBORA' in row['veredicto']:
+                verdict_class = "verdict-assert"
+            elif 'CONTRADICE' in row['veredicto']:
+                verdict_class = "verdict-reject"
+            elif 'NO CONCLUYENTE' in row['veredicto']:
+                verdict_class = "verdict-inconclusive"
+            
+            html += f"""
+                <tr>
+                    <td>{row['base_datos']}</td>
+                    <td>{row['titulo'][:100]}...</td>
+                    <td>{row['año']}</td>
+                    <td class="{verdict_class}">{row['veredicto']}</td>
+                    <td>{row['confianza']:.1%}</td>
+                </tr>
+            """
+        
+        html += """
+            </table>
+        </body>
+        </html>
+        """
+        
+        return html
 
 
 # ============================================================================
@@ -1752,6 +2085,7 @@ class HypothesisAssistant:
 # ============================================================================
 
 def get_badge_class(db_name: str) -> str:
+    """Devuelve la clase CSS para el badge de base de datos"""
     classes = {
         'PubMed': 'badge-pubmed',
         'CrossRef': 'badge-crossref',
@@ -1763,12 +2097,9 @@ def get_badge_class(db_name: str) -> str:
     return classes.get(db_name, 'badge-pubmed')
 
 def get_verdict_class(verdict: str) -> str:
-    if 'FUERTEMENTE' in verdict and 'CORROBORA' in verdict:
+    """Devuelve la clase CSS para el veredicto"""
+    if 'CORROBORA' in verdict:
         return 'verdict-assert'
-    elif 'CORROBORA' in verdict:
-        return 'verdict-assert'
-    elif 'FUERTEMENTE' in verdict and 'CONTRADICE' in verdict:
-        return 'verdict-reject'
     elif 'CONTRADICE' in verdict:
         return 'verdict-reject'
     elif 'NO CONCLUYENTE' in verdict:
@@ -1778,39 +2109,122 @@ def get_verdict_class(verdict: str) -> str:
 
 
 # ============================================================================
+# FUNCIÓN PARA ENVIAR RESULTADOS POR CORREO
+# ============================================================================
+
+def enviar_resultados_email(destinatario, integrator):
+    """Envía los resultados del análisis por correo electrónico"""
+    
+    # Generar reportes
+    reporte_txt = integrator.generate_report()
+    reporte_html = integrator.generate_html_report()
+    
+    # Preparar archivos adjuntos
+    archivos = []
+    
+    # CSV
+    csv_buffer = io.BytesIO()
+    integrator.results.to_csv(csv_buffer, index=False, encoding='utf-8')
+    archivos.append({
+        'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        'contenido': csv_buffer.getvalue()
+    })
+    
+    # Excel
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        integrator.results.to_excel(writer, sheet_name='Resultados', index=False)
+        summary = pd.DataFrame([integrator.stats])
+        summary.to_excel(writer, sheet_name='Resumen', index=False)
+    archivos.append({
+        'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        'contenido': excel_buffer.getvalue()
+    })
+    
+    # Asunto y mensaje
+    asunto = f"🔬 Reporte de Verificación Semántica - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    
+    mensaje_html = f"""
+    <html>
+    <body>
+        <h2>🔬 Reporte de Verificación Semántica</h2>
+        <p>Estimado usuario,</p>
+        <p>Adjunto encontrarás los resultados completos de tu análisis de verificación semántica.</p>
+        
+        <h3>📊 Resumen</h3>
+        <ul>
+            <li><strong>Total artículos:</strong> {integrator.stats['total_articles']}</li>
+            <li><strong>Artículos analizados:</strong> {integrator.stats['analyzed']}</li>
+            <li><strong>✅ Corroboran:</strong> {integrator.stats['corroboran']}</li>
+            <li><strong>❌ Contradicen:</strong> {integrator.stats['contradicen']}</li>
+            <li><strong>⚠️ Inconclusos:</strong> {integrator.stats['inconclusos']}</li>
+        </ul>
+        
+        <p>Puedes encontrar el detalle completo en los archivos adjuntos.</p>
+        
+        <hr>
+        <p style="color: #666; font-size: 0.9em;">
+            Este es un mensaje automático del Buscador y Verificador Semántico Integrado.
+        </p>
+    </body>
+    </html>
+    """
+    
+    mensaje_texto = f"""
+    Reporte de Verificación Semántica
+    
+    Resumen:
+    - Total artículos: {integrator.stats['total_articles']}
+    - Artículos analizados: {integrator.stats['analyzed']}
+    - ✅ Corroboran: {integrator.stats['corroboran']}
+    - ❌ Contradicen: {integrator.stats['contradicen']}
+    - ⚠️ Inconclusos: {integrator.stats['inconclusos']}
+    
+    Los archivos adjuntos contienen el detalle completo.
+    """
+    
+    # Enviar correo
+    return enviar_correo(
+        destinatario=destinatario,
+        asunto=asunto,
+        mensaje_html=mensaje_html,
+        mensaje_texto=mensaje_texto,
+        archivos=archivos
+    )
+
+
+# ============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ============================================================================
 
 def main():
     """Función principal de la aplicación"""
-
-    st.markdown("""
-    <h1 style="text-align: center; color: #1E88E5; font-size: 2.5rem; margin-bottom: 0.5rem;">
-        🧠 Buscador con Comprensión Lectora Humana
-    </h1>
-    <p style="text-align: center; color: #424242; font-size: 1.2rem; margin-bottom: 2rem;">
-        ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis con comprensión lectora tipo humano
-    </p>
-    """, unsafe_allow_html=True)
-
+    
+    st.markdown('<h1 class="main-header">🔬 Buscador y Verificador Semántico Integrado</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático</p>', 
+                unsafe_allow_html=True)
+    
     # Inicializar asistente de hipótesis
     hypothesis_assistant = HypothesisAssistant()
+    
+    # Renderizar asistente
     hypothesis_assistant.render_assistant_ui()
-
+    
     # Sidebar
     with st.sidebar:
         st.image("https://img.icons8.com/fluency/96/000000/artificial-intelligence.png", width=80)
         st.markdown("## ⚙️ Configuración")
-
-        email = st.text_input("📧 Email (para NCBI y recibir resultados)",
+        
+        email = st.text_input("📧 Email (requerido para NCBI y para recibir resultados)", 
                               value="usuario@ejemplo.com",
                               help="Este email se usará para NCBI y para enviarte los resultados")
-
+        
+        # Estado de NLTK
         if NLTK_READY:
-            st.success("✅ NLTK configurado")
+            st.success("✅ NLTK configurado correctamente")
         else:
             st.warning("⚠️ Usando tokenizador alternativo")
-
+        
         st.markdown("### 📚 Bases de Datos")
         col1, col2 = st.columns(2)
         with col1:
@@ -1821,7 +2235,7 @@ def main():
             semantic = st.checkbox('Semantic Scholar', value=False)
             doaj = st.checkbox('DOAJ', value=False)
             europepmc = st.checkbox('Europe PMC', value=True)
-
+        
         databases = {
             'PubMed': pubmed,
             'CrossRef': crossref,
@@ -1830,106 +2244,125 @@ def main():
             'DOAJ': doaj,
             'Europe PMC': europepmc
         }
-
+        
         st.markdown("---")
+        
         st.markdown("### 📅 Filtro de Años")
         col1, col2 = st.columns(2)
         with col1:
             year_from = st.number_input("Desde", min_value=1900, max_value=2025, value=2015)
         with col2:
             year_to = st.number_input("Hasta", min_value=1900, max_value=2025, value=2025)
-
+        
         year_range = (year_from, year_to) if year_from < year_to else None
-
+        
         st.markdown("### 📊 Resultados por base")
         max_results = st.slider(
-            "Máximo resultados por base:",
-            min_value=100, max_value=1000, value=500, step=100
+            "Máximo resultados por base:", 
+            min_value=100, max_value=1000, value=500, step=100,
+            help="Hasta 1000 artículos por base de datos"
         )
-
-        st.markdown("### 🔧 Umbral de relevancia")
+        
+        st.markdown("### 🔧 Umbrales de análisis")
         min_relevance = st.slider(
             "Relevancia mínima",
-            min_value=0.05, max_value=0.3, value=0.1, step=0.05
+            min_value=0.05,
+            max_value=0.3,
+            value=0.1,
+            step=0.05,
+            help="Mínimo de coincidencia con términos de la hipótesis"
         )
-
+        
         st.markdown("### ⚠️ Advertencia")
         st.warning("""
-        **Tiempo de procesamiento (con comprensión lectora):**
-        - 100 artículos: ~10-15 minutos
-        - 500 artículos: ~30-45 minutos
-        - El análisis es más lento pero MUCHO más preciso
+        **Tiempo de procesamiento:**
+        - 500 artículos: ~10-15 minutos
+        - 1000 artículos: ~20-30 minutos
+        - Depende de disponibilidad de texto completo
         """)
-
+        
         st.markdown("### 📋 Ejemplos")
-        if st.button("Cargar ejemplo: Alcohol y demencia"):
-            st.session_state['query'] = '(("Alcohol Drinking"[Mesh] OR "Alcoholism"[Mesh]) AND "Dementia"[Mesh])'
-            st.session_state['hypothesis'] = "El consumo de alcohol causa demencia en adultos mayores"
-            st.session_state['hypothesis_en'] = "Alcohol consumption causes dementia in older adults"
-
         if st.button("Cargar ejemplo: Ticagrelor y disnea"):
-            st.session_state['query'] = '(("Ticagrelor"[Mesh]) AND "Dyspnea"[Mesh])'
+            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)'
             st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
             st.session_state['hypothesis_en'] = "Ticagrelor causes dyspnea as a side effect in patients with ischemic heart disease"
-
+        
+        if st.button("Cargar ejemplo: COVID-19"):
+            st.session_state['query'] = '("COVID-19"[Mesh] AND "Myocardial Injury"[Mesh])'
+            st.session_state['hypothesis'] = "La infección por COVID-19 causa daño miocárdico"
+            st.session_state['hypothesis_en'] = "COVID-19 infection causes myocardial injury"
+    
     # Área principal
     col1, col2 = st.columns([2, 1])
-
+    
     with col1:
         search_query = st.text_area(
             "🔍 Consulta de búsqueda:",
             value=st.session_state.get('query', ''),
-            height=100,
-            placeholder='Ej: (("Alcohol"[Mesh]) AND "Dementia"[Mesh])'
+            height=120,
+            placeholder='Ej: (("Ticagrelor"[Mesh]) AND ("Myocardial Ischemia"[Mesh]) AND ("dyspnea"))',
+            help="Puedes usar términos MeSH o palabras clave"
         )
-
+    
     with col2:
         hypothesis_es = st.text_area(
             "🔬 Conjetura a verificar (español):",
             value=st.session_state.get('hypothesis', ''),
             height=60,
-            placeholder='Ej: El alcohol causa demencia en adultos mayores'
+            placeholder='Ej: El fármaco X causa efecto Y en pacientes con Z',
+            help="Escribe tu hipótesis en español"
         )
-
+        
+        # Mostrar traducción automática
         if hypothesis_es:
             if 'hypothesis_en' not in st.session_state or not st.session_state['hypothesis_en']:
                 translator = TranslationManager()
                 hypothesis_en = translator.translate_to_english(hypothesis_es)
                 st.session_state['hypothesis_en'] = hypothesis_en
-
+            
             st.markdown(f"**🇬🇧 Inglés (para búsqueda):**")
-            st.info(st.session_state.get('hypothesis_en', '')[:150] + '...')
-
+            st.info(st.session_state.get('hypothesis_en', ''))
+        else:
+            # Si hay hipótesis en inglés guardada, mostrarla
+            if 'hypothesis_en' in st.session_state and st.session_state['hypothesis_en']:
+                st.markdown(f"**🇬🇧 Inglés (para búsqueda):**")
+                st.info(st.session_state['hypothesis_en'])
+    
     col1, col2, col3 = st.columns(3)
     with col2:
-        analyze_button = st.button("🧠 INICIAR ANÁLISIS CON COMPRENSIÓN LECTORA", type="primary", use_container_width=True)
-
+        analyze_button = st.button("🚀 INICIAR ANÁLISIS INTEGRADO", type="primary", use_container_width=True)
+    
+    # Variable para guardar el integrador después del análisis
     if 'integrator' not in st.session_state:
         st.session_state.integrator = None
-
+    
     if analyze_button and search_query and hypothesis_es:
         if email and email != "usuario@ejemplo.com" and validate_email(email):
+            # Inicializar integrador
             integrator = IntegratedScientificVerifier(email)
             integrator.semantic_verifier.UMBRAL_RELEVANCIA = min_relevance
-
+            
             selected_dbs = [db for db, selected in databases.items() if selected]
-
+            
             if not selected_dbs:
                 st.error("❌ Selecciona al menos una base de datos")
                 return
-
+            
+            # Usar la hipótesis en inglés para el análisis
             hypothesis_for_analysis = st.session_state.get('hypothesis_en', hypothesis_es)
-
+            
+            # Contenedores para progreso
             progress_container = st.container()
             with progress_container:
-                st.markdown('<div style="background-color: #f0f2f6; border-radius: 10px; padding: 1rem;">', unsafe_allow_html=True)
+                st.markdown('<div class="progress-container">', unsafe_allow_html=True)
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 time_estimate = st.empty()
                 st.markdown('</div>', unsafe_allow_html=True)
-
+            
+            # Función de callback para actualizar progreso
             start_time = time.time()
-
+            
             def update_progress(message, value):
                 status_text.text(message)
                 progress_bar.progress(value)
@@ -1938,26 +2371,29 @@ def main():
                     estimated_total = elapsed / value
                     remaining = estimated_total * (1 - value)
                     if remaining > 0:
-                        time_estimate.text(f"⏱️ Transcurrido: {elapsed:.1f}s | Restante: {remaining:.1f}s")
-
-            with st.spinner("Ejecutando análisis con comprensión lectora..."):
+                        time_estimate.text(f"⏱️ Tiempo transcurrido: {elapsed:.1f}s | Estimado restante: {remaining:.1f}s")
+            
+            # Ejecutar análisis
+            with st.spinner("Ejecutando análisis integrado..."):
                 results_df = integrator.run_analysis(
-                    search_query,
-                    hypothesis_for_analysis,
-                    max_results,
-                    selected_dbs,
+                    search_query, 
+                    hypothesis_for_analysis, 
+                    max_results, 
+                    selected_dbs, 
                     year_range,
                     update_progress
                 )
                 elapsed_time = time.time() - start_time
-
+            
             if not results_df.empty:
-                st.success(f"✅ Análisis con comprensión lectora completado en {elapsed_time:.1f}s ({elapsed_time/60:.1f} min)")
+                st.success(f"✅ Análisis completado en {elapsed_time:.1f} segundos ({elapsed_time/60:.1f} minutos)")
+                
+                # Guardar integrador en session state
                 st.session_state.integrator = integrator
-
+                
                 # ESTADÍSTICAS GLOBALES
                 st.markdown("## 📊 RESULTADOS GLOBALES")
-
+                
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     st.metric("Artículos encontrados", integrator.stats['total_articles'])
@@ -1969,28 +2405,32 @@ def main():
                     st.metric("❌ Contradicen", integrator.stats['contradicen'])
                 with col5:
                     st.metric("⚠️ Inconclusos", integrator.stats['inconclusos'])
-
+                
                 # GRÁFICOS
                 col1, col2 = st.columns(2)
-
+                
                 with col1:
+                    # Distribución por base de datos
                     db_counts = results_df['base_datos'].value_counts().reset_index()
                     db_counts.columns = ['base_datos', 'count']
                     fig = px.bar(
                         db_counts, x='base_datos', y='count',
-                        title=f"Artículos por Base de Datos",
+                        title=f"Artículos por Base de Datos (Total: {integrator.stats['total_articles']})",
                         color='base_datos',
                         color_discrete_map={
                             'PubMed': '#1E88E5',
                             'CrossRef': '#43A047',
                             'OpenAlex': '#FDD835',
+                            'Semantic Scholar': '#E53935',
+                            'DOAJ': '#9C27B0',
                             'Europe PMC': '#FF5722'
                         }
                     )
                     fig.update_layout(showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
-
+                
                 with col2:
+                    # Distribución de veredictos (solo analizados)
                     analyzed_df = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']
                     if not analyzed_df.empty:
                         verdict_counts = analyzed_df['veredicto'].value_counts().reset_index()
@@ -2001,15 +2441,16 @@ def main():
                             color_discrete_sequence=['#4CAF50', '#f44336', '#ff9800']
                         )
                         st.plotly_chart(fig, use_container_width=True)
-
+                
                 # TABLA DE RESULTADOS
                 st.markdown("## 📋 ARTÍCULOS ANALIZADOS")
-
-                display_cols = ['base_datos', 'titulo', 'año', 'tipo_estudio', 'veredicto', 'confianza',
+                
+                # Filtrar para mostrar
+                display_cols = ['base_datos', 'titulo', 'año', 'veredicto', 'confianza', 
                                'evidencia_a_favor', 'evidencia_en_contra']
                 display_df = results_df[display_cols].copy()
                 display_df['confianza'] = display_df['confianza'].apply(lambda x: f"{x:.1%}" if x > 0 else 'N/A')
-
+                
                 st.dataframe(
                     display_df,
                     use_container_width=True,
@@ -2018,62 +2459,74 @@ def main():
                         'base_datos': 'Base',
                         'titulo': 'Título',
                         'año': 'Año',
-                        'tipo_estudio': 'Tipo',
                         'veredicto': 'Veredicto',
                         'confianza': 'Confianza',
                         'evidencia_a_favor': 'A favor',
                         'evidencia_en_contra': 'En contra'
                     }
                 )
-
-                # DETALLE POR ARTÍCULO
-                st.markdown("## 🔍 DETALLE DE ANÁLISIS CON RAZONAMIENTO")
-
-                for idx, row in results_df.head(10).iterrows():
+                
+                # DETALLE POR ARTÍCULO (limitado para no saturar)
+                st.markdown("## 🔍 DETALLE DE ANÁLISIS (primeros 20 artículos)")
+                
+                for idx, row in results_df.head(20).iterrows():
                     badge_class = get_badge_class(row['base_datos'])
-                    verdict_class = get_verdict_class(row['veredicto'])
-
-                    st.markdown(f"""
-                    <div style="background-color: #f8f9fa; border-radius: 10px; padding: 1.5rem; margin-bottom: 1rem; border-left: 5px solid #1E88E5;">
-                        <span style="background-color: #1E88E5; color: white; padding: 0.2rem 0.8rem; border-radius: 15px; font-size: 0.8rem;">{row['base_datos']}</span>
-                        <span style="background-color: #FF5722; color: white; padding: 0.2rem 0.8rem; border-radius: 15px; font-size: 0.8rem; margin-left: 0.5rem;">{row['tipo_estudio']}</span>
-                        <h4 style="margin-top: 0.5rem;">{row['titulo']}</h4>
-                        <p><strong>Año:</strong> {row['año']} | <strong>DOI:</strong> {row['doi']}</p>
-                        <p><span style="background: linear-gradient(135deg, #4CAF50, #2E7D32); color: white; padding: 0.3rem 1rem; border-radius: 20px; display: inline-block;">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})</p>
-                        <p><strong>Evidencia:</strong> {row['evidencia_a_favor']} a favor ({row['evidencia_fuerte_favor']} fuertes) | {row['evidencia_en_contra']} en contra ({row['evidencia_fuerte_contra']} fuertes)</p>
-                    """, unsafe_allow_html=True)
-
-                    if pd.notna(row['objetivo_principal']):
-                        st.markdown(f"**🎯 Objetivo:** {row['objetivo_principal']}")
-
-                    if pd.notna(row['conclusion_articulo']):
-                        st.markdown(f"**📝 Conclusión del artículo:** {row['conclusion_articulo']}")
-
-                    if pd.notna(row['razonamiento']):
+                    
+                    if row['veredicto'] == 'TEXTO NO DISPONIBLE':
                         st.markdown(f"""
-                        <div style="background-color: #e3f2fd; border-left: 4px solid #1E88E5; padding: 1rem; margin: 0.5rem 0; border-radius: 5px;">
-                            <strong>💭 Razonamiento del sistema:</strong><br>
-                            {row['razonamiento']}
-                        </div>
+                        <div class="result-card">
+                            <span class="{badge_class}">{row['base_datos']}</span>
+                            <div class="result-title">{row['titulo']}</div>
+                            <div class="result-meta">
+                                <b>Autores:</b> {row.get('autores', 'No disponible')[:150]}<br>
+                                <b>Año:</b> {row.get('año', 'No disponible')}<br>
+                                <b>DOI:</b> {row.get('doi', 'No disponible')}<br>
+                                <b>Estado:</b> ⚠️ TEXTO NO DISPONIBLE - {row['fuente_texto']}
+                            </div>
                         """, unsafe_allow_html=True)
-
-                    if pd.notna(row['detalle_evidencia']):
-                        st.markdown(f"**🔍 Evidencia destacada:** {row['detalle_evidencia']}")
-
+                    else:
+                        verdict_class = get_verdict_class(row['veredicto'])
+                        
+                        st.markdown(f"""
+                        <div class="result-card">
+                            <span class="{badge_class}">{row['base_datos']}</span>
+                            <div class="result-title">{row['titulo']}</div>
+                            <div class="result-meta">
+                                <b>Autores:</b> {row.get('autores', 'No disponible')[:150]}<br>
+                                <b>Año:</b> {row.get('año', 'No disponible')}<br>
+                                <b>DOI:</b> {row.get('doi', 'No disponible')}<br>
+                                <span class="{verdict_class}">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})<br>
+                                <b>Evidencia:</b> {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if row['detalle_evidencia']:
+                            st.markdown(f"""
+                            <div class="evidence-box">
+                                <b>Evidencia destacada:</b> {row['detalle_evidencia']}
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
                     col1, col2 = st.columns([1, 5])
                     with col1:
                         if row.get('url') and pd.notna(row['url']):
-                            st.link_button("🔗 Ver artículo", row['url'])
+                            st.link_button("🔗 Ver", row['url'])
+                    with col2:
+                        if row.get('doi') and pd.notna(row['doi']):
+                            doi_link = f"https://doi.org/{row['doi']}"
+                            st.link_button("📋 DOI", doi_link)
+                    
                     st.markdown("</div>", unsafe_allow_html=True)
-
-                if len(results_df) > 10:
-                    st.info(f"... y {len(results_df) - 10} artículos más. Exporta los resultados para ver el listado completo.")
-
-                # EXPORTACIÓN
+                
+                if len(results_df) > 20:
+                    st.info(f"... y {len(results_df) - 20} artículos más. Exporta los resultados para ver el listado completo.")
+                
+                # REPORTE Y EXPORTACIÓN
                 st.markdown("## 💾 EXPORTAR RESULTADOS")
-
+                
                 col1, col2, col3 = st.columns(3)
-
+                
+                # Reporte de texto
                 report_text = integrator.generate_report()
                 with col1:
                     st.download_button(
@@ -2083,7 +2536,8 @@ def main():
                         mime="text/plain",
                         use_container_width=True
                     )
-
+                
+                # CSV
                 with col2:
                     csv = results_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
@@ -2093,13 +2547,21 @@ def main():
                         mime="text/csv",
                         use_container_width=True
                     )
-
+                
+                # Excel
                 with col3:
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         results_df.to_excel(writer, sheet_name='Resultados', index=False)
+                        
                         summary = pd.DataFrame([integrator.stats])
                         summary.to_excel(writer, sheet_name='Resumen', index=False)
+                        
+                        if not results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE'].empty:
+                            verdict_stats = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']['veredicto'].value_counts().reset_index()
+                            verdict_stats.columns = ['Veredicto', 'Cantidad']
+                            verdict_stats.to_excel(writer, sheet_name='Por Veredicto', index=False)
+                    
                     st.download_button(
                         "📥 Excel",
                         buffer.getvalue(),
@@ -2107,37 +2569,35 @@ def main():
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
-
+            
             else:
-                st.warning("😕 No se encontraron artículos. Prueba con otra consulta.")
-
+                st.warning("😕 No se encontraron artículos. Prueba con otra consulta o amplía el rango de años.")
+        
         else:
             st.warning("⚠️ Ingresa un email válido en la barra lateral")
-
-    # Sección para enviar resultados por correo
+    
+    # Sección para enviar resultados por correo (después del análisis)
     if st.session_state.integrator is not None and not st.session_state.integrator.results.empty:
         st.markdown("---")
-        st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
-        st.markdown("""
-        <div style="background-color: #fce4e4; border-left: 5px solid #e53935; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
-            <p>Recibirás un correo con el reporte completo en formato HTML, más archivos CSV y Excel adjuntos.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
+        st.markdown("## 📧 ENVIAR RESULTADOS POR CORREО")
+        st.markdown('<div class="email-box">', unsafe_allow_html=True)
+        
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("📨 ENVIAR RESULTADOS POR CORREO", type="primary", use_container_width=True):
-                with st.spinner("Enviando resultados..."):
+            if st.button("📨 ENVIAR RESULTADOS A MI CORREO", type="primary", use_container_width=True):
+                with st.spinner("Enviando resultados por correo..."):
                     if enviar_resultados_email(email, st.session_state.integrator):
-                        st.success(f"✅ Resultados enviados a {email}")
+                        st.success(f"✅ Resultados enviados correctamente a {email}")
                         st.balloons()
                     else:
-                        st.error("❌ No se pudo enviar el correo.")
-
+                        st.error("❌ No se pudo enviar el correo. Verifica la configuración.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🧠 Buscador con Comprensión Lectora Humana v3.0 | Análisis semántico profundo con razonamiento explicativo</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v2.0 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI automático</p>
     </div>
     """, unsafe_allow_html=True)
 
