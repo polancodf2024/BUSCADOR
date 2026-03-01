@@ -2324,7 +2324,7 @@ def main():
         hypothesis_es = st.text_area(
             "🔬 Conjetura a verificar (español):",
             value=st.session_state.get('hypothesis', ''),
-            height=60,
+            height=68,
             placeholder='Ej: El fármaco X causa efecto Y en pacientes con Z',
             help="Escribe tu hipótesis en español"
         )
