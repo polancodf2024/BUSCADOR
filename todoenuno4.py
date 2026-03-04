@@ -1,6 +1,8 @@
 """
 Buscador y Verificador Semántico Integrado - VERSIÓN FINAL CORREGIDA
-CORRECCIÓN ESPECÍFICA: PubMed con comas en términos MeSH
+CORRECCIONES CRÍTICAS:
+1. PubMed: Manejo correcto de términos MeSH con comas
+2. Límite de resultados: Ahora respeta hasta 1000 artículos por base
 """
 
 import streamlit as st
@@ -1318,16 +1320,15 @@ class AdvancedSemanticVerifier:
 
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA - VERSIÓN FINAL CORREGIDA
+# MOTOR DE BÚSQUEDA CIENTÍFICA - VERSIÓN CORREGIDA
 # ============================================================================
 
 class ScientificSearchEngine:
     """
-    Motor de búsqueda científica - VERSIÓN FINAL CORREGIDA
-    - PubMed: Manejo correcto de términos con coma
-    - OpenAlex: Manejo seguro de valores nulos
-    - CrossRef: Consultas simplificadas
-    - Europe PMC: Formato específico
+    Motor de búsqueda científica - VERSIÓN CORREGIDA
+    CORRECCIONES:
+    1. PubMed: Manejo correcto de términos con coma
+    2. Límite de resultados: Ahora obtiene hasta 1000 artículos
     """
     
     def __init__(self, email: str):
@@ -1341,30 +1342,26 @@ class ScientificSearchEngine:
     def _clean_query_for_general_apis(self, query: str) -> str:
         """
         Limpia la consulta para APIs que no soportan sintaxis MeSH
-        Versión mejorada que maneja comas y caracteres especiales
         """
-        # Guardar copia original para debug
-        original = query
-        
-        # PASO 1: Extraer términos entre comillas primero
+        # Guardar términos entre comillas
         quoted_terms = re.findall(r'"([^"]*)"', query)
         
-        # PASO 2: Eliminar términos MeSH y sus etiquetas
+        # Eliminar etiquetas MeSH
         query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
         
-        # PASO 3: Eliminar operadores booleanos
+        # Eliminar operadores booleanos
         query = re.sub(r'\b(AND|OR|NOT)\b', ' ', query, flags=re.IGNORECASE)
         
-        # PASO 4: Eliminar paréntesis y corchetes
+        # Eliminar paréntesis y corchetes
         query = re.sub(r'[\(\)\[\]]', ' ', query)
         
-        # PASO 5: Reemplazar comas y otros signos por espacios
+        # Reemplazar comas y otros signos por espacios
         query = re.sub(r'[,;:]', ' ', query)
         
-        # PASO 6: Eliminar caracteres especiales restantes
+        # Eliminar caracteres especiales
         query = re.sub(r'[^\w\s]', ' ', query)
         
-        # PASO 7: Normalizar espacios
+        # Normalizar espacios
         query = ' '.join(query.split())
         
         # Si la consulta quedó vacía, usar términos entre comillas
@@ -1401,20 +1398,19 @@ class ScientificSearchEngine:
     def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
         """
         Formatea consultas para PubMed
-        VERSIÓN CORREGIDA: Maneja correctamente términos con coma como "Heart Rupture, Post-Infarction"
+        VERSIÓN CORREGIDA: Maneja correctamente términos con coma
         """
         # Limpiar espacios extras
         query = ' '.join(query.split())
         
-        # PASO 1: Manejar términos MeSH con comillas (incluyendo los que tienen coma)
-        # Patrón mejorado que captura cualquier texto entre comillas seguido de [Mesh]
+        # PASO 1: Manejar términos MeSH con comillas
+        # IMPORTANTE: Mantener las comillas alrededor de términos con coma
         mesh_pattern = r'"([^"]+)"\[Mesh\]'
         
         def replace_mesh(match):
             term = match.group(1).strip()
-            # IMPORTANTE: No eliminar las comas - son parte del término MeSH
-            # Ej: "Heart Rupture, Post-Infarction" debe mantener la coma
-            return f'"{term}"[mh]'  # Mantener las comillas para términos con coma
+            # Mantener las comillas para preservar términos como "Heart Rupture, Post-Infarction"
+            return f'"{term}"[mh]'
         
         query = re.sub(mesh_pattern, replace_mesh, query)
         
@@ -1451,8 +1447,9 @@ class ScientificSearchEngine:
     def search_pubmed_advanced(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
         """
         Búsqueda en PubMed - VERSIÓN CORREGIDA
-        - Maneja términos con coma correctamente
-        - Usa comillas en la consulta para términos exactos
+        CORRECCIONES:
+        1. Maneja términos con coma correctamente
+        2. Obtiene hasta max_results artículos (respetando el límite)
         """
         all_results = []
         
@@ -1463,8 +1460,7 @@ class ScientificSearchEngine:
             if st.session_state.get('debug_mode', False):
                 st.write(f"🔍 PubMed query: {formatted_query}")
             
-            # IMPORTANTE: Para términos con coma, necesitamos URL-encode preservando las comillas
-            # No usar quote completo, solo caracteres especiales
+            # IMPORTANTE: Preservar comillas en la codificación URL
             encoded_query = urllib.parse.quote(formatted_query, safe='()" ')
             
             # URL de búsqueda con usehistory=y
@@ -1480,7 +1476,7 @@ class ScientificSearchEngine:
             )
             
             if st.session_state.get('debug_mode', False):
-                st.write(f"📡 PubMed URL: {search_url[:200]}...")
+                st.write(f"📡 PubMed URL (truncada): {search_url[:200]}...")
             
             time.sleep(self.delay)
             response = requests.get(search_url, timeout=30)
@@ -1499,17 +1495,17 @@ class ScientificSearchEngine:
             
             if st.session_state.get('debug_mode', False):
                 st.write(f"📊 PubMed: {count} resultados encontrados")
-                st.write(f"🔑 WebEnv: {webenv[:50] if webenv else 'None'}...")
-                st.write(f"🔑 QueryKey: {query_key}")
             
             if not webenv or not query_key or count == 0:
                 return []
             
-            # Obtener IDs en lotes
+            # CORRECCIÓN: Obtener hasta max_results artículos
             retmax = min(max_results, count)
-            batch_size = 50
+            batch_size = 100  # Aumentar batch size para más eficiencia
             
             for retstart in range(0, retmax, batch_size):
+                current_batch_size = min(batch_size, retmax - retstart)
+                
                 fetch_ids_url = (
                     f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
                     f"?db=pubmed"
@@ -1517,7 +1513,7 @@ class ScientificSearchEngine:
                     f"&query_key={query_key}"
                     f"&retmode=json"
                     f"&retstart={retstart}"
-                    f"&retmax={batch_size}"
+                    f"&retmax={current_batch_size}"
                     f"&tool=streamlit_app"
                     f"&email={self.email}"
                 )
@@ -1530,8 +1526,12 @@ class ScientificSearchEngine:
                 id_list = ids_data.get('esearchresult', {}).get('idlist', [])
                 
                 if id_list:
+                    # Obtener detalles de este lote
                     batch_results = self.fetch_pubmed_batch(id_list)
                     all_results.extend(batch_results)
+                    
+                    if st.session_state.get('debug_mode', False):
+                        st.write(f"📦 Lote {retstart//batch_size + 1}: {len(batch_results)} artículos")
             
             return all_results
             
@@ -1650,11 +1650,11 @@ class ScientificSearchEngine:
         return results
     
     # ========================================================================
-    # MÉTODO DE BÚSQUEDA EN CROSSREF
+    # MÉTODO DE BÚSQUEDA EN CROSSREF (CORREGIDO)
     # ========================================================================
     
     def search_crossref(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en CrossRef"""
+        """Busca en CrossRef - CORREGIDO para respetar max_results"""
         results = []
         try:
             simple_query = self._extract_keywords_for_crossref(query)
@@ -1665,7 +1665,7 @@ class ScientificSearchEngine:
             url = "https://api.crossref.org/works"
             params = {
                 'query': simple_query,
-                'rows': min(100, max_results),
+                'rows': min(1000, max_results),  # CrossRef permite hasta 1000
                 'sort': 'relevance',
                 'order': 'desc'
             }
@@ -1709,11 +1709,11 @@ class ScientificSearchEngine:
         return results[:max_results]
     
     # ========================================================================
-    # MÉTODO DE BÚSQUEDA EN OPENALEX (VERSIÓN CORREGIDA)
+    # MÉTODO DE BÚSQUEDA EN OPENALEX (CORREGIDO)
     # ========================================================================
     
     def search_openalex(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en OpenAlex - VERSIÓN CORREGIDA (maneja valores nulos)"""
+        """Busca en OpenAlex - CORREGIDO para respetar max_results"""
         results = []
         try:
             simple_query = self._extract_keywords_for_openalex(query)
@@ -1724,70 +1724,86 @@ class ScientificSearchEngine:
             url = "https://api.openalex.org/works"
             params = {
                 'search': simple_query,
-                'per-page': 50,
+                'per-page': 100,  # OpenAlex permite hasta 100 por página
                 'sort': 'relevance_score:desc'
             }
             
             if year_range and year_range[0] and year_range[1]:
                 params['filter'] = f"publication_year:{year_range[0]}-{year_range[1]}"
             
-            time.sleep(self.delay)
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            for item in data.get('results', []):
-                # Manejar valores nulos de forma segura
-                titulo = item.get('title')
-                if titulo is None:
-                    titulo = "Título no disponible"
+            # OpenAlex requiere paginación para más de 100 resultados
+            page = 1
+            while len(results) < max_results:
+                params['page'] = page
                 
-                # Autores (manejar nulos)
-                autores_list = []
-                for a in item.get('authorships', [])[:5]:
-                    author_data = a.get('author', {})
-                    if author_data is not None:
-                        author_name = author_data.get('display_name')
-                        if author_name:
-                            autores_list.append(author_name)
+                time.sleep(self.delay)
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
                 
-                # Revista (manejar nulos)
-                revista = ""
-                host_venue = item.get('host_venue')
-                if host_venue is not None:
-                    revista = host_venue.get('display_name', '')
+                page_results = data.get('results', [])
+                if not page_results:
+                    break
                 
-                # Año
-                año = item.get('publication_year')
-                año_str = str(año) if año is not None else ""
+                for item in page_results:
+                    # Manejar valores nulos de forma segura
+                    titulo = item.get('title')
+                    if titulo is None:
+                        titulo = "Título no disponible"
+                    
+                    # Autores
+                    autores_list = []
+                    for a in item.get('authorships', [])[:5]:
+                        author_data = a.get('author', {})
+                        if author_data is not None:
+                            author_name = author_data.get('display_name')
+                            if author_name:
+                                autores_list.append(author_name)
+                    
+                    # Revista
+                    revista = ""
+                    host_venue = item.get('host_venue')
+                    if host_venue is not None:
+                        revista = host_venue.get('display_name', '')
+                    
+                    # Año
+                    año = item.get('publication_year')
+                    año_str = str(año) if año is not None else ""
+                    
+                    # DOI
+                    doi = item.get('doi')
+                    if doi is not None:
+                        doi = doi.replace('https://doi.org/', '')
+                    else:
+                        doi = ""
+                    
+                    # URL
+                    url_article = f"https://doi.org/{doi}" if doi else ""
+                    
+                    # Open Access
+                    open_access = ""
+                    oa_data = item.get('open_access')
+                    if oa_data is not None:
+                        open_access = oa_data.get('oa_url', '')
+                    
+                    results.append({
+                        'base_datos': 'OpenAlex',
+                        'titulo': titulo,
+                        'autores': ', '.join(autores_list),
+                        'revista': revista,
+                        'año': año_str,
+                        'doi': doi,
+                        'url': url_article,
+                        'tipo': item.get('type', ''),
+                        'open_access': open_access
+                    })
+                    
+                    if len(results) >= max_results:
+                        break
                 
-                # DOI (manejar nulos)
-                doi = item.get('doi')
-                if doi is not None:
-                    doi = doi.replace('https://doi.org/', '')
-                else:
-                    doi = ""
-                
-                # URL
-                url_article = f"https://doi.org/{doi}" if doi else ""
-                
-                # Open Access
-                open_access = ""
-                oa_data = item.get('open_access')
-                if oa_data is not None:
-                    open_access = oa_data.get('oa_url', '')
-                
-                results.append({
-                    'base_datos': 'OpenAlex',
-                    'titulo': titulo,
-                    'autores': ', '.join(autores_list),
-                    'revista': revista,
-                    'año': año_str,
-                    'doi': doi,
-                    'url': url_article,
-                    'tipo': item.get('type', ''),
-                    'open_access': open_access
-                })
+                page += 1
+                if page > 10:  # Límite de seguridad
+                    break
                 
         except Exception as e:
             st.warning(f"Error en OpenAlex: {str(e)}")
@@ -1795,11 +1811,11 @@ class ScientificSearchEngine:
         return results[:max_results]
     
     # ========================================================================
-    # MÉTODO DE BÚSQUEDA EN EUROPE PMC
+    # MÉTODO DE BÚSQUEDA EN EUROPE PMC (CORREGIDO)
     # ========================================================================
     
     def search_europe_pmc(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en Europe PMC"""
+        """Busca en Europe PMC - CORREGIDO para respetar max_results"""
         results = []
         try:
             europe_query = self._extract_keywords_for_europepmc(query, year_range)
@@ -1808,32 +1824,50 @@ class ScientificSearchEngine:
                 st.write(f"🔍 Europe PMC query: {europe_query}")
             
             url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-            params = {
-                'query': europe_query,
-                'format': 'json',
-                'pageSize': min(100, max_results),
-                'resultType': 'core'
-            }
             
-            time.sleep(self.delay)
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            # Europe PMC requiere paginación
+            page_size = 100
+            page = 1
             
-            for item in data.get('resultList', {}).get('result', []):
-                results.append({
-                    'base_datos': 'Europe PMC',
-                    'titulo': item.get('title', 'Título no disponible'),
-                    'autores': ', '.join([a.get('fullName', '') for a in item.get('authorList', {}).get('author', [])[:5]]),
-                    'revista': item.get('journalTitle', ''),
-                    'año': str(item.get('pubYear', '')),
-                    'doi': item.get('doi', ''),
-                    'url': f"https://europepmc.org/article/{item.get('source', '')}/{item.get('id', '')}",
-                    'pmid': item.get('pmid', ''),
-                    'pmcid': item.get('pmcid', ''),
-                    'abstract': item.get('abstractText', '')[:300] + '...' if item.get('abstractText') else '',
-                    'tipo': 'Artículo'
-                })
+            while len(results) < max_results:
+                params = {
+                    'query': europe_query,
+                    'format': 'json',
+                    'pageSize': page_size,
+                    'page': page,
+                    'resultType': 'core'
+                }
+                
+                time.sleep(self.delay)
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                page_results = data.get('resultList', {}).get('result', [])
+                if not page_results:
+                    break
+                
+                for item in page_results:
+                    results.append({
+                        'base_datos': 'Europe PMC',
+                        'titulo': item.get('title', 'Título no disponible'),
+                        'autores': ', '.join([a.get('fullName', '') for a in item.get('authorList', {}).get('author', [])[:5]]),
+                        'revista': item.get('journalTitle', ''),
+                        'año': str(item.get('pubYear', '')),
+                        'doi': item.get('doi', ''),
+                        'url': f"https://europepmc.org/article/{item.get('source', '')}/{item.get('id', '')}",
+                        'pmid': item.get('pmid', ''),
+                        'pmcid': item.get('pmcid', ''),
+                        'abstract': item.get('abstractText', '')[:300] + '...' if item.get('abstractText') else '',
+                        'tipo': 'Artículo'
+                    })
+                    
+                    if len(results) >= max_results:
+                        break
+                
+                page += 1
+                if page > 10:  # Límite de seguridad
+                    break
                 
         except Exception as e:
             st.warning(f"Error en Europe PMC: {str(e)}")
@@ -2458,7 +2492,7 @@ def main():
         st.markdown("### 📊 Resultados por base")
         max_results = st.slider(
             "Máximo resultados por base:", 
-            min_value=10, max_value=1000, value=50, step=10,
+            min_value=10, max_value=1000, value=100, step=10,
             help="Máximo de artículos por base de datos"
         )
         
@@ -2478,6 +2512,8 @@ def main():
         - 50 artículos: ~2-3 minutos
         - 100 artículos: ~5-7 minutos
         - 200 artículos: ~10-15 minutos
+        - 500 artículos: ~25-35 minutos
+        - 1000 artículos: ~50-70 minutos
         """)
         
         st.markdown("### 📋 Ejemplos")
@@ -2802,7 +2838,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.3 | VERSIÓN FINAL: PubMed con comas corregido • OpenAlex con manejo de nulos</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.4 | CORREGIDO: PubMed con comas • Límite de 1000 artículos respetado</p>
     </div>
     """, unsafe_allow_html=True)
 
