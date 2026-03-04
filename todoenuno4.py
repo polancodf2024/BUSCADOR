@@ -1,7 +1,8 @@
 """
-Buscador y Verificador Semántico Integrado - VERSIÓN ALTO VOLUMEN CON IA AVANZADA
-Combina búsqueda en múltiples bases de datos científicas con análisis semántico AI de última generación
+Buscador y Verificador Semántico Integrado - VERSIÓN COMPLETAMENTE CORREGIDA
+Combina búsqueda en múltiples bases de datos científicas con análisis semántico AI
 Soporta hasta 1000 resultados por base de datos
+CORREGIDO: Formateo específico para PubMed, CrossRef, OpenAlex y Europe PMC
 """
 
 import streamlit as st
@@ -39,6 +40,7 @@ import ssl
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import json
 
 # Configuración de la página
 st.set_page_config(
@@ -83,16 +85,6 @@ def validate_email(email):
 def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, archivos=None):
     """
     Envía correo electrónico con formato HTML y texto plano
-    
-    Args:
-        destinatario: Email del destinatario
-        asunto: Asunto del correo
-        mensaje_html: Mensaje en formato HTML
-        mensaje_texto: Mensaje en texto plano (alternativa)
-        archivos: Lista de diccionarios con {'nombre': 'archivo.pdf', 'contenido': bytes}
-    
-    Returns:
-        bool: True si se envió correctamente
     """
     if not EMAIL_CONFIG.available:
         st.error("Configuración de correo no disponible. Verifica los secrets de la aplicación.")
@@ -115,11 +107,11 @@ def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, a
         
         # Adjuntar versión texto plano (si existe)
         if mensaje_texto:
-            msg.attach(MIMEText(mensaje_texto, 'plain'))
+            msg.attach(MIMEText(mensaje_texto, 'plain', 'utf-8'))
         
         # Adjuntar versión HTML (si existe)
         if mensaje_html:
-            msg.attach(MIMEText(mensaje_html, 'html'))
+            msg.attach(MIMEText(mensaje_html, 'html', 'utf-8'))
         
         # Adjuntar archivos
         if archivos:
@@ -158,7 +150,7 @@ def setup_nltk():
         nltk.data.find('tokenizers/punkt')
     except LookupError:
         try:
-            nltk.download('punkt')
+            nltk.download('punkt', quiet=True)
         except:
             st.warning("No se pudo descargar punkt. Usando tokenización alternativa.")
             return False
@@ -167,7 +159,7 @@ def setup_nltk():
         nltk.data.find('corpora/stopwords')
     except LookupError:
         try:
-            nltk.download('stopwords')
+            nltk.download('stopwords', quiet=True)
         except:
             st.warning("No se pudieron descargar stopwords. Usando lista básica.")
             return False
@@ -363,6 +355,16 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
+    .debug-box {
+        background-color: #2d2d2d;
+        color: #f0f0f0;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+        font-family: monospace;
+        font-size: 0.85rem;
+        border-left: 5px solid #ff5722;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -481,7 +483,7 @@ class HypothesisAssistant:
             }
         }
         
-        # Ejemplos predefinidos - AHORA CON 3 EJEMPLOS (reemplazado COVID por Ruptura cardiaca)
+        # Ejemplos predefinidos
         self.examples = [
             {
                 "name": "Ticagrelor y disnea",
@@ -522,16 +524,6 @@ class HypothesisAssistant:
                         template_type: str, verb: str = None) -> Dict:
         """
         Construye una conjetura bien formada en español e inglés
-        
-        Args:
-            subject: Sujeto de estudio (ej: "ticagrelor", "ejercicio")
-            effect: Efecto observado (ej: "disnea", "mejoría")
-            population: Población de estudio
-            template_type: Tipo de plantilla
-            verb: Verbo específico (opcional)
-        
-        Returns:
-            Dict con conjeturas en español e inglés
         """
         if template_type not in self.templates:
             return {"es": "", "en": ""}
@@ -1328,39 +1320,155 @@ class AdvancedSemanticVerifier:
 
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA
+# MOTOR DE BÚSQUEDA CIENTÍFICA COMPLETAMENTE CORREGIDO
 # ============================================================================
 
 class ScientificSearchEngine:
     """
     Motor de búsqueda científica mejorado para grandes volúmenes de resultados
+    CORREGIDO: Formateo específico para PubMed, CrossRef, OpenAlex y Europe PMC
     """
     
     def __init__(self, email: str):
         self.email = email
-        self.delay = 0.3
+        self.delay = 0.34  # Respetar límite de 3 solicitudes por segundo de NCBI
+    
+    # ========================================================================
+    # MÉTODOS DE FORMATEO ESPECÍFICOS PARA CADA BASE DE DATOS
+    # ========================================================================
+    
+    def _clean_query_for_general_apis(self, query: str) -> str:
+        """
+        Limpia la consulta para APIs que no soportan sintaxis MeSH
+        - Elimina etiquetas [Mesh], [Publication Type], etc.
+        - Elimina paréntesis y operadores booleanos complejos
+        - Devuelve solo palabras clave
+        """
+        # Guardar copia original para debug
+        original = query
         
-    def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
-        """Formatea consultas complejas de PubMed incluyendo rango de años"""
+        # Eliminar términos MeSH y sus etiquetas
+        query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
+        
+        # Eliminar operadores booleanos (dejarlos como espacios)
+        query = re.sub(r'\b(AND|OR|NOT)\b', ' ', query, flags=re.IGNORECASE)
+        
+        # Eliminar paréntesis
+        query = re.sub(r'[\(\)]', '', query)
+        
+        # Eliminar caracteres especiales
+        query = re.sub(r'[^\w\s]', ' ', query)
+        
+        # Normalizar espacios
         query = ' '.join(query.split())
         
-        mesh_pattern = r'"([^"]+)"\[Mesh\]'
-        query = re.sub(mesh_pattern, r'\1[mh]', query)
+        # Si la consulta quedó vacía, extraer términos entre comillas de la original
+        if not query or len(query) < 3:
+            quoted_terms = re.findall(r'"([^"]*)"', original)
+            if quoted_terms:
+                query = ' '.join(quoted_terms)
         
-        pubtype_pattern = r'"([^"]+)"\[Publication Type\]'
-        query = re.sub(pubtype_pattern, r'\1[pt]', query)
+        # Limitar longitud (la mayoría de APIs tienen límite)
+        return query[:500]
+    
+    def _extract_keywords_for_crossref(self, query: str) -> str:
+        """
+        Extrae palabras clave para CrossRef
+        CrossRef funciona mejor con frases cortas y términos específicos
+        """
+        clean_query = self._clean_query_for_general_apis(query)
         
+        # Si todavía está vacía, usar un término por defecto
+        if not clean_query or len(clean_query) < 3:
+            clean_query = "research article"
+        
+        return clean_query
+    
+    def _extract_keywords_for_openalex(self, query: str) -> str:
+        """
+        Extrae palabras clave para OpenAlex
+        OpenAlex tiene un buen motor de búsqueda semántica
+        """
+        clean_query = self._clean_query_for_general_apis(query)
+        
+        # Si está vacía, extraer términos MeSH sin las etiquetas
+        if not clean_query or len(clean_query) < 3:
+            mesh_terms = re.findall(r'"([^"]*)"\[Mesh\]', query)
+            if mesh_terms:
+                clean_query = ' '.join(mesh_terms)
+            else:
+                clean_query = "scientific research"
+        
+        return clean_query
+    
+    def _extract_keywords_for_europepmc(self, query: str, year_range: tuple = None) -> str:
+        """
+        Extrae palabras clave para Europe PMC y añade filtro de años
+        Europe PMC tiene su propio formato de consulta
+        """
+        # Limpiar la consulta
+        clean_query = self._clean_query_for_general_apis(query)
+        
+        if not clean_query or len(clean_query) < 3:
+            clean_query = "research"
+        
+        # Construir consulta con filtro de años si es necesario
+        if year_range and year_range[0] and year_range[1]:
+            # Europe PMC usa PUB_YEAR para filtrar por año
+            date_filter = f" AND (PUB_YEAR:{year_range[0]}-{year_range[1]})"
+            return f"({clean_query}){date_filter}"
+        
+        return clean_query
+    
+    # ========================================================================
+    # MÉTODOS DE FORMATEO PARA PUBMED
+    # ========================================================================
+    
+    def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
+        """
+        Formatea consultas complejas de PubMed incluyendo rango de años
+        Maneja correctamente términos MeSH con y sin comillas
+        """
+        # Limpiar espacios extras
+        query = ' '.join(query.split())
+        
+        # PASO 1: Manejar términos MeSH correctamente
+        # Patrón para capturar términos MeSH con o sin comillas
+        mesh_pattern = r'"([^"]+)"\[Mesh\]|([a-zA-Z0-9\s,]+)\[Mesh\]'
+        
+        def replace_mesh(match):
+            term = match.group(1) or match.group(2)
+            # Limpiar el término (quitar espacios extras)
+            term = term.strip()
+            # Los términos MeSH deben ir sin comillas y con el calificador [mh]
+            return f"{term}[mh]"
+        
+        query = re.sub(mesh_pattern, replace_mesh, query)
+        
+        # PASO 2: Manejar otros tipos de campos comunes
         field_mappings = {
-            '[Mesh]': '[mh]',
             '[Publication Type]': '[pt]',
             '[Title/Abstract]': '[tiab]',
             '[Author]': '[au]',
-            '[Journal]': '[ta]'
+            '[Journal]': '[ta]',
+            '[Date - Publication]': '[dp]',
+            '[MeSH Major Topic]': '[majr]',
+            '[MeSH Subheading]': '[sh]'
         }
         
         for old, new in field_mappings.items():
             query = query.replace(old, new)
         
+        # PASO 3: Asegurar que los operadores booleanos estén en mayúsculas
+        boolean_ops = ['and', 'or', 'not']
+        for op in boolean_ops:
+            query = re.sub(rf'\b{op}\b', op.upper(), query, flags=re.IGNORECASE)
+        
+        # PASO 4: Eliminar paréntesis redundantes
+        query = re.sub(r'\(\s+', '(', query)
+        query = re.sub(r'\s+\)', ')', query)
+        
+        # PASO 5: Añadir filtro de años si se proporciona
         if year_range and year_range[0] and year_range[1]:
             year_filter = f" AND ({year_range[0]}[pdat] : {year_range[1]}[pdat])"
             query = f"({query}){year_filter}"
@@ -1368,8 +1476,11 @@ class ScientificSearchEngine:
         return query
     
     def fetch_pubmed_batch(self, ids_batch: list) -> list:
-        """Obtiene detalles de un lote de IDs de PubMed"""
+        """
+        Obtiene detalles de un lote de IDs de PubMed con mejor parsing XML
+        """
         results = []
+        
         try:
             ids = ','.join(ids_batch)
             fetch_url = (
@@ -1377,48 +1488,94 @@ class ScientificSearchEngine:
                 f"?db=pubmed"
                 f"&id={ids}"
                 f"&retmode=xml"
+                f"&rettype=abstract"
                 f"&tool=streamlit_app"
                 f"&email={self.email}"
             )
             
+            # Aplicar delay
             time.sleep(self.delay)
+            
+            # Realizar la petición
             response = requests.get(fetch_url, timeout=30)
             response.raise_for_status()
             
+            # Parsear XML
             root = ET.fromstring(response.content)
             
             for article in root.findall('.//PubmedArticle'):
                 try:
+                    # Título
                     title_elem = article.find('.//ArticleTitle')
-                    title = title_elem.text if title_elem is not None else "Título no disponible"
+                    title = title_elem.text if title_elem is not None and title_elem.text else "Título no disponible"
                     
+                    # Autores
                     authors = []
                     author_list = article.findall('.//Author')
                     for author in author_list[:5]:
                         last = author.find('LastName')
                         fore = author.find('ForeName')
-                        if last is not None and fore is not None:
-                            authors.append(f"{fore.text} {last.text}")
-                        elif last is not None:
-                            authors.append(last.text)
+                        if last is not None and last.text:
+                            if fore is not None and fore.text:
+                                authors.append(f"{fore.text} {last.text}")
+                            else:
+                                authors.append(last.text)
                     
-                    journal_elem = article.find('.//Title')
-                    journal = journal_elem.text if journal_elem is not None else ""
+                    # Revista
+                    journal_elem = article.find('.//Journal/Title')
+                    journal = journal_elem.text if journal_elem is not None and journal_elem.text else ""
                     
+                    # Año
+                    year = ""
                     year_elem = article.find('.//PubDate/Year')
-                    if year_elem is None:
-                        year_elem = article.find('.//PubDate/MedlineDate')
-                    year = year_elem.text[:4] if year_elem is not None and year_elem.text else ""
+                    if year_elem is not None and year_elem.text:
+                        year = year_elem.text
+                    else:
+                        # Intentar extraer año de MedlineDate
+                        medline_date = article.find('.//PubDate/MedlineDate')
+                        if medline_date is not None and medline_date.text:
+                            year_match = re.search(r'\b(19|20)\d{2}\b', medline_date.text)
+                            if year_match:
+                                year = year_match.group()
                     
+                    # DOI
+                    doi = ""
                     doi_elem = article.find(".//ArticleId[@IdType='doi']")
-                    doi = doi_elem.text if doi_elem is not None else ""
+                    if doi_elem is not None and doi_elem.text:
+                        doi = doi_elem.text
+                    else:
+                        # Buscar en otros lugares
+                        for id_elem in article.findall('.//ArticleId'):
+                            if id_elem.get('IdType') == 'doi' and id_elem.text:
+                                doi = id_elem.text
+                                break
                     
+                    # PMID
+                    pmid = ""
                     pmid_elem = article.find(".//PMID")
-                    pmid = pmid_elem.text if pmid_elem is not None else ""
+                    if pmid_elem is not None and pmid_elem.text:
+                        pmid = pmid_elem.text
                     
-                    abstract_elem = article.find('.//AbstractText')
-                    abstract = abstract_elem.text if abstract_elem is not None else ""
+                    # Abstract
+                    abstract = ""
+                    abstract_parts = []
+                    for abstract_elem in article.findall('.//Abstract/AbstractText'):
+                        if abstract_elem.text:
+                            label = abstract_elem.get('Label', '')
+                            if label:
+                                abstract_parts.append(f"{label}: {abstract_elem.text}")
+                            else:
+                                abstract_parts.append(abstract_elem.text)
                     
+                    if abstract_parts:
+                        abstract = ' '.join(abstract_parts)
+                    else:
+                        # Intentar con estructura alternativa
+                        abstract_elem = article.find('.//AbstractText')
+                        if abstract_elem is not None and abstract_elem.text:
+                            abstract = abstract_elem.text
+                    
+                    # Crear resultado
                     results.append({
                         'base_datos': 'PubMed',
                         'titulo': title,
@@ -1433,28 +1590,43 @@ class ScientificSearchEngine:
                     })
                     
                 except Exception as e:
+                    # Error procesando un artículo individual, continuar con el siguiente
                     continue
                     
         except Exception as e:
-            pass
+            st.warning(f"Error en fetch_pubmed_batch: {str(e)}")
         
         return results
     
+    # ========================================================================
+    # MÉTODOS DE BÚSQUEDA CORREGIDOS
+    # ========================================================================
+    
     def search_pubmed_advanced(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Búsqueda avanzada en PubMed con soporte para hasta 1000 resultados"""
+        """
+        Búsqueda avanzada en PubMed con soporte para hasta 1000 resultados
+        CORREGIDO: Uso de parámetro usehistory=y para manejar consultas complejas
+        """
         all_results = []
+        
         try:
+            # PASO 1: Formatear la consulta (PubMed MANTIENE la sintaxis MeSH)
             formatted_query = self.format_pubmed_query(query, year_range)
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🔍 PubMed query: {formatted_query}")
+            
+            # Codificar la consulta para URL
             encoded_query = urllib.parse.quote(formatted_query)
             
-            # Obtener IDs
+            # PASO 2: Obtener historial con usehistory=y
             search_url = (
                 f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
                 f"?db=pubmed"
                 f"&term={encoded_query}"
                 f"&retmode=json"
-                f"&retmax={min(1000, max_results)}"
-                f"&sort=relevance"
+                f"&retmax=0"
+                f"&usehistory=y"
                 f"&tool=streamlit_app"
                 f"&email={self.email}"
             )
@@ -1464,33 +1636,81 @@ class ScientificSearchEngine:
             response.raise_for_status()
             search_data = response.json()
             
-            id_list = search_data.get('esearchresult', {}).get('idlist', [])
+            if 'esearchresult' not in search_data:
+                if st.session_state.get('debug_mode', False):
+                    st.warning("⚠️ Respuesta de PubMed sin esearchresult")
+                return []
             
-            if id_list:
-                # Obtener detalles en lotes
-                batch_size = 50
-                id_batches = [id_list[i:i + batch_size] for i in range(0, len(id_list), batch_size)]
+            webenv = search_data.get('esearchresult', {}).get('webenv')
+            query_key = search_data.get('esearchresult', {}).get('querykey')
+            count = int(search_data.get('esearchresult', {}).get('count', 0))
+            
+            if not webenv or not query_key or count == 0:
+                if st.session_state.get('debug_mode', False):
+                    st.warning(f"⚠️ PubMed: No se obtuvo historial o count=0 (count={count})")
+                return []
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"📊 PubMed: {count} resultados encontrados")
+            
+            # PASO 3: Obtener los IDs en lotes usando el historial
+            retmax = min(max_results, count)
+            batch_size = 50
+            
+            for retstart in range(0, retmax, batch_size):
+                fetch_ids_url = (
+                    f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+                    f"?db=pubmed"
+                    f"&WebEnv={webenv}"
+                    f"&query_key={query_key}"
+                    f"&retmode=json"
+                    f"&retstart={retstart}"
+                    f"&retmax={batch_size}"
+                    f"&tool=streamlit_app"
+                    f"&email={self.email}"
+                )
                 
-                for batch in id_batches:
-                    batch_results = self.fetch_pubmed_batch(batch)
+                time.sleep(self.delay)
+                ids_response = requests.get(fetch_ids_url, timeout=30)
+                ids_response.raise_for_status()
+                ids_data = ids_response.json()
+                
+                id_list = ids_data.get('esearchresult', {}).get('idlist', [])
+                
+                if id_list:
+                    batch_results = self.fetch_pubmed_batch(id_list)
                     all_results.extend(batch_results)
-                    
+            
+            return all_results
+            
+        except requests.exceptions.RequestException as e:
+            st.warning(f"Error de conexión con PubMed: {str(e)}")
+        except json.JSONDecodeError as e:
+            st.warning(f"Error decodificando respuesta JSON de PubMed: {str(e)}")
         except Exception as e:
-            st.warning(f"Error en PubMed: {str(e)}")
+            st.warning(f"Error inesperado en PubMed: {str(e)}")
+            if st.session_state.get('debug_mode', False):
+                import traceback
+                st.code(traceback.format_exc())
         
         return all_results
     
     def search_crossref(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en CrossRef con soporte para hasta 1000 resultados"""
+        """
+        Busca en CrossRef con consulta simplificada
+        CORREGIDO: Usa _extract_keywords_for_crossref para limpiar la consulta
+        """
         results = []
         try:
-            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
-            simple_query = re.sub(r'[\(\)]', '', simple_query)
-            simple_query = ' '.join(simple_query.split())
+            # CrossRef necesita consulta simple (NO entiende MeSH)
+            simple_query = self._extract_keywords_for_crossref(query)
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🔍 CrossRef query: {simple_query}")
             
             url = "https://api.crossref.org/works"
             params = {
-                'query': simple_query[:200],
+                'query': simple_query,
                 'rows': min(100, max_results),
                 'sort': 'relevance',
                 'order': 'desc'
@@ -1532,19 +1752,24 @@ class ScientificSearchEngine:
         except Exception as e:
             st.warning(f"Error en CrossRef: {str(e)}")
         
-        return results
+        return results[:max_results]
     
     def search_openalex(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en OpenAlex con soporte para hasta 1000 resultados"""
+        """
+        Busca en OpenAlex con consulta simplificada
+        CORREGIDO: Usa _extract_keywords_for_openalex para limpiar la consulta
+        """
         results = []
         try:
-            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
-            simple_query = re.sub(r'[\(\)]', '', simple_query)
-            simple_query = ' '.join(simple_query.split())
+            # OpenAlex necesita consulta simple (NO entiende MeSH)
+            simple_query = self._extract_keywords_for_openalex(query)
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🔍 OpenAlex query: {simple_query}")
             
             url = "https://api.openalex.org/works"
             params = {
-                'search': simple_query[:200],
+                'search': simple_query,
                 'per-page': 50,
                 'sort': 'relevance_score:desc'
             }
@@ -1577,20 +1802,21 @@ class ScientificSearchEngine:
         return results[:max_results]
     
     def search_europe_pmc(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en Europe PMC con soporte para hasta 1000 resultados"""
+        """
+        Busca en Europe PMC con consulta adaptada
+        CORREGIDO: Usa _extract_keywords_for_europepmc para formatear la consulta
+        """
         results = []
         try:
-            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
-            simple_query = re.sub(r'[\(\)]', '', simple_query)
-            simple_query = ' '.join(simple_query.split())
+            # Europe PMC tiene su propio formato
+            europe_query = self._extract_keywords_for_europepmc(query, year_range)
             
-            if year_range and year_range[0] and year_range[1]:
-                date_filter = f" AND (PUB_YEAR:{year_range[0]}-{year_range[1]})"
-                simple_query = f"({simple_query}){date_filter}"
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🔍 Europe PMC query: {europe_query}")
             
             url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
             params = {
-                'query': simple_query[:500],
+                'query': europe_query,
                 'format': 'json',
                 'pageSize': min(100, max_results),
                 'resultType': 'core'
@@ -1623,8 +1849,10 @@ class ScientificSearchEngine:
     
     def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
-        """Busca en todas las bases de datos seleccionadas con alto volumen"""
-        
+        """
+        Busca en todas las bases de datos seleccionadas con alto volumen
+        Cada base de datos usa su propio formateo de consulta
+        """
         if selected_dbs is None:
             selected_dbs = ['PubMed', 'CrossRef', 'OpenAlex', 'Europe PMC']
         
@@ -2153,7 +2381,7 @@ def main():
     """Función principal de la aplicación"""
     
     st.markdown('<h1 class="main-header">🔬 Buscador y Verificador Semántico Integrado</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático</p>', 
+    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • CORREGIDO: Formateo específico por base de datos</p>', 
                 unsafe_allow_html=True)
     
     # Inicializar session state
@@ -2167,6 +2395,8 @@ def main():
         st.session_state['user_email'] = ""
     if 'integrator' not in st.session_state:
         st.session_state['integrator'] = None
+    if 'debug_mode' not in st.session_state:
+        st.session_state['debug_mode'] = False
     
     # Inicializar asistente de hipótesis
     hypothesis_assistant = HypothesisAssistant()
@@ -2186,6 +2416,14 @@ def main():
             help="Este email se usará para NCBI y para enviarte los resultados"
         )
         st.session_state['user_email'] = email
+        
+        # Modo depuración
+        debug_mode = st.checkbox(
+            "🔧 Modo depuración",
+            value=st.session_state.get('debug_mode', False),
+            help="Muestra información detallada de las consultas a APIs"
+        )
+        st.session_state['debug_mode'] = debug_mode
         
         # Estado de NLTK
         if NLTK_READY:
@@ -2571,7 +2809,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.0 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.2 | CORREGIDO: Formateo específico para PubMed, CrossRef, OpenAlex y Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
