@@ -2129,7 +2129,7 @@ def main():
         
         if st.button("Cargar ejemplo: Ruptura cardiaca postinfarto"):
             # CORRECCIÓN: Consulta mejorada para encontrar patrones anatómicos
-            st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh] AND (pattern[Title/Abstract] OR patterns[Title/Abstract] OR anatomical[Title/Abstract] OR location[Title/Abstract] OR site[Title/Abstract] OR morphology[Title/Abstract] OR "left ventricular"[Title/Abstract] OR septal[Title/Abstract] OR free wall[Title/Abstract]))' 
+            st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] OR "heart rupture"[Title/Abstract] OR "cardiac rupture"[Title/Abstract] OR "myocardial rupture"[Title/Abstract]) AND ("Myocardial Infarction"[Mesh] OR "myocardial infarction"[Title/Abstract] OR "heart attack"[Title/Abstract]) AND ("intramyocardial dissection"[Title/Abstract] OR "intramyocardial hematoma"[Title/Abstract] OR "myocardial complex rupture"[Title/Abstract] OR "anatomical patterns"[Title/Abstract] OR "myocardial structure"[Title/Abstract] OR "ventricular septal rupture"[MeSH] OR "ventricular rupture"[Title/Abstract] OR "free wall rupture"[Title/Abstract] OR "papillary muscle rupture"[MeSH])'
             st.session_state['hypothesis'] = "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles"
             st.rerun()
         
