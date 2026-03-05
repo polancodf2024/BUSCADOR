@@ -394,7 +394,7 @@ class TranslationManager:
             return text
 
 # ============================================================================
-# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN SIMPLIFICADA
+# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN MEJORADA
 # ============================================================================
 
 class HypothesisAssistant:
@@ -439,7 +439,7 @@ class HypothesisAssistant:
             }
         }
         
-        # MAPA DE TÉRMINOS MeSH - SOLO FORMATO QUE FUNCIONA
+        # MAPA DE TÉRMINOS MeSH - FORMATO QUE FUNCIONA
         self.mesh_terms_map = {
             # Sujetos/Intervenciones
             "ticagrelor": '"Ticagrelor"[Mesh]',
@@ -456,9 +456,6 @@ class HypothesisAssistant:
             "diabetes": '"Diabetes Mellitus, Type 2"[Mesh]',
             "diabetes tipo 2": '"Diabetes Mellitus, Type 2"[Mesh]',
             "type 2 diabetes": '"Diabetes Mellitus, Type 2"[Mesh]',
-            "alcoholismo": '"Alcoholism"[Mesh]',
-            "alcoholism": '"Alcoholism"[Mesh]',
-            "alcohol": '"Alcohol Drinking"[Mesh]',
             "sobrepeso": '"Overweight"[Mesh]',
             "overweight": '"Overweight"[Mesh]',
             "obesidad": '"Obesity"[Mesh]',
@@ -508,7 +505,7 @@ class HypothesisAssistant:
             "mortality": '"mortality"[Subheading]'
         }
         
-        # EJEMPLOS CON FORMATO QUE FUNCIONA
+        # EJEMPLOS CON FORMATO QUE FUNCIONA (ELIMINADO ALCOHOLISMO)
         self.examples = [
             {
                 "name": "Ticagrelor y disnea",
@@ -518,7 +515,7 @@ class HypothesisAssistant:
                 "tipo": "causal",
                 "verbo": "causa",
                 "hypothesis": "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica",
-                "mesh_query": '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
+                "mesh_query": '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)'
             },
             {
                 "name": "Ruptura cardiaca postinfarto",
@@ -539,26 +536,6 @@ class HypothesisAssistant:
                 "verbo": "reduce la incidencia de",
                 "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso",
                 "mesh_query": '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
-            },
-            {
-                "name": "Alcoholismo y mortalidad en adultos",
-                "sujeto": "alcoholismo",
-                "efecto": "mortalidad",
-                "poblacion": "adultos",
-                "tipo": "riesgo",
-                "verbo": "aumenta el riesgo de",
-                "hypothesis": "El alcoholismo aumenta el riesgo de mortalidad en adultos",
-                "mesh_query": '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
-            },
-            {
-                "name": "Alcohol y mortalidad",
-                "sujeto": "alcohol",
-                "efecto": "mortalidad",
-                "poblacion": "adultos",
-                "tipo": "riesgo",
-                "verbo": "aumenta el riesgo de",
-                "hypothesis": "El consumo de alcohol aumenta el riesgo de mortalidad en adultos",
-                "mesh_query": '("Alcohol Drinking"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
             }
         ]
     
@@ -672,9 +649,6 @@ class HypothesisAssistant:
                 
             term_lower = term.lower().strip()
             
-            # Palabras a ignorar
-            ignore_words = ['pacientes', 'patients', 'personas', 'people', 'con', 'y', 'en', 'para', 'de', 'del', 'la', 'el', 'los', 'las']
-            
             # Buscar coincidencia exacta o parcial en el mapa
             for key, value in self.mesh_terms_map.items():
                 if key in term_lower or term_lower in key:
@@ -693,43 +667,19 @@ class HypothesisAssistant:
         if effect_term:
             query_parts.append(effect_term)
         
-        # Obtener término para población (solo si es específica)
-        pop_lower = population.lower()
-        if not any(word in pop_lower for word in ['pacientes', 'patients', 'personas', 'people', 'población', 'population']):
-            pop_term = get_mesh_term(population)
-            if pop_term:
-                query_parts.append(pop_term)
+        # Obtener término para población
+        pop_term = get_mesh_term(population)
+        if pop_term:
+            query_parts.append(pop_term)
         
         # Añadir subheading según el tipo de relación
         if template_type == "prevencion":
-            # Buscar si el verbo contiene alguna palabra clave de prevención
-            has_prevention = False
-            if verb:
-                verb_lower = verb.lower()
-                for key in self.subheadings:
-                    if key in verb_lower:
-                        query_parts.append(self.subheadings[key])
-                        has_prevention = True
-                        break
-            
-            if not has_prevention:
-                query_parts.append('"prevention and control"[Subheading]')
-        
-        elif template_type == "riesgo" or template_type == "causal":
-            # Para riesgo o causal, no añadimos subheading por defecto
-            # pero si el efecto es mortalidad, podemos añadir subheading de mortalidad
-            if effect_term and 'Mortality' in effect_term:
-                # Ya tenemos Mortality como Mesh, no necesitamos subheading
-                pass
-        
+            query_parts.append('"prevention and control"[Subheading]')
+        elif template_type == "riesgo" and effect_term and 'Mortality' in effect_term:
+            # Si es riesgo y el efecto es mortalidad, añadir subheading de mortalidad
+            query_parts.append('"mortality"[Subheading]')
         elif template_type == "efectividad":
-            # Para efectividad, añadimos subheading de tratamiento si es relevante
-            if verb:
-                verb_lower = verb.lower()
-                for key in self.subheadings:
-                    if key in verb_lower and key in ['tratamiento', 'therapy', 'efectivo', 'effective']:
-                        query_parts.append('"therapy"[Subheading]')
-                        break
+            query_parts.append('"therapy"[Subheading]')
         
         # Si no hay partes en la consulta, usar una consulta por defecto
         if not query_parts:
@@ -749,7 +699,7 @@ class HypothesisAssistant:
             st.markdown("""
             <div class="query-example">
             <b>✅ FORMATO QUE FUNCIONA:</b><br>
-            ("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])
+            ("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])
             </div>
             """, unsafe_allow_html=True)
             
@@ -765,21 +715,21 @@ class HypothesisAssistant:
                 subject = st.text_input(
                     "🧪 Sujeto/Intervención:",
                     value=st.session_state.get('assistant_subject', ''),
-                    placeholder="Ej: ticagrelor, ejercicio, alcoholismo",
+                    placeholder="Ej: ticagrelor, ejercicio, ruptura cardiaca",
                     key="assistant_subject"
                 )
                 
                 effect = st.text_input(
                     "📊 Efecto/Desenlace:",
                     value=st.session_state.get('assistant_effect', ''),
-                    placeholder="Ej: disnea, mortalidad, diabetes tipo 2",
+                    placeholder="Ej: disnea, diabetes tipo 2, patrones anatómicos",
                     key="assistant_effect"
                 )
                 
                 population = st.text_input(
                     "👥 Población:",
                     value=st.session_state.get('assistant_population', ''),
-                    placeholder="Ej: adultos, pacientes con cardiopatía, niños",
+                    placeholder="Ej: adultos, pacientes con sobrepeso, pacientes con infarto",
                     key="assistant_population"
                 )
             
@@ -926,7 +876,7 @@ class HypothesisAssistant:
             - Formato simple: `("Término1"[Mesh] AND "Término2"[Mesh] AND "Término3"[Subheading])`
             
             **✅ EJEMPLO QUE FUNCIONA:**<br>
-            `("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])`
+            `("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])`
             """, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
     
@@ -1096,13 +1046,6 @@ class AdvancedSemanticVerifier:
             'sedentary', 'physical inactivity', 'cardiovascular disease', 'cvd'
         ]
         
-        self.addiction_terms = [
-            'alcoholism', 'alcohol dependence', 'alcohol use disorder', 'alcohol abuse',
-            'substance abuse', 'substance use disorder', 'addiction', 'dependence',
-            'withdrawal', 'craving', 'relapse', 'abstinence', 'detoxification',
-            'alcohol drinking', 'alcohol consumption'
-        ]
-        
         self.general_terms = [
             'study', 'trial', 'cohort', 'analysis', 'meta-analysis',
             'systematic review', 'randomized', 'controlled', 'prospective',
@@ -1162,13 +1105,6 @@ class AdvancedSemanticVerifier:
             'incidencia': 'incidence',
             'riesgo': 'risk',
             'reducción': 'reduction',
-            'alcoholismo': 'alcoholism',
-            'alcohol': 'alcohol',
-            'dependencia al alcohol': 'alcohol dependence',
-            'abuso de alcohol': 'alcohol abuse',
-            'adicción': 'addiction',
-            'mortalidad': 'mortality',
-            'muerte': 'death',
             'adultos': 'adults',
             'niños': 'children',
             'mayores': 'aged',
@@ -1181,7 +1117,6 @@ class AdvancedSemanticVerifier:
             self.cardiac_terms + 
             self.pharmacology_terms + 
             self.metabolism_terms + 
-            self.addiction_terms +
             self.general_terms
         ))
     
@@ -1199,19 +1134,14 @@ class AdvancedSemanticVerifier:
                               'exercise', 'diabetes', 'obesity', 'overweight', 'glucose',
                               'metabolic', 'insulin', 'weight loss']
         
-        addiction_keywords = ['alcoholismo', 'alcohol', 'adicción', 'dependencia', 'abuso',
-                             'alcoholism', 'addiction', 'dependence', 'abuse', 'substance']
-        
         cardiac_score = sum(1 for kw in cardiac_keywords if kw in hypo_lower)
         pharmacology_score = sum(1 for kw in pharmacology_keywords if kw in hypo_lower)
         metabolism_score = sum(1 for kw in metabolism_keywords if kw in hypo_lower)
-        addiction_score = sum(1 for kw in addiction_keywords if kw in hypo_lower)
         
         scores = {
             'cardiac': cardiac_score,
             'pharmacology': pharmacology_score,
-            'metabolism': metabolism_score,
-            'addiction': addiction_score
+            'metabolism': metabolism_score
         }
         
         max_domain = max(scores, key=scores.get)
@@ -1261,8 +1191,6 @@ class AdvancedSemanticVerifier:
             all_terms.extend(self.pharmacology_terms)
         elif domain == 'metabolism':
             all_terms.extend(self.metabolism_terms)
-        elif domain == 'addiction':
-            all_terms.extend(self.addiction_terms)
         
         all_terms.extend(self.general_terms)
         
@@ -1424,22 +1352,6 @@ class AdvancedSemanticVerifier:
             
             if 'insulin resistance' in sentence_lower or 'metabolic syndrome' in sentence_lower:
                 score += 0.3
-        
-        elif domain == 'addiction':
-            if 'alcoholism' in sentence_lower or 'alcohol dependence' in sentence_lower:
-                score += 0.4
-                if 'mortality' in sentence_lower or 'death' in sentence_lower:
-                    score += 0.5
-                elif 'risk' in sentence_lower:
-                    score += 0.3
-            
-            if 'mortality' in sentence_lower:
-                score += 0.3
-                if 'alcohol' in sentence_lower:
-                    score += 0.4
-            
-            if 'adult' in sentence_lower:
-                score += 0.2
         
         study_indicators = ['randomized', 'controlled trial', 'cohort', 'meta-analysis', 
                            'systematic review', 'prospective']
@@ -2678,7 +2590,7 @@ def main():
         
         st.markdown("### 📋 Ejemplos")
         
-        # EJEMPLOS OPTIMIZADOS
+        # EJEMPLOS OPTIMIZADOS (ELIMINADO ALCOHOLISMO)
         if st.button("Cargar ejemplo: Ticagrelor y disnea"):
             st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
             st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
@@ -2693,11 +2605,6 @@ def main():
             st.session_state['query'] = '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
             st.session_state['hypothesis'] = "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso"
             st.rerun()
-        
-        if st.button("Cargar ejemplo: Alcoholismo y mortalidad"):
-            st.session_state['query'] = '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
-            st.session_state['hypothesis'] = "El alcoholismo aumenta el riesgo de mortalidad en adultos"
-            st.rerun()
     
     # Área principal
     col1, col2 = st.columns([2, 1])
@@ -2707,7 +2614,7 @@ def main():
             "🔍 Consulta de búsqueda (formato MeSH SIMPLE que funciona):",
             value=st.session_state['query'],
             height=120,
-            placeholder='Ej: ("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])',
+            placeholder='Ej: ("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])',
             key="query_input",
             help="Formato MeSH simple: Use [Mesh] para términos controlados y [Subheading] para subencabezados. SIN operadores OR complejos."
         )
@@ -2720,7 +2627,7 @@ def main():
             "🔬 Conjetura a verificar (español):",
             value=st.session_state['hypothesis'],
             height=68,
-            placeholder='Ej: El alcoholismo aumenta el riesgo de mortalidad en adultos',
+            placeholder='Ej: El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso',
             key="hypothesis_input"
         )
         
