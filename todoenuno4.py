@@ -442,49 +442,49 @@ class HypothesisAssistant:
         # MAPA DE TÉRMINOS MeSH - FORMATO CORRECTO
         self.mesh_terms_map = {
             # Sujetos/Intervenciones
-            "ticagrelor": '"Ticagrelor"[Mesh]',
-            "ejercicio": '"Exercise"[Mesh]',
-            "ejercicio físico": '"Exercise"[Mesh]',
-            "physical activity": '"Exercise"[Mesh]',
-            "exercise": '"Exercise"[Mesh]',
-            "ruptura cardiaca": '"Heart Rupture, Post-Infarction"[Mesh]',
-            "ruptura cardíaca": '"Heart Rupture, Post-Infarction"[Mesh]',
-            "cardiac rupture": '"Heart Rupture, Post-Infarction"[Mesh]',
-            "infarto": '"Myocardial Infarction"[Mesh]',
-            "infarto de miocardio": '"Myocardial Infarction"[Mesh]',
-            "myocardial infarction": '"Myocardial Infarction"[Mesh]',
-            "diabetes": '"Diabetes Mellitus, Type 2"[Mesh]',
-            "diabetes tipo 2": '"Diabetes Mellitus, Type 2"[Mesh]',
-            "type 2 diabetes": '"Diabetes Mellitus, Type 2"[Mesh]',
-            "sobrepeso": '"Overweight"[Mesh]',
-            "overweight": '"Overweight"[Mesh]',
-            "obesidad": '"Obesity"[Mesh]',
-            "obesity": '"Obesity"[Mesh]',
-            "cardiopatía": '"Heart Diseases"[Mesh]',
-            "cardiopatía isquémica": '"Myocardial Ischemia"[Mesh]',
-            "myocardial ischemia": '"Myocardial Ischemia"[Mesh]',
+            "ticagrelor": "Ticagrelor",
+            "ejercicio": "Exercise",
+            "ejercicio físico": "Exercise",
+            "physical activity": "Exercise",
+            "exercise": "Exercise",
+            "ruptura cardiaca": "Heart Rupture, Post-Infarction",
+            "ruptura cardíaca": "Heart Rupture, Post-Infarction",
+            "cardiac rupture": "Heart Rupture, Post-Infarction",
+            "infarto": "Myocardial Infarction",
+            "infarto de miocardio": "Myocardial Infarction",
+            "myocardial infarction": "Myocardial Infarction",
+            "diabetes": "Diabetes Mellitus, Type 2",
+            "diabetes tipo 2": "Diabetes Mellitus, Type 2",
+            "type 2 diabetes": "Diabetes Mellitus, Type 2",
+            "sobrepeso": "Overweight",
+            "overweight": "Overweight",
+            "obesidad": "Obesity",
+            "obesity": "Obesity",
+            "cardiopatía": "Heart Diseases",
+            "cardiopatía isquémica": "Myocardial Ischemia",
+            "myocardial ischemia": "Myocardial Ischemia",
             
             # Efectos/Desenlaces
-            "disnea": '"Dyspnea"[Mesh]',
-            "dyspnea": '"Dyspnea"[Mesh]',
-            "mortalidad": '"Mortality"[Mesh]',
-            "mortality": '"Mortality"[Mesh]',
-            "muerte": '"Mortality"[Mesh]',
-            "death": '"Mortality"[Mesh]',
-            "incidencia": '"Incidence"[Mesh]',
-            "incidence": '"Incidence"[Mesh]',
-            "efecto secundario": '"Drug-Related Side Effects and Adverse Reactions"[Mesh]',
-            "adverse effects": '"Drug-Related Side Effects and Adverse Reactions"[Mesh]',
+            "disnea": "Dyspnea",
+            "dyspnea": "Dyspnea",
+            "mortalidad": "Mortality",
+            "mortality": "Mortality",
+            "muerte": "Mortality",
+            "death": "Mortality",
+            "incidencia": "Incidence",
+            "incidence": "Incidence",
+            "efecto secundario": "Drug-Related Side Effects and Adverse Reactions",
+            "adverse effects": "Drug-Related Side Effects and Adverse Reactions",
             
             # Población
-            "adultos": '"Adult"[Mesh]',
-            "adult": '"Adult"[Mesh]',
-            "adults": '"Adult"[Mesh]',
-            "niños": '"Child"[Mesh]',
-            "children": '"Child"[Mesh]',
-            "mayores": '"Aged"[Mesh]',
-            "aged": '"Aged"[Mesh]',
-            "ancianos": '"Aged"[Mesh]'
+            "adultos": "Adult",
+            "adult": "Adult",
+            "adults": "Adult",
+            "niños": "Child",
+            "children": "Child",
+            "mayores": "Aged",
+            "aged": "Aged",
+            "ancianos": "Aged"
         }
         
         # SUBHEADINGS - FORMATO CORRECTO (van pegados al término con /)
@@ -633,6 +633,35 @@ class HypothesisAssistant:
             "verb_en": verb_en
         }
     
+    def find_mesh_term(self, text: str) -> Optional[str]:
+        """
+        Busca un término en el mapa MeSH
+        """
+        if not text:
+            return None
+        
+        text_lower = text.lower().strip()
+        
+        # Buscar coincidencia exacta primero
+        for key, value in self.mesh_terms_map.items():
+            if key == text_lower:
+                return value
+        
+        # Buscar coincidencia parcial
+        for key, value in self.mesh_terms_map.items():
+            if key in text_lower or text_lower in key:
+                return value
+        
+        # Buscar por palabras clave
+        words = text_lower.split()
+        for word in words:
+            if len(word) > 3:
+                for key, value in self.mesh_terms_map.items():
+                    if word in key or key in word:
+                        return value
+        
+        return None
+    
     def generate_correct_mesh_query(self, subject: str, effect: str, population: str, 
                                    template_type: str, verb: str = None) -> str:
         """
@@ -644,78 +673,73 @@ class HypothesisAssistant:
         """
         query_parts = []
         
-        # Función para obtener término MeSH
-        def get_mesh_term(term: str) -> Optional[str]:
-            if not term:
-                return None
-                
-            term_lower = term.lower().strip()
-            
-            # Buscar coincidencia exacta o parcial en el mapa
-            for key, value in self.mesh_terms_map.items():
-                if key in term_lower or term_lower in key:
-                    return value
-            
-            return None
-        
-        # Función para determinar si un término debe llevar subheading
-        def should_add_subheading(term_type: str, template_type: str, verb: str = None) -> bool:
-            if template_type == "prevencion" and term_type in ["subject", "effect"]:
-                return True
-            elif template_type == "riesgo" and term_type == "effect" and "mortalidad" in str(term).lower():
-                return True
-            elif template_type == "efectividad" and term_type == "subject":
-                return True
-            return False
+        # Debug info
+        if st.session_state.get('debug_mode', False):
+            st.write("🔍 Generando consulta MeSH:")
+            st.write(f"   Sujeto: {subject}")
+            st.write(f"   Efecto: {effect}")
+            st.write(f"   Población: {population}")
+            st.write(f"   Tipo: {template_type}")
         
         # Obtener término para sujeto
-        subject_term_base = get_mesh_term(subject)
-        if subject_term_base:
-            # Extraer el término sin los corchetes
-            subject_clean = subject_term_base.replace('"[Mesh]"', '').replace('"', '')
+        subject_term = self.find_mesh_term(subject)
+        if subject_term:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✓ Sujeto encontrado: {subject_term}")
             
-            # Añadir subheading si corresponde
-            if should_add_subheading("subject", template_type, verb):
-                subheading = self.subheadings.get("prevención" if template_type == "prevencion" else "tratamiento", "")
-                if subheading:
-                    subject_final = f'"{subject_clean}/{subheading}"[Mesh]'
-                else:
-                    subject_final = subject_term_base
+            # Añadir subheading si es prevención
+            if template_type == "prevencion":
+                subject_final = f'"{subject_term}/prevention and control"[Mesh]'
             else:
-                subject_final = subject_term_base
-            
+                subject_final = f'"{subject_term}"[Mesh]'
             query_parts.append(subject_final)
+        else:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✗ Sujeto NO encontrado en mapa MeSH")
         
         # Obtener término para efecto
-        effect_term_base = get_mesh_term(effect)
-        if effect_term_base:
-            # Extraer el término sin los corchetes
-            effect_clean = effect_term_base.replace('"[Mesh]"', '').replace('"', '')
+        effect_term = self.find_mesh_term(effect)
+        if effect_term:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✓ Efecto encontrado: {effect_term}")
             
-            # Añadir subheading si corresponde
-            if should_add_subheading("effect", template_type, verb):
-                subheading = self.subheadings.get("prevención" if template_type == "prevencion" else "mortalidad", "")
-                if subheading:
-                    effect_final = f'"{effect_clean}/{subheading}"[Mesh]'
-                else:
-                    effect_final = effect_term_base
+            # Añadir subheading si es prevención
+            if template_type == "prevencion":
+                effect_final = f'"{effect_term}/prevention and control"[Mesh]'
+            elif template_type == "riesgo" and effect_term in ["Mortality", "Incidence"]:
+                effect_final = f'"{effect_term}/mortality"[Mesh]'
             else:
-                effect_final = effect_term_base
-            
+                effect_final = f'"{effect_term}"[Mesh]'
             query_parts.append(effect_final)
+        else:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✗ Efecto NO encontrado en mapa MeSH")
         
         # Obtener término para población
-        pop_term = get_mesh_term(population)
-        if pop_term:
-            query_parts.append(pop_term)
+        population_term = self.find_mesh_term(population)
+        if population_term:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✓ Población encontrada: {population_term}")
+            population_final = f'"{population_term}"[Mesh]'
+            query_parts.append(population_final)
+        else:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✗ Población NO encontrada en mapa MeSH")
         
         # Si no hay partes en la consulta, usar una consulta por defecto
         if not query_parts:
+            if st.session_state.get('debug_mode', False):
+                st.write("   ⚠️ No se encontraron términos MeSH, usando consulta por defecto")
             return '("research"[Title/Abstract])'
         
         # Unir con AND y envolver en paréntesis
         query = " AND ".join(query_parts)
-        return f"({query})"
+        final_query = f"({query})"
+        
+        if st.session_state.get('debug_mode', False):
+            st.write(f"   ✅ Consulta generada: {final_query}")
+        
+        return final_query
     
     def render_assistant_ui(self):
         with st.expander("🤖 ASISTENTE DE CONJETURAS - Ayuda a construir tu hipótesis", expanded=False):
@@ -750,14 +774,14 @@ class HypothesisAssistant:
                 effect = st.text_input(
                     "📊 Efecto/Desenlace:",
                     value=st.session_state.get('assistant_effect', ''),
-                    placeholder="Ej: disnea, diabetes tipo 2, patrones anatómicos",
+                    placeholder="Ej: disnea, diabetes tipo 2, mortalidad",
                     key="assistant_effect"
                 )
                 
                 population = st.text_input(
                     "👥 Población:",
                     value=st.session_state.get('assistant_population', ''),
-                    placeholder="Ej: adultos, pacientes con sobrepeso, pacientes con infarto",
+                    placeholder="Ej: adultos, pacientes con sobrepeso, niños",
                     key="assistant_population"
                 )
             
@@ -1617,7 +1641,9 @@ class ScientificSearchEngine:
         def replace_mesh_with_subheading(match):
             term = match.group(1).strip()
             subheading = match.group(2).strip()
-            return f'"{term}"[Mesh] AND "{term}/{subheading}"[Mesh]'
+            # En PubMed, los subheadings se formatean como term[Subheading] O term/subheading[mh]
+            # Usaremos el formato term/subheading[mh] que es el más común
+            return f'"{term}/{subheading}"[mh]'
         
         query = re.sub(mesh_with_subheading_pattern, replace_mesh_with_subheading, query)
         
@@ -2979,7 +3005,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v7.1 | FORMATO MeSH CORRECTO • 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v7.2 | FORMATO MeSH CORRECTO • 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
