@@ -9,6 +9,7 @@ CORRECCIONES CRÍTICAS:
 6. MULTIDOMINIO: Añadidos términos de farmacología y metabolismo
 7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
 8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
+9. NUEVO: Integración completa con Semantic Scholar y DOAJ
 """
 
 import streamlit as st
@@ -243,6 +244,24 @@ st.markdown("""
     }
     .badge-europepmc { 
         background-color: #FF5722; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-semantic { 
+        background-color: #9C27B0; 
+        color: white; 
+        padding: 0.2rem 0.8rem; 
+        border-radius: 15px; 
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-bottom: 0.5rem;
+    }
+    .badge-doaj { 
+        background-color: #00ACC1; 
         color: white; 
         padding: 0.2rem 0.8rem; 
         border-radius: 15px; 
@@ -1331,13 +1350,15 @@ class AdvancedSemanticVerifier:
         }
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA
+# MOTOR DE BÚSQUEDA CIENTÍFICA - VERSIÓN AMPLIADA CON SEMANTIC SCHOLAR Y DOAJ
 # ============================================================================
 
 class ScientificSearchEngine:
     def __init__(self, email: str):
         self.email = email
         self.delay = 0.34
+        # Opcional: API keys para Semantic Scholar (mejora límites)
+        self.semantic_api_key = st.secrets.get("semantic_api_key", None)
     
     def _clean_query_for_general_apis(self, query: str) -> str:
         quoted_terms = re.findall(r'"([^"]*)"', query)
@@ -1405,6 +1426,236 @@ class ScientificSearchEngine:
             query = f"({query}){year_filter}"
         
         return query
+    
+    # ========================================================================
+    # NUEVA FUNCIÓN: BÚSQUEDA EN SEMANTIC SCHOLAR
+    # ========================================================================
+    
+    def search_semantic_scholar(self, query: str, max_results: int = 100, year_range: tuple = None) -> list:
+        """
+        Busca artículos en Semantic Scholar API
+        Documentación: https://www.semanticscholar.org/product/api
+        """
+        results = []
+        try:
+            # Limpiar la consulta (quitar etiquetas MeSH, etc.)
+            clean_query = self._clean_query_for_general_apis(query)
+            
+            if not clean_query:
+                return []
+            
+            # URL base de Semantic Scholar
+            url = "https://api.semanticscholar.org/graph/v1/paper/search"
+            
+            # Parámetros de la consulta
+            params = {
+                'query': clean_query,
+                'limit': min(100, max_results),  # API permite máximo 100 por página
+                'fields': 'title,authors,year,abstract,venue,citationCount,referenceCount,openAccessPdf,externalIds,url,publicationTypes',
+                'sort': 'relevance'  # Ordenar por relevancia
+            }
+            
+            # Añadir filtro de años si está especificado
+            if year_range and year_range[0] and year_range[1]:
+                params['year'] = f"{year_range[0]}-{year_range[1]}"
+            
+            # Headers (opcional: API key para mayores límites)
+            headers = {}
+            if self.semantic_api_key:
+                headers['x-api-key'] = self.semantic_api_key
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🔍 Semantic Scholar query: {clean_query}")
+            
+            # Hacer la petición
+            time.sleep(self.delay)
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                total_results = data.get('total', 0)
+                
+                if st.session_state.get('debug_mode', False):
+                    st.write(f"📊 Semantic Scholar: {total_results} resultados encontrados")
+                
+                # Procesar cada artículo
+                for paper in data.get('data', []):
+                    # Extraer autores
+                    authors_list = []
+                    for author in paper.get('authors', [])[:5]:
+                        author_name = author.get('name', '')
+                        if author_name:
+                            authors_list.append(author_name)
+                    
+                    # Extraer DOI de externalIds
+                    doi = paper.get('externalIds', {}).get('DOI', '')
+                    
+                    # Extraer año
+                    year = paper.get('year', '')
+                    year_str = str(year) if year else ''
+                    
+                    # Construir URL del artículo
+                    paper_id = paper.get('paperId', '')
+                    paper_url = f"https://www.semanticscholar.org/paper/{paper_id}" if paper_id else ''
+                    
+                    # Extraer abstract
+                    abstract = paper.get('abstract', '')
+                    abstract_preview = abstract[:300] + '...' if abstract and len(abstract) > 300 else abstract
+                    
+                    # Extraer tipo de publicación
+                    pub_types = paper.get('publicationTypes', [])
+                    pub_type = ', '.join(pub_types) if pub_types else 'Artículo'
+                    
+                    results.append({
+                        'base_datos': 'Semantic Scholar',
+                        'titulo': paper.get('title', 'Título no disponible'),
+                        'autores': ', '.join(authors_list),
+                        'revista': paper.get('venue', ''),
+                        'año': year_str,
+                        'doi': doi,
+                        'url': paper_url,
+                        'abstract': abstract_preview,
+                        'tipo': pub_type,
+                        'citas': paper.get('citationCount', 0),
+                        'referencias': paper.get('referenceCount', 0)
+                    })
+                    
+                    if len(results) >= max_results:
+                        break
+            
+            elif response.status_code == 429:
+                st.warning("Semantic Scholar: Límite de tasa excedido. Intentando de nuevo más tarde...")
+            else:
+                if st.session_state.get('debug_mode', False):
+                    st.warning(f"Semantic Scholar error {response.status_code}: {response.text[:200]}")
+                    
+        except Exception as e:
+            st.warning(f"Error en Semantic Scholar: {str(e)}")
+        
+        return results[:max_results]
+    
+    # ========================================================================
+    # NUEVA FUNCIÓN: BÚSQUEDA EN DOAJ (Directory of Open Access Journals)
+    # ========================================================================
+    
+    def search_doaj(self, query: str, max_results: int = 100, year_range: tuple = None) -> list:
+        """
+        Busca artículos en DOAJ API
+        Documentación: https://doaj.org/api/docs/
+        """
+        results = []
+        try:
+            # Limpiar la consulta
+            clean_query = self._clean_query_for_general_apis(query)
+            
+            if not clean_query:
+                return []
+            
+            # URL base de DOAJ
+            url = "https://doaj.org/api/v1/search/articles/"
+            
+            # Parámetros de la consulta
+            params = {
+                'query': clean_query,
+                'pageSize': min(100, max_results),  # Máximo 100 por página
+                'sort': 'year:desc'
+            }
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🔍 DOAJ query: {clean_query}")
+            
+            # Hacer la petición
+            time.sleep(self.delay)
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                total_results = data.get('total', 0)
+                
+                if st.session_state.get('debug_mode', False):
+                    st.write(f"📊 DOAJ: {total_results} resultados encontrados")
+                
+                # Procesar cada artículo
+                for article in data.get('results', []):
+                    # Extraer datos del artículo
+                    bibjson = article.get('bibjson', {})
+                    
+                    # Título
+                    title = bibjson.get('title', 'Título no disponible')
+                    
+                    # Autores
+                    authors_list = []
+                    for author in bibjson.get('author', [])[:5]:
+                        author_name = author.get('name', '')
+                        if author_name:
+                            authors_list.append(author_name)
+                    
+                    # Revista
+                    journal_info = bibjson.get('journal', {})
+                    journal = journal_info.get('title', '')
+                    
+                    # Año
+                    year = ''
+                    if 'year' in bibjson:
+                        year = str(bibjson.get('year', ''))
+                    
+                    # Filtrar por año si es necesario
+                    if year_range and year_range[0] and year_range[1] and year:
+                        try:
+                            year_int = int(year)
+                            if year_int < year_range[0] or year_int > year_range[1]:
+                                continue
+                        except:
+                            pass
+                    
+                    # DOI
+                    doi = bibjson.get('doi', '')
+                    
+                    # URL del artículo
+                    article_url = article.get('admin', {}).get('url', {}).get('record', '')
+                    
+                    # Abstract
+                    abstract = bibjson.get('abstract', '')
+                    abstract_preview = abstract[:300] + '...' if abstract and len(abstract) > 300 else abstract
+                    
+                    # ISSN
+                    issn = journal_info.get('issn', '')
+                    
+                    # Palabras clave
+                    keywords = bibjson.get('keywords', [])
+                    keywords_str = ', '.join(keywords[:5]) if keywords else ''
+                    
+                    results.append({
+                        'base_datos': 'DOAJ',
+                        'titulo': title,
+                        'autores': ', '.join(authors_list),
+                        'revista': journal,
+                        'año': year,
+                        'doi': doi,
+                        'url': article_url,
+                        'abstract': abstract_preview,
+                        'tipo': 'Open Access',
+                        'issn': issn,
+                        'keywords': keywords_str
+                    })
+                    
+                    if len(results) >= max_results:
+                        break
+            
+            elif response.status_code == 429:
+                st.warning("DOAJ: Límite de tasa excedido. Intentando de nuevo más tarde...")
+            else:
+                if st.session_state.get('debug_mode', False):
+                    st.warning(f"DOAJ error {response.status_code}: {response.text[:200]}")
+                    
+        except Exception as e:
+            st.warning(f"Error en DOAJ: {str(e)}")
+        
+        return results[:max_results]
+    
+    # ========================================================================
+    # FUNCIONES EXISTENTES (PubMed, CrossRef, OpenAlex, Europe PMC)
+    # ========================================================================
     
     def search_pubmed_advanced(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
         all_results = []
@@ -1764,29 +2015,47 @@ class ScientificSearchEngine:
         
         return results[:max_results]
     
+    # ========================================================================
+    # FUNCIÓN PRINCIPAL DE BÚSQUEDA (ACTUALIZADA CON NUEVAS BASES)
+    # ========================================================================
+    
     def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
         if selected_dbs is None:
-            selected_dbs = ['PubMed', 'CrossRef', 'OpenAlex', 'Europe PMC']
+            selected_dbs = ['PubMed', 'CrossRef', 'OpenAlex', 'Europe PMC', 'Semantic Scholar', 'DOAJ']
         
         all_results = []
         
+        # Diccionario actualizado con TODAS las funciones de búsqueda
         search_functions = {
             'PubMed': self.search_pubmed_advanced,
             'CrossRef': self.search_crossref,
             'OpenAlex': self.search_openalex,
-            'Europe PMC': self.search_europe_pmc
+            'Europe PMC': self.search_europe_pmc,
+            'Semantic Scholar': self.search_semantic_scholar,  # ✅ NUEVA
+            'DOAJ': self.search_doaj                           # ✅ NUEVA
         }
         
         for db in selected_dbs:
             if db in search_functions:
                 try:
+                    # Ajustar límites según la base de datos
+                    if db in ['Semantic Scholar', 'DOAJ']:
+                        db_max = min(100, max_results_per_db)  # Estas APIs tienen límites más bajos
+                    else:
+                        db_max = max_results_per_db
+                    
                     with st.spinner(f"🔍 Buscando en {db}..."):
-                        results = search_functions[db](query, max_results_per_db, year_range)
+                        results = search_functions[db](query, db_max, year_range)
                         all_results.extend(results)
-                        st.success(f"✅ {db}: {len(results)} resultados")
+                        if results:
+                            st.success(f"✅ {db}: {len(results)} resultados")
+                        else:
+                            st.info(f"ℹ️ {db}: 0 resultados")
                 except Exception as e:
                     st.warning(f"Error en {db}: {str(e)}")
+            else:
+                st.warning(f"⚠️ {db}: Función de búsqueda no implementada")
         
         if all_results:
             df = pd.DataFrame(all_results)
@@ -2147,7 +2416,9 @@ def get_badge_class(db_name: str) -> str:
         'PubMed': 'badge-pubmed',
         'CrossRef': 'badge-crossref',
         'OpenAlex': 'badge-openalex',
-        'Europe PMC': 'badge-europepmc'
+        'Europe PMC': 'badge-europepmc',
+        'Semantic Scholar': 'badge-semantic',
+        'DOAJ': 'badge-doaj'
     }
     return classes.get(db_name, 'badge-pubmed')
 
@@ -2247,7 +2518,7 @@ def enviar_resultados_email(destinatario, integrator):
 
 def main():
     st.markdown('<h1 class="main-header">🔬 Buscador y Verificador Semántico Integrado</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • VERSIÓN COMPLETA CORREGIDA • MULTIDOMINIO</p>', 
+    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • VERSIÓN COMPLETA • MULTIDOMINIO • 6 BASES DE DATOS</p>', 
                 unsafe_allow_html=True)
     
     # Inicializar session state con TODAS las variables necesarias
@@ -2302,23 +2573,25 @@ def main():
             st.warning("⚠️ Usando tokenizador alternativo")
         
         st.markdown("### 📚 Bases de Datos")
+        st.info("🔔 **6 bases disponibles**: PubMed, CrossRef, OpenAlex, Europe PMC, Semantic Scholar, DOAJ")
+        
         col1, col2 = st.columns(2)
         with col1:
             pubmed = st.checkbox('PubMed', value=True)
             crossref = st.checkbox('CrossRef', value=True)
             openalex = st.checkbox('OpenAlex', value=True)
+            semantic = st.checkbox('Semantic Scholar', value=True)  # ✅ AHORA SÍ FUNCIONA
         with col2:
-            semantic = st.checkbox('Semantic Scholar', value=False)
-            doaj = st.checkbox('DOAJ', value=False)
             europepmc = st.checkbox('Europe PMC', value=True)
+            doaj = st.checkbox('DOAJ', value=True)                   # ✅ AHORA SÍ FUNCIONA
         
         databases = {
             'PubMed': pubmed,
             'CrossRef': crossref,
             'OpenAlex': openalex,
             'Semantic Scholar': semantic,
-            'DOAJ': doaj,
-            'Europe PMC': europepmc
+            'Europe PMC': europepmc,
+            'DOAJ': doaj
         }
         
         st.markdown("---")
@@ -2355,6 +2628,8 @@ def main():
         - 200 artículos: ~10-15 minutos
         - 500 artículos: ~25-35 minutos
         - 1000 artículos: ~50-70 minutos
+        
+        **Nota:** Semantic Scholar y DOAJ tienen límites de 100 artículos por consulta.
         """)
         
         st.markdown("### 📋 Ejemplos")
@@ -2366,7 +2641,6 @@ def main():
             st.rerun()
         
         if st.button("Cargar ejemplo: Ruptura cardiaca postinfarto"):
-            # CONSULTA OPTIMIZADA CON TUS KEYWORDS
             st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh] AND (pattern[Title/Abstract] OR patterns[Title/Abstract] OR anatomical[Title/Abstract] OR location[Title/Abstract] OR site[Title/Abstract] OR morphology[Title/Abstract] OR "left ventricular"[Title/Abstract] OR septal[Title/Abstract] OR free wall[Title/Abstract]))'
             st.session_state['hypothesis'] = "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)"
             st.rerun()
@@ -2520,7 +2794,9 @@ def main():
                         'PubMed': '#1E88E5',
                         'CrossRef': '#43A047',
                         'OpenAlex': '#FDD835',
-                        'Europe PMC': '#FF5722'
+                        'Europe PMC': '#FF5722',
+                        'Semantic Scholar': '#9C27B0',
+                        'DOAJ': '#00ACC1'
                     }
                 )
                 fig.update_layout(showlegend=False)
@@ -2678,7 +2954,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v4.0 | MULTIDOMINIO • Cardiología • Farmacología • Metabolismo</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v5.0 | 6 BASES DE DATOS • PubMed • CrossRef • OpenAlex • Europe PMC • Semantic Scholar • DOAJ</p>
     </div>
     """, unsafe_allow_html=True)
 
