@@ -515,7 +515,7 @@ class HypothesisAssistant:
                 "tipo": "causal",
                 "verbo": "causa",
                 "hypothesis": "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica",
-                "mesh_query": '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
+                "mesh_query": '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
             },
             {
                 "name": "Ruptura cardiaca postinfarto",
