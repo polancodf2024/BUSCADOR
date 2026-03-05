@@ -10,7 +10,7 @@ CORRECCIONES CRÍTICAS:
 7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
 8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
 9. NUEVO: Visualización de TODOS los artículos que corroboran fuertemente la hipótesis
-10. CORREGIDO: Asistente de conjeturas - Ahora genera consultas en formato MeSH simple (formato que funciona)
+10. CORREGIDO: Asistente de conjeturas - Ahora genera consultas en formato MeSH correcto
 """
 
 import streamlit as st
@@ -394,7 +394,7 @@ class TranslationManager:
             return text
 
 # ============================================================================
-# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN MEJORADA
+# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN CORREGIDA
 # ============================================================================
 
 class HypothesisAssistant:
@@ -439,7 +439,7 @@ class HypothesisAssistant:
             }
         }
         
-        # MAPA DE TÉRMINOS MeSH - FORMATO QUE FUNCIONA
+        # MAPA DE TÉRMINOS MeSH - FORMATO CORRECTO
         self.mesh_terms_map = {
             # Sujetos/Intervenciones
             "ticagrelor": '"Ticagrelor"[Mesh]',
@@ -487,25 +487,25 @@ class HypothesisAssistant:
             "ancianos": '"Aged"[Mesh]'
         }
         
-        # SUBHEADINGS - FORMATO QUE FUNCIONA
+        # SUBHEADINGS - FORMATO CORRECTO (van pegados al término con /)
         self.subheadings = {
-            "prevención": '"prevention and control"[Subheading]',
-            "prevention": '"prevention and control"[Subheading]',
-            "tratamiento": '"therapy"[Subheading]',
-            "therapy": '"therapy"[Subheading]',
-            "diagnóstico": '"diagnosis"[Subheading]',
-            "diagnosis": '"diagnosis"[Subheading]',
-            "epidemiología": '"epidemiology"[Subheading]',
-            "epidemiology": '"epidemiology"[Subheading]',
-            "efectos adversos": '"adverse effects"[Subheading]',
-            "adverse effects": '"adverse effects"[Subheading]',
-            "fisiopatología": '"physiopathology"[Subheading]',
-            "physiopathology": '"physiopathology"[Subheading]',
-            "mortalidad": '"mortality"[Subheading]',
-            "mortality": '"mortality"[Subheading]'
+            "prevención": "prevention and control",
+            "prevention": "prevention and control",
+            "tratamiento": "therapy",
+            "therapy": "therapy",
+            "diagnóstico": "diagnosis",
+            "diagnosis": "diagnosis",
+            "epidemiología": "epidemiology",
+            "epidemiology": "epidemiology",
+            "efectos adversos": "adverse effects",
+            "adverse effects": "adverse effects",
+            "fisiopatología": "physiopathology",
+            "physiopathology": "physiopathology",
+            "mortalidad": "mortality",
+            "mortality": "mortality"
         }
         
-        # EJEMPLOS CON FORMATO QUE FUNCIONA (ELIMINADO ALCOHOLISMO)
+        # EJEMPLOS CON FORMATO CORRECTO
         self.examples = [
             {
                 "name": "Ticagrelor y disnea",
@@ -515,7 +515,7 @@ class HypothesisAssistant:
                 "tipo": "causal",
                 "verbo": "causa",
                 "hypothesis": "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica",
-                "mesh_query": '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)'
+                "mesh_query": '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
             },
             {
                 "name": "Ruptura cardiaca postinfarto",
@@ -535,7 +535,7 @@ class HypothesisAssistant:
                 "tipo": "prevencion",
                 "verbo": "reduce la incidencia de",
                 "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso",
-                "mesh_query": '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
+                "mesh_query": '("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
             }
         ]
     
@@ -616,8 +616,8 @@ class HypothesisAssistant:
         # Traducción automática completa
         hypothesis_en = self.translator.translate_to_english(hypothesis_es)
         
-        # Generar consulta MeSH en formato SIMPLE (el que funciona)
-        mesh_query = self.generate_simple_mesh_query(subject, effect, population, template_type, verb)
+        # Generar consulta MeSH en formato CORRECTO
+        mesh_query = self.generate_correct_mesh_query(subject, effect, population, template_type, verb)
         
         return {
             "es": hypothesis_es,
@@ -633,12 +633,14 @@ class HypothesisAssistant:
             "verb_en": verb_en
         }
     
-    def generate_simple_mesh_query(self, subject: str, effect: str, population: str, 
+    def generate_correct_mesh_query(self, subject: str, effect: str, population: str, 
                                    template_type: str, verb: str = None) -> str:
         """
-        Genera una consulta en formato MeSH SIMPLE que SÍ funciona en PubMed
-        Formato: ("Término1"[Mesh] AND "Término2"[Mesh] AND "Término3"[Subheading])
-        SIN paréntesis anidados, SIN operadores OR complejos
+        Genera una consulta en formato MeSH CORRECTO para PubMed
+        Formato correcto: 
+        - Para términos con subheading: "Término/subheading"[Mesh]
+        - Para términos sin subheading: "Término"[Mesh]
+        - Unir con AND
         """
         query_parts = []
         
@@ -654,32 +656,58 @@ class HypothesisAssistant:
                 if key in term_lower or term_lower in key:
                     return value
             
-            # Si no se encuentra, devolver None (no incluir en la consulta)
             return None
         
+        # Función para determinar si un término debe llevar subheading
+        def should_add_subheading(term_type: str, template_type: str, verb: str = None) -> bool:
+            if template_type == "prevencion" and term_type in ["subject", "effect"]:
+                return True
+            elif template_type == "riesgo" and term_type == "effect" and "mortalidad" in str(term).lower():
+                return True
+            elif template_type == "efectividad" and term_type == "subject":
+                return True
+            return False
+        
         # Obtener término para sujeto
-        subject_term = get_mesh_term(subject)
-        if subject_term:
-            query_parts.append(subject_term)
+        subject_term_base = get_mesh_term(subject)
+        if subject_term_base:
+            # Extraer el término sin los corchetes
+            subject_clean = subject_term_base.replace('"[Mesh]"', '').replace('"', '')
+            
+            # Añadir subheading si corresponde
+            if should_add_subheading("subject", template_type, verb):
+                subheading = self.subheadings.get("prevención" if template_type == "prevencion" else "tratamiento", "")
+                if subheading:
+                    subject_final = f'"{subject_clean}/{subheading}"[Mesh]'
+                else:
+                    subject_final = subject_term_base
+            else:
+                subject_final = subject_term_base
+            
+            query_parts.append(subject_final)
         
         # Obtener término para efecto
-        effect_term = get_mesh_term(effect)
-        if effect_term:
-            query_parts.append(effect_term)
+        effect_term_base = get_mesh_term(effect)
+        if effect_term_base:
+            # Extraer el término sin los corchetes
+            effect_clean = effect_term_base.replace('"[Mesh]"', '').replace('"', '')
+            
+            # Añadir subheading si corresponde
+            if should_add_subheading("effect", template_type, verb):
+                subheading = self.subheadings.get("prevención" if template_type == "prevencion" else "mortalidad", "")
+                if subheading:
+                    effect_final = f'"{effect_clean}/{subheading}"[Mesh]'
+                else:
+                    effect_final = effect_term_base
+            else:
+                effect_final = effect_term_base
+            
+            query_parts.append(effect_final)
         
         # Obtener término para población
         pop_term = get_mesh_term(population)
         if pop_term:
             query_parts.append(pop_term)
-        
-        # Añadir subheading según el tipo de relación
-        if template_type == "prevencion":
-            query_parts.append('"prevention and control"[Subheading]')
-        elif template_type == "riesgo" and effect_term and 'Mortality' in effect_term:
-            # Si es riesgo y el efecto es mortalidad, añadir subheading de mortalidad
-            query_parts.append('"mortality"[Subheading]')
-        elif template_type == "efectividad":
-            query_parts.append('"therapy"[Subheading]')
         
         # Si no hay partes en la consulta, usar una consulta por defecto
         if not query_parts:
@@ -693,13 +721,13 @@ class HypothesisAssistant:
         with st.expander("🤖 ASISTENTE DE CONJETURAS - Ayuda a construir tu hipótesis", expanded=False):
             st.markdown('<div class="assistant-box">', unsafe_allow_html=True)
             st.markdown("### 🎯 Construye tu conjetura científica")
-            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada y su consulta MeSH en formato SIMPLE (el que funciona en PubMed):")
+            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada y su consulta MeSH en formato CORRECTO:")
             
-            # Mostrar ejemplo del formato que funciona
+            # Mostrar ejemplo del formato correcto
             st.markdown("""
             <div class="query-example">
-            <b>✅ FORMATO QUE FUNCIONA:</b><br>
-            ("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])
+            <b>✅ FORMATO CORRECTO PARA PubMed:</b><br>
+            ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])
             </div>
             """, unsafe_allow_html=True)
             
@@ -807,7 +835,7 @@ class HypothesisAssistant:
                     
                     # Mostrar la consulta MeSH generada
                     st.markdown("---")
-                    st.markdown("**🔍 Consulta MeSH para PubMed (formato SIMPLE que funciona):**")
+                    st.markdown("**🔍 Consulta MeSH para PubMed (formato CORRECTO):**")
                     st.markdown(f'<div class="mesh-query">{hypothesis_data["mesh_query"]}</div>', unsafe_allow_html=True)
                     
                     # Botón para usar la consulta MeSH
@@ -828,7 +856,7 @@ class HypothesisAssistant:
                     st.markdown("### 📋 Ejemplo cargado:")
                     st.info(f"**Hipótesis:** {example['hypothesis']}")
                     
-                    st.markdown("**🔍 Consulta MeSH (formato SIMPLE que funciona):**")
+                    st.markdown("**🔍 Consulta MeSH (formato CORRECTO):**")
                     st.markdown(f'<div class="mesh-query">{example["mesh_query"]}</div>', unsafe_allow_html=True)
                     
                     col1, col2, col3 = st.columns(3)
@@ -868,15 +896,13 @@ class HypothesisAssistant:
             4. **Considera la dirección**: ¿Es causalidad, asociación, riesgo o protección?
             5. **Población relevante**: Especifica edad, condición, contexto cuando sea relevante
             
-            **📊 FORMATO MeSH QUE FUNCIONA:**
-            - Usa SOLO términos MeSH: `"Término"[Mesh]`
-            - Usa SOLO subheadings: `"prevention and control"[Subheading]`
-            - SIN operadores OR complejos
-            - SIN paréntesis anidados
-            - Formato simple: `("Término1"[Mesh] AND "Término2"[Mesh] AND "Término3"[Subheading])`
+            **📊 FORMATO MeSH CORRECTO:**
+            - Para términos con subheading: `"Término/subheading"[Mesh]`
+            - Para términos sin subheading: `"Término"[Mesh]`
+            - Unir con AND
             
-            **✅ EJEMPLO QUE FUNCIONA:**<br>
-            `("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])`
+            **✅ EJEMPLO CORRECTO:**<br>
+            `("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])`
             """, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
     
@@ -1585,6 +1611,16 @@ class ScientificSearchEngine:
     def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
         query = ' '.join(query.split())
         
+        # Manejar el formato correcto con subheadings
+        mesh_with_subheading_pattern = r'"([^/]+)/([^"]+)"\[Mesh\]'
+        
+        def replace_mesh_with_subheading(match):
+            term = match.group(1).strip()
+            subheading = match.group(2).strip()
+            return f'"{term}"[Mesh] AND "{term}/{subheading}"[Mesh]'
+        
+        query = re.sub(mesh_with_subheading_pattern, replace_mesh_with_subheading, query)
+        
         mesh_pattern = r'"([^"]+)"\[Mesh\]'
         
         def replace_mesh(match):
@@ -1600,7 +1636,6 @@ class ScientificSearchEngine:
             '[Journal]': '[ta]',
             '[Date - Publication]': '[dp]',
             '[MeSH Major Topic]': '[majr]',
-            '[MeSH Subheading]': '[sh]'
         }
         
         for old, new in field_mappings.items():
@@ -2590,9 +2625,9 @@ def main():
         
         st.markdown("### 📋 Ejemplos")
         
-        # EJEMPLOS OPTIMIZADOS (ELIMINADO ALCOHOLISMO)
+        # EJEMPLOS OPTIMIZADOS CON FORMATO CORRECTO
         if st.button("Cargar ejemplo: Ticagrelor y disnea"):
-            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
+            st.session_state['query'] = '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
             st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
             st.rerun()
         
@@ -2602,7 +2637,7 @@ def main():
             st.rerun()
         
         if st.button("Cargar ejemplo: Ejercicio y diabetes"):
-            st.session_state['query'] = '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
+            st.session_state['query'] = '("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
             st.session_state['hypothesis'] = "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso"
             st.rerun()
     
@@ -2611,12 +2646,12 @@ def main():
     
     with col1:
         search_query = st.text_area(
-            "🔍 Consulta de búsqueda (formato MeSH SIMPLE que funciona):",
+            "🔍 Consulta de búsqueda (formato MeSH CORRECTO):",
             value=st.session_state['query'],
             height=120,
-            placeholder='Ej: ("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])',
+            placeholder='Ej: ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])',
             key="query_input",
-            help="Formato MeSH simple: Use [Mesh] para términos controlados y [Subheading] para subencabezados. SIN operadores OR complejos."
+            help="Formato MeSH correcto: Use [Mesh] con subheading pegado al término: 'Término/subheading'[Mesh]"
         )
         if search_query != st.session_state['query']:
             st.session_state['query'] = search_query
@@ -2944,7 +2979,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v7.0 | FORMATO MeSH SIMPLE • 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v7.1 | FORMATO MeSH CORRECTO • 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
