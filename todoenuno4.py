@@ -10,7 +10,7 @@ CORRECCIONES CRÍTICAS:
 7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
 8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
 9. NUEVO: Visualización de TODOS los artículos que corroboran fuertemente la hipótesis
-10. CORREGIDO: Asistente de conjeturas - Ahora genera consultas en formato MeSH
+10. CORREGIDO: Asistente de conjeturas - Ahora genera consultas en formato MeSH simple (formato que funciona)
 """
 
 import streamlit as st
@@ -320,6 +320,15 @@ st.markdown("""
         border-radius: 5px;
         font-family: 'Courier New', monospace;
         margin: 0.5rem 0;
+        border-left: 5px solid #4CAF50;
+    }
+    .query-example {
+        background-color: #e8f5e9;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        border-left: 5px solid #4CAF50;
+        margin: 0.5rem 0;
+        font-family: monospace;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -385,7 +394,7 @@ class TranslationManager:
             return text
 
 # ============================================================================
-# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN CORREGIDA CON FORMATO MeSH
+# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN SIMPLIFICADA
 # ============================================================================
 
 class HypothesisAssistant:
@@ -430,66 +439,76 @@ class HypothesisAssistant:
             }
         }
         
-        # Mapeo de términos comunes a MeSH
+        # MAPA DE TÉRMINOS MeSH - SOLO FORMATO QUE FUNCIONA
         self.mesh_terms_map = {
             # Sujetos/Intervenciones
-            "ticagrelor": "Ticagrelor",
-            "ejercicio": "Exercise",
-            "ejercicio físico": "Exercise",
-            "physical activity": "Exercise",
-            "exercise": "Exercise",
-            "ruptura cardiaca": "Heart Rupture, Post-Infarction",
-            "ruptura cardíaca": "Heart Rupture, Post-Infarction",
-            "cardiac rupture": "Heart Rupture, Post-Infarction",
-            "infarto": "Myocardial Infarction",
-            "infarto de miocardio": "Myocardial Infarction",
-            "myocardial infarction": "Myocardial Infarction",
-            "diabetes": "Diabetes Mellitus, Type 2",
-            "diabetes tipo 2": "Diabetes Mellitus, Type 2",
-            "type 2 diabetes": "Diabetes Mellitus, Type 2",
-            "sobrepeso": "Overweight",
-            "overweight": "Overweight",
-            "obesidad": "Obesity",
-            "obesity": "Obesity",
-            "cardiopatía": "Heart Diseases",
-            "cardiopatía isquémica": "Myocardial Ischemia",
-            "myocardial ischemia": "Myocardial Ischemia",
+            "ticagrelor": '"Ticagrelor"[Mesh]',
+            "ejercicio": '"Exercise"[Mesh]',
+            "ejercicio físico": '"Exercise"[Mesh]',
+            "physical activity": '"Exercise"[Mesh]',
+            "exercise": '"Exercise"[Mesh]',
+            "ruptura cardiaca": '"Heart Rupture, Post-Infarction"[Mesh]',
+            "ruptura cardíaca": '"Heart Rupture, Post-Infarction"[Mesh]',
+            "cardiac rupture": '"Heart Rupture, Post-Infarction"[Mesh]',
+            "infarto": '"Myocardial Infarction"[Mesh]',
+            "infarto de miocardio": '"Myocardial Infarction"[Mesh]',
+            "myocardial infarction": '"Myocardial Infarction"[Mesh]',
+            "diabetes": '"Diabetes Mellitus, Type 2"[Mesh]',
+            "diabetes tipo 2": '"Diabetes Mellitus, Type 2"[Mesh]',
+            "type 2 diabetes": '"Diabetes Mellitus, Type 2"[Mesh]',
+            "alcoholismo": '"Alcoholism"[Mesh]',
+            "alcoholism": '"Alcoholism"[Mesh]',
+            "alcohol": '"Alcohol Drinking"[Mesh]',
+            "sobrepeso": '"Overweight"[Mesh]',
+            "overweight": '"Overweight"[Mesh]',
+            "obesidad": '"Obesity"[Mesh]',
+            "obesity": '"Obesity"[Mesh]',
+            "cardiopatía": '"Heart Diseases"[Mesh]',
+            "cardiopatía isquémica": '"Myocardial Ischemia"[Mesh]',
+            "myocardial ischemia": '"Myocardial Ischemia"[Mesh]',
             
             # Efectos/Desenlaces
-            "disnea": "Dyspnea",
-            "dyspnea": "Dyspnea",
-            "mortalidad": "Mortality",
-            "mortality": "Mortality",
-            "incidencia": "Incidence",
-            "incidence": "Incidence",
-            "prevención": "Prevention",
-            "prevention": "Prevention",
-            "efecto secundario": "Drug-Related Side Effects and Adverse Reactions",
-            "adverse effects": "Drug-Related Side Effects and Adverse Reactions",
-            "patrones anatómicos": "anatomical patterns[Title/Abstract]",
-            "anatomical patterns": "anatomical patterns[Title/Abstract]",
-            "disección": "dissection[Title/Abstract]",
-            "hematoma": "hematoma[Title/Abstract]",
-            "hematoma intramiocárdico": "intramyocardial hematoma[Title/Abstract]",
-            "intramyocardial hematoma": "intramyocardial hematoma[Title/Abstract]"
+            "disnea": '"Dyspnea"[Mesh]',
+            "dyspnea": '"Dyspnea"[Mesh]',
+            "mortalidad": '"Mortality"[Mesh]',
+            "mortality": '"Mortality"[Mesh]',
+            "muerte": '"Mortality"[Mesh]',
+            "death": '"Mortality"[Mesh]',
+            "incidencia": '"Incidence"[Mesh]',
+            "incidence": '"Incidence"[Mesh]',
+            "efecto secundario": '"Drug-Related Side Effects and Adverse Reactions"[Mesh]',
+            "adverse effects": '"Drug-Related Side Effects and Adverse Reactions"[Mesh]',
+            
+            # Población
+            "adultos": '"Adult"[Mesh]',
+            "adult": '"Adult"[Mesh]',
+            "adults": '"Adult"[Mesh]',
+            "niños": '"Child"[Mesh]',
+            "children": '"Child"[Mesh]',
+            "mayores": '"Aged"[Mesh]',
+            "aged": '"Aged"[Mesh]',
+            "ancianos": '"Aged"[Mesh]'
         }
         
-        # Subheadings comunes
+        # SUBHEADINGS - FORMATO QUE FUNCIONA
         self.subheadings = {
-            "prevención": "prevention and control",
-            "prevention": "prevention and control",
-            "tratamiento": "therapy",
-            "therapy": "therapy",
-            "diagnóstico": "diagnosis",
-            "diagnosis": "diagnosis",
-            "epidemiología": "epidemiology",
-            "epidemiology": "epidemiology",
-            "efectos adversos": "adverse effects",
-            "adverse effects": "adverse effects",
-            "fisiopatología": "physiopathology",
-            "physiopathology": "physiopathology"
+            "prevención": '"prevention and control"[Subheading]',
+            "prevention": '"prevention and control"[Subheading]',
+            "tratamiento": '"therapy"[Subheading]',
+            "therapy": '"therapy"[Subheading]',
+            "diagnóstico": '"diagnosis"[Subheading]',
+            "diagnosis": '"diagnosis"[Subheading]',
+            "epidemiología": '"epidemiology"[Subheading]',
+            "epidemiology": '"epidemiology"[Subheading]',
+            "efectos adversos": '"adverse effects"[Subheading]',
+            "adverse effects": '"adverse effects"[Subheading]',
+            "fisiopatología": '"physiopathology"[Subheading]',
+            "physiopathology": '"physiopathology"[Subheading]',
+            "mortalidad": '"mortality"[Subheading]',
+            "mortality": '"mortality"[Subheading]'
         }
         
+        # EJEMPLOS CON FORMATO QUE FUNCIONA
         self.examples = [
             {
                 "name": "Ticagrelor y disnea",
@@ -509,7 +528,7 @@ class HypothesisAssistant:
                 "tipo": "asociacion",
                 "verbo": "sigue",
                 "hypothesis": "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)",
-                "mesh_query": '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh] AND (pattern[Title/Abstract] OR patterns[Title/Abstract] OR anatomical[Title/Abstract] OR "left ventricular"[Title/Abstract] OR septal[Title/Abstract] OR "free wall"[Title/Abstract] OR dissection[Title/Abstract] OR hematoma[Title/Abstract]))'
+                "mesh_query": '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh])'
             },
             {
                 "name": "Ejercicio y diabetes",
@@ -519,7 +538,27 @@ class HypothesisAssistant:
                 "tipo": "prevencion",
                 "verbo": "reduce la incidencia de",
                 "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso",
-                "mesh_query": '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading])'
+                "mesh_query": '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
+            },
+            {
+                "name": "Alcoholismo y mortalidad en adultos",
+                "sujeto": "alcoholismo",
+                "efecto": "mortalidad",
+                "poblacion": "adultos",
+                "tipo": "riesgo",
+                "verbo": "aumenta el riesgo de",
+                "hypothesis": "El alcoholismo aumenta el riesgo de mortalidad en adultos",
+                "mesh_query": '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
+            },
+            {
+                "name": "Alcohol y mortalidad",
+                "sujeto": "alcohol",
+                "efecto": "mortalidad",
+                "poblacion": "adultos",
+                "tipo": "riesgo",
+                "verbo": "aumenta el riesgo de",
+                "hypothesis": "El consumo de alcohol aumenta el riesgo de mortalidad en adultos",
+                "mesh_query": '("Alcohol Drinking"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
             }
         ]
     
@@ -559,7 +598,7 @@ class HypothesisAssistant:
                 poblacion=population
             )
         
-        # Traducir componentes individuales para la versión en inglés
+        # Traducir componentes individuales
         subject_en = self.translator.translate_to_english(subject)
         effect_en = self.translator.translate_to_english(effect)
         population_en = self.translator.translate_to_english(population)
@@ -597,11 +636,11 @@ class HypothesisAssistant:
                 population=population_en
             )
         
-        # También obtener traducción automática completa
+        # Traducción automática completa
         hypothesis_en = self.translator.translate_to_english(hypothesis_es)
         
-        # Generar consulta MeSH
-        mesh_query = self.generate_mesh_query(subject, effect, population, template_type, verb)
+        # Generar consulta MeSH en formato SIMPLE (el que funciona)
+        mesh_query = self.generate_simple_mesh_query(subject, effect, population, template_type, verb)
         
         return {
             "es": hypothesis_es,
@@ -617,90 +656,102 @@ class HypothesisAssistant:
             "verb_en": verb_en
         }
     
-    def generate_mesh_query(self, subject: str, effect: str, population: str, 
-                           template_type: str, verb: str = None) -> str:
+    def generate_simple_mesh_query(self, subject: str, effect: str, population: str, 
+                                   template_type: str, verb: str = None) -> str:
         """
-        Genera una consulta en formato MeSH para PubMed
+        Genera una consulta en formato MeSH SIMPLE que SÍ funciona en PubMed
+        Formato: ("Término1"[Mesh] AND "Término2"[Mesh] AND "Término3"[Subheading])
+        SIN paréntesis anidados, SIN operadores OR complejos
         """
-        # Función auxiliar para obtener término MeSH
-        def get_mesh_term(term: str, field: str = "Mesh") -> str:
-            term_lower = term.lower().strip()
-            
-            # Buscar en el mapa de términos MeSH
-            for key, value in self.mesh_terms_map.items():
-                if key in term_lower or term_lower in key:
-                    if "[Title/Abstract]" in value:
-                        return value
-                    else:
-                        return f'"{value}"[{field}]'
-            
-            # Si no se encuentra, usar búsqueda en título/abstract
-            words = term.split()
-            if len(words) > 2:
-                return f'"{term}"[Title/Abstract]'
-            else:
-                return f'"{term}"[Title/Abstract]'
-        
-        # Obtener términos MeSH
-        subject_mesh = get_mesh_term(subject)
-        effect_mesh = get_mesh_term(effect)
-        
-        # Manejar población especial
-        population_lower = population.lower()
-        if "sobrepeso" in population_lower or "overweight" in population_lower:
-            population_mesh = '"Overweight"[Mesh]'
-        elif "obesidad" in population_lower or "obesity" in population_lower:
-            population_mesh = '"Obesity"[Mesh]'
-        elif "adultos" in population_lower:
-            population_mesh = '"Adult"[Mesh]'
-        elif "niños" in population_lower or "children" in population_lower:
-            population_mesh = '"Child"[Mesh]'
-        else:
-            population_mesh = get_mesh_term(population)
-        
-        # Construir la consulta según el tipo
         query_parts = []
         
-        # Siempre incluir sujeto y efecto
-        query_parts.append(subject_mesh)
-        query_parts.append(effect_mesh)
+        # Función para obtener término MeSH
+        def get_mesh_term(term: str) -> Optional[str]:
+            if not term:
+                return None
+                
+            term_lower = term.lower().strip()
+            
+            # Palabras a ignorar
+            ignore_words = ['pacientes', 'patients', 'personas', 'people', 'con', 'y', 'en', 'para', 'de', 'del', 'la', 'el', 'los', 'las']
+            
+            # Buscar coincidencia exacta o parcial en el mapa
+            for key, value in self.mesh_terms_map.items():
+                if key in term_lower or term_lower in key:
+                    return value
+            
+            # Si no se encuentra, devolver None (no incluir en la consulta)
+            return None
         
-        # Añadir población si es relevante
-        if population and population.lower() not in ["pacientes", "patients", "personas", "people"]:
-            query_parts.append(population_mesh)
+        # Obtener término para sujeto
+        subject_term = get_mesh_term(subject)
+        if subject_term:
+            query_parts.append(subject_term)
         
-        # Añadir subheading si es relevante
+        # Obtener término para efecto
+        effect_term = get_mesh_term(effect)
+        if effect_term:
+            query_parts.append(effect_term)
+        
+        # Obtener término para población (solo si es específica)
+        pop_lower = population.lower()
+        if not any(word in pop_lower for word in ['pacientes', 'patients', 'personas', 'people', 'población', 'population']):
+            pop_term = get_mesh_term(population)
+            if pop_term:
+                query_parts.append(pop_term)
+        
+        # Añadir subheading según el tipo de relación
         if template_type == "prevencion":
-            for key, value in self.subheadings.items():
-                if key in verb.lower() if verb else False:
-                    query_parts.append(f'"{value}"[Subheading]')
-                    break
-            else:
+            # Buscar si el verbo contiene alguna palabra clave de prevención
+            has_prevention = False
+            if verb:
+                verb_lower = verb.lower()
+                for key in self.subheadings:
+                    if key in verb_lower:
+                        query_parts.append(self.subheadings[key])
+                        has_prevention = True
+                        break
+            
+            if not has_prevention:
                 query_parts.append('"prevention and control"[Subheading]')
         
-        elif template_type == "riesgo":
-            for term in ["riesgo", "risk"]:
-                if term in verb.lower() if verb else False:
-                    query_parts.append('"risk"[Title/Abstract]')
-                    break
+        elif template_type == "riesgo" or template_type == "causal":
+            # Para riesgo o causal, no añadimos subheading por defecto
+            # pero si el efecto es mortalidad, podemos añadir subheading de mortalidad
+            if effect_term and 'Mortality' in effect_term:
+                # Ya tenemos Mortality como Mesh, no necesitamos subheading
+                pass
         
         elif template_type == "efectividad":
-            for term in ["efectivo", "effective", "eficaz", "efficacy"]:
-                if term in verb.lower() if verb else False:
-                    query_parts.append('"treatment outcome"[Mesh]')
-                    break
+            # Para efectividad, añadimos subheading de tratamiento si es relevante
+            if verb:
+                verb_lower = verb.lower()
+                for key in self.subheadings:
+                    if key in verb_lower and key in ['tratamiento', 'therapy', 'efectivo', 'effective']:
+                        query_parts.append('"therapy"[Subheading]')
+                        break
         
-        # Unir con AND
+        # Si no hay partes en la consulta, usar una consulta por defecto
+        if not query_parts:
+            return '("research"[Title/Abstract])'
+        
+        # Unir con AND y envolver en paréntesis
         query = " AND ".join(query_parts)
-        
-        # Envolver en paréntesis
         return f"({query})"
     
     def render_assistant_ui(self):
         with st.expander("🤖 ASISTENTE DE CONJETURAS - Ayuda a construir tu hipótesis", expanded=False):
             st.markdown('<div class="assistant-box">', unsafe_allow_html=True)
             st.markdown("### 🎯 Construye tu conjetura científica")
-            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada y su consulta MeSH:")
+            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada y su consulta MeSH en formato SIMPLE (el que funciona en PubMed):")
+            
+            # Mostrar ejemplo del formato que funciona
+            st.markdown("""
+            <div class="query-example">
+            <b>✅ FORMATO QUE FUNCIONA:</b><br>
+            ("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])
+            </div>
+            """, unsafe_allow_html=True)
             
             col1, col2 = st.columns(2)
             
@@ -714,21 +765,21 @@ class HypothesisAssistant:
                 subject = st.text_input(
                     "🧪 Sujeto/Intervención:",
                     value=st.session_state.get('assistant_subject', ''),
-                    placeholder="Ej: ticagrelor, ejercicio, ruptura cardiaca",
+                    placeholder="Ej: ticagrelor, ejercicio, alcoholismo",
                     key="assistant_subject"
                 )
                 
                 effect = st.text_input(
                     "📊 Efecto/Desenlace:",
                     value=st.session_state.get('assistant_effect', ''),
-                    placeholder="Ej: disnea, diabetes tipo 2, patrones anatómicos",
+                    placeholder="Ej: disnea, mortalidad, diabetes tipo 2",
                     key="assistant_effect"
                 )
                 
                 population = st.text_input(
                     "👥 Población:",
                     value=st.session_state.get('assistant_population', ''),
-                    placeholder="Ej: pacientes con cardiopatía, adultos con sobrepeso",
+                    placeholder="Ej: adultos, pacientes con cardiopatía, niños",
                     key="assistant_population"
                 )
             
@@ -784,7 +835,6 @@ class HypothesisAssistant:
                         
                         # Botón para usar la hipótesis en español
                         if st.button("📌 Usar esta hipótesis", key="use_hypothesis_es", use_container_width=True):
-                            # Guardar en session state
                             st.session_state['hypothesis'] = hypothesis_data["es"]
                             st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
                             st.session_state['query'] = hypothesis_data["mesh_query"]
@@ -798,7 +848,6 @@ class HypothesisAssistant:
                         
                         # Botón para usar la versión en inglés
                         if st.button("📌 Usar esta versión (inglés)", key="use_hypothesis_en", use_container_width=True):
-                            # Guardar en session state
                             st.session_state['hypothesis'] = hypothesis_data["es"]
                             st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
                             st.session_state['query'] = hypothesis_data["mesh_query"]
@@ -808,7 +857,7 @@ class HypothesisAssistant:
                     
                     # Mostrar la consulta MeSH generada
                     st.markdown("---")
-                    st.markdown("**🔍 Consulta MeSH para PubMed:**")
+                    st.markdown("**🔍 Consulta MeSH para PubMed (formato SIMPLE que funciona):**")
                     st.markdown(f'<div class="mesh-query">{hypothesis_data["mesh_query"]}</div>', unsafe_allow_html=True)
                     
                     # Botón para usar la consulta MeSH
@@ -829,7 +878,7 @@ class HypothesisAssistant:
                     st.markdown("### 📋 Ejemplo cargado:")
                     st.info(f"**Hipótesis:** {example['hypothesis']}")
                     
-                    st.markdown("**🔍 Consulta MeSH:**")
+                    st.markdown("**🔍 Consulta MeSH (formato SIMPLE que funciona):**")
                     st.markdown(f'<div class="mesh-query">{example["mesh_query"]}</div>', unsafe_allow_html=True)
                     
                     col1, col2, col3 = st.columns(3)
@@ -869,11 +918,16 @@ class HypothesisAssistant:
             4. **Considera la dirección**: ¿Es causalidad, asociación, riesgo o protección?
             5. **Población relevante**: Especifica edad, condición, contexto cuando sea relevante
             
-            **📊 Formato MeSH generado:**
-            - Los términos principales se buscan como MeSH: `"Término"[Mesh]`
-            - Los subheadings se usan para aspectos específicos: `"prevention and control"[Subheading]`
-            - Búsqueda en título/abstract: `"término"[Title/Abstract]`
-            """)
+            **📊 FORMATO MeSH QUE FUNCIONA:**
+            - Usa SOLO términos MeSH: `"Término"[Mesh]`
+            - Usa SOLO subheadings: `"prevention and control"[Subheading]`
+            - SIN operadores OR complejos
+            - SIN paréntesis anidados
+            - Formato simple: `("Término1"[Mesh] AND "Término2"[Mesh] AND "Término3"[Subheading])`
+            
+            **✅ EJEMPLO QUE FUNCIONA:**<br>
+            `("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])`
+            """, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
     
     def translate_hypothesis_for_search(self, hypothesis_es: str) -> str:
@@ -1006,11 +1060,7 @@ class AdvancedSemanticVerifier:
             'case report': ['case report']
         }
         
-        # ====================================================================
-        # TÉRMINOS MÉDICOS POR DOMINIO (MULTIDISCIPLINARIO)
-        # ====================================================================
-        
-        # Cardiología (tu ejemplo de ruptura cardiaca)
+        # Términos médicos por dominio
         self.cardiac_terms = [
             'intramyocardial', 'dissection', 'hematoma', 'rupture', 'cardiac',
             'postinfarction', 'myocardial', 'infarction', 'free wall', 'septal',
@@ -1024,7 +1074,6 @@ class AdvancedSemanticVerifier:
             'hemopericardium', 'pseudoaneurysm', 'true aneurysm'
         ]
         
-        # Farmacología (ticagrelor y disnea)
         self.pharmacology_terms = [
             'ticagrelor', 'dyspnea', 'breathlessness', 'shortness of breath',
             'adverse effect', 'side effect', 'adverse event', 'myocardial ischemia',
@@ -1035,7 +1084,6 @@ class AdvancedSemanticVerifier:
             'percutaneous coronary intervention', 'pci', 'stent', 'thrombosis'
         ]
         
-        # Metabolismo/Endocrinología (ejercicio y diabetes)
         self.metabolism_terms = [
             'exercise', 'physical activity', 'aerobic', 'resistance training',
             'diabetes', 'type 2 diabetes', 't2dm', 'type 2 diabetes mellitus',
@@ -1048,7 +1096,13 @@ class AdvancedSemanticVerifier:
             'sedentary', 'physical inactivity', 'cardiovascular disease', 'cvd'
         ]
         
-        # Términos generales de investigación
+        self.addiction_terms = [
+            'alcoholism', 'alcohol dependence', 'alcohol use disorder', 'alcohol abuse',
+            'substance abuse', 'substance use disorder', 'addiction', 'dependence',
+            'withdrawal', 'craving', 'relapse', 'abstinence', 'detoxification',
+            'alcohol drinking', 'alcohol consumption'
+        ]
+        
         self.general_terms = [
             'study', 'trial', 'cohort', 'analysis', 'meta-analysis',
             'systematic review', 'randomized', 'controlled', 'prospective',
@@ -1059,9 +1113,8 @@ class AdvancedSemanticVerifier:
             'adjusted', 'confounding', 'bias', 'limitation', 'conclusion'
         ]
         
-        # Mapa de términos español-inglés (ampliado)
+        # Mapa de términos español-inglés
         self.medical_terms_map = {
-            # Cardiología
             'disección': 'dissection',
             'hematoma': 'hematoma',
             'intramiocárdica': 'intramyocardial',
@@ -1086,8 +1139,6 @@ class AdvancedSemanticVerifier:
             'complejo': 'complex',
             'aneurisma': 'aneurysm',
             'seudoaneurisma': 'pseudoaneurysm',
-            
-            # Farmacología
             'disnea': 'dyspnea',
             'falta de aire': 'shortness of breath',
             'efecto secundario': 'side effect',
@@ -1098,8 +1149,6 @@ class AdvancedSemanticVerifier:
             'antiagregante': 'antiplatelet',
             'sangrado': 'bleeding',
             'hemorragia': 'hemorrhage',
-            
-            # Metabolismo
             'ejercicio': 'exercise',
             'actividad física': 'physical activity',
             'diabetes': 'diabetes',
@@ -1112,26 +1161,33 @@ class AdvancedSemanticVerifier:
             'prevención': 'prevention',
             'incidencia': 'incidence',
             'riesgo': 'risk',
-            'reducción': 'reduction'
+            'reducción': 'reduction',
+            'alcoholismo': 'alcoholism',
+            'alcohol': 'alcohol',
+            'dependencia al alcohol': 'alcohol dependence',
+            'abuso de alcohol': 'alcohol abuse',
+            'adicción': 'addiction',
+            'mortalidad': 'mortality',
+            'muerte': 'death',
+            'adultos': 'adults',
+            'niños': 'children',
+            'mayores': 'aged',
+            'ancianos': 'aged'
         }
         
         self.UMBRAL_RELEVANCIA = 0.05
         
-        # Combinar todos los términos para búsqueda general
         self.all_medical_terms = list(set(
             self.cardiac_terms + 
             self.pharmacology_terms + 
             self.metabolism_terms + 
+            self.addiction_terms +
             self.general_terms
         ))
     
     def detect_domain(self, hypothesis: str) -> str:
-        """
-        Detecta automáticamente el dominio de la hipótesis
-        """
         hypo_lower = hypothesis.lower()
         
-        # Palabras clave para cada dominio
         cardiac_keywords = ['ruptura', 'cardíaca', 'cardiaca', 'infarto', 'miocárdico', 
                            'corazón', 'ventrículo', 'disección', 'hematoma', 'cardiac', 
                            'myocardial', 'infarction', 'rupture', 'intramyocardial']
@@ -1143,16 +1199,19 @@ class AdvancedSemanticVerifier:
                               'exercise', 'diabetes', 'obesity', 'overweight', 'glucose',
                               'metabolic', 'insulin', 'weight loss']
         
-        # Contar coincidencias
+        addiction_keywords = ['alcoholismo', 'alcohol', 'adicción', 'dependencia', 'abuso',
+                             'alcoholism', 'addiction', 'dependence', 'abuse', 'substance']
+        
         cardiac_score = sum(1 for kw in cardiac_keywords if kw in hypo_lower)
         pharmacology_score = sum(1 for kw in pharmacology_keywords if kw in hypo_lower)
         metabolism_score = sum(1 for kw in metabolism_keywords if kw in hypo_lower)
+        addiction_score = sum(1 for kw in addiction_keywords if kw in hypo_lower)
         
-        # Determinar dominio dominante
         scores = {
             'cardiac': cardiac_score,
             'pharmacology': pharmacology_score,
-            'metabolism': metabolism_score
+            'metabolism': metabolism_score,
+            'addiction': addiction_score
         }
         
         max_domain = max(scores, key=scores.get)
@@ -1174,13 +1233,9 @@ class AdvancedSemanticVerifier:
         return 'unknown'
     
     def extract_key_terms(self, hypothesis: str) -> List[str]:
-        """
-        Versión multidisciplinaria con términos médicos de múltiples dominios
-        """
         hypothesis_lower = hypothesis.lower()
         all_terms = []
         
-        # 1. Extraer frases entre comillas
         quoted_phrases = re.findall(r'"([^"]*)"', hypothesis_lower)
         for phrase in quoted_phrases:
             if len(phrase) > 3:
@@ -1189,18 +1244,15 @@ class AdvancedSemanticVerifier:
                     if len(word) > 3:
                         all_terms.append(word)
         
-        # 2. Extraer palabras individuales significativas
         words = re.findall(r'\b[a-zA-Záéíóúñü]+\b', hypothesis_lower)
         for word in words:
             if len(word) > 3 and word not in self.stop_words_es and word not in self.stop_words_en:
                 all_terms.append(word)
         
-        # 3. Añadir términos del mapa español-inglés
         for es_term, en_term in self.medical_terms_map.items():
             if es_term in hypothesis_lower and en_term not in all_terms:
                 all_terms.append(en_term)
         
-        # 4. Detectar dominio y añadir términos específicos
         domain = self.detect_domain(hypothesis)
         
         if domain == 'cardiac':
@@ -1209,8 +1261,9 @@ class AdvancedSemanticVerifier:
             all_terms.extend(self.pharmacology_terms)
         elif domain == 'metabolism':
             all_terms.extend(self.metabolism_terms)
+        elif domain == 'addiction':
+            all_terms.extend(self.addiction_terms)
         
-        # 5. Añadir términos generales siempre
         all_terms.extend(self.general_terms)
         
         return list(set(all_terms))
@@ -1297,36 +1350,26 @@ class AdvancedSemanticVerifier:
         }
     
     def calculate_relevance(self, sentence: str, hypothesis_terms: List[str], domain: str = 'general') -> float:
-        """
-        Versión mejorada con pesos específicos por dominio
-        """
         if not hypothesis_terms:
             return 0.0
         
         sentence_lower = sentence.lower()
         
-        # Puntuación base por términos médicos generales
         score = 0.0
         terms_found = []
         
-        # Buscar en todos los términos médicos
         for term in self.all_medical_terms:
             if term in sentence_lower:
-                if len(term.split()) > 1:  # Frases completas pesan más
+                if len(term.split()) > 1:
                     score += 0.15
                 else:
                     score += 0.08
                 terms_found.append(term)
         
-        # ====================================================================
-        # BONUS ESPECÍFICOS POR DOMINIO
-        # ====================================================================
-        
-        # DOMINIO CARDIOLOGÍA (ruptura cardiaca)
         if domain == 'cardiac':
             if 'intramyocardial' in sentence_lower:
                 if 'dissection' in sentence_lower or 'hematoma' in sentence_lower:
-                    score += 0.5  # Evidencia fuerte de tu hipótesis principal
+                    score += 0.5
                 else:
                     score += 0.2
             
@@ -1346,12 +1389,11 @@ class AdvancedSemanticVerifier:
             if 'pseudoaneurysm' in sentence_lower or 'false aneurysm' in sentence_lower:
                 score += 0.35
         
-        # DOMINIO FARMACOLOGÍA (ticagrelor y disnea)
         elif domain == 'pharmacology':
             if 'ticagrelor' in sentence_lower:
                 score += 0.3
                 if 'dyspnea' in sentence_lower or 'breath' in sentence_lower:
-                    score += 0.5  # Relación directa ticagrelor-disnea
+                    score += 0.5
                 elif 'adverse' in sentence_lower or 'side effect' in sentence_lower:
                     score += 0.3
             
@@ -1363,12 +1405,11 @@ class AdvancedSemanticVerifier:
             if 'myocardial ischemia' in sentence_lower or 'acute coronary syndrome' in sentence_lower:
                 score += 0.2
         
-        # DOMINIO METABOLISMO (ejercicio y diabetes)
         elif domain == 'metabolism':
             if 'exercise' in sentence_lower or 'physical activity' in sentence_lower:
                 score += 0.3
                 if 'diabetes' in sentence_lower or 'type 2 diabetes' in sentence_lower:
-                    score += 0.5  # Relación directa ejercicio-diabetes
+                    score += 0.5
                 elif 'glucose' in sentence_lower or 'hba1c' in sentence_lower:
                     score += 0.35
                 elif 'weight loss' in sentence_lower or 'obesity' in sentence_lower:
@@ -1384,7 +1425,22 @@ class AdvancedSemanticVerifier:
             if 'insulin resistance' in sentence_lower or 'metabolic syndrome' in sentence_lower:
                 score += 0.3
         
-        # Bonus por calidad de estudio (aplica a todos los dominios)
+        elif domain == 'addiction':
+            if 'alcoholism' in sentence_lower or 'alcohol dependence' in sentence_lower:
+                score += 0.4
+                if 'mortality' in sentence_lower or 'death' in sentence_lower:
+                    score += 0.5
+                elif 'risk' in sentence_lower:
+                    score += 0.3
+            
+            if 'mortality' in sentence_lower:
+                score += 0.3
+                if 'alcohol' in sentence_lower:
+                    score += 0.4
+            
+            if 'adult' in sentence_lower:
+                score += 0.2
+        
         study_indicators = ['randomized', 'controlled trial', 'cohort', 'meta-analysis', 
                            'systematic review', 'prospective']
         for indicator in study_indicators:
@@ -1411,12 +1467,10 @@ class AdvancedSemanticVerifier:
                 'verdict': None
             }
         
-        # Detectar dominio de la hipótesis
         domain = self.detect_domain(hypothesis)
         
         hypothesis_terms = self.extract_key_terms(hypothesis)
         
-        # DIAGNÓSTICO EN MODO DEPURACIÓN
         if st.session_state.get('debug_mode', False):
             st.write(f"📋 Dominio detectado: **{domain}**")
             st.write(f"📋 Términos de búsqueda (primeros 15): {hypothesis_terms[:15]}")
@@ -1445,7 +1499,6 @@ class AdvancedSemanticVerifier:
             
             relevance = self.calculate_relevance(sentence, hypothesis_terms, domain)
             
-            # DIAGNÓSTICO EN MODO DEPURACIÓN (solo para oraciones con cierta relevancia)
             if relevance > 0.1 and st.session_state.get('debug_mode', False):
                 st.write(f"   🔍 Relevancia: {relevance:.2f} - {sentence[:150]}...")
             
@@ -1576,7 +1629,7 @@ class AdvancedSemanticVerifier:
         }
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA - VERSIÓN ESTABLE (SOLO 4 BASES)
+# MOTOR DE BÚSQUEDA CIENTÍFICA
 # ============================================================================
 
 class ScientificSearchEngine:
@@ -2009,10 +2062,6 @@ class ScientificSearchEngine:
         
         return results[:max_results]
     
-    # ========================================================================
-    # FUNCIÓN PRINCIPAL DE BÚSQUEDA (SOLO BASES ESTABLES)
-    # ========================================================================
-    
     def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
         if selected_dbs is None:
@@ -2020,7 +2069,6 @@ class ScientificSearchEngine:
         
         all_results = []
         
-        # Diccionario actualizado con SOLO las bases estables
         search_functions = {
             'PubMed': self.search_pubmed_advanced,
             'CrossRef': self.search_crossref,
@@ -2189,16 +2237,13 @@ class IntegratedScientificVerifier:
         total_articles = len(articles_df)
         
         # IMPORTANTE: La hipótesis para análisis debe estar en inglés
-        # Si la hipótesis tiene caracteres españoles, traducirla
         if any(c in hypothesis for c in 'áéíóúñ'):
             hypothesis_en = self.semantic_verifier.translator.translate_to_english(hypothesis)
             if st.session_state.get('debug_mode', False):
                 st.write(f"🌐 Hipótesis traducida a inglés: {hypothesis_en[:100]}...")
         else:
-            # Si ya está en inglés, usarla directamente
             hypothesis_en = hypothesis
         
-        # Detectar dominio para diagnóstico
         domain = self.semantic_verifier.detect_domain(hypothesis)
         if st.session_state.get('debug_mode', False):
             st.write(f"🎯 Dominio detectado: {domain}")
@@ -2238,7 +2283,6 @@ class IntegratedScientificVerifier:
             if article_text:
                 self.stats['with_text'] += 1
                 
-                # Usar la hipótesis en inglés para el análisis (ya traducida o proporcionada)
                 analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis_en)
                 
                 if analysis['success']:
@@ -2511,7 +2555,7 @@ def enviar_resultados_email(destinatario, integrator):
     )
 
 # ============================================================================
-# INTERFAZ PRINCIPAL DE STREAMLIT (VERSIÓN CORREGIDA CON PERSISTENCIA)
+# INTERFAZ PRINCIPAL DE STREAMLIT
 # ============================================================================
 
 def main():
@@ -2519,7 +2563,7 @@ def main():
     st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • VERSIÓN ESTABLE • MULTIDOMINIO • 4 BASES DE DATOS</p>', 
                 unsafe_allow_html=True)
     
-    # Inicializar session state con TODAS las variables necesarias
+    # Inicializar session state
     if 'query' not in st.session_state:
         st.session_state['query'] = ""
     if 'hypothesis' not in st.session_state:
@@ -2541,7 +2585,7 @@ def main():
     if 'assistant_population' not in st.session_state:
         st.session_state['assistant_population'] = ""
     
-    # NUEVAS VARIABLES PARA PERSISTENCIA
+    # Variables para persistencia
     if 'analysis_completed' not in st.session_state:
         st.session_state['analysis_completed'] = False
     if 'last_results_df' not in st.session_state:
@@ -2636,18 +2680,23 @@ def main():
         
         # EJEMPLOS OPTIMIZADOS
         if st.button("Cargar ejemplo: Ticagrelor y disnea"):
-            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)'
+            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
             st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
             st.rerun()
         
         if st.button("Cargar ejemplo: Ruptura cardiaca postinfarto"):
-            st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh] AND (pattern[Title/Abstract] OR patterns[Title/Abstract] OR anatomical[Title/Abstract] OR location[Title/Abstract] OR site[Title/Abstract] OR morphology[Title/Abstract] OR "left ventricular"[Title/Abstract] OR septal[Title/Abstract] OR free wall[Title/Abstract]))'
+            st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh])'
             st.session_state['hypothesis'] = "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)"
             st.rerun()
         
         if st.button("Cargar ejemplo: Ejercicio y diabetes"):
-            st.session_state['query'] = '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading])'
+            st.session_state['query'] = '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
             st.session_state['hypothesis'] = "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso"
+            st.rerun()
+        
+        if st.button("Cargar ejemplo: Alcoholismo y mortalidad"):
+            st.session_state['query'] = '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
+            st.session_state['hypothesis'] = "El alcoholismo aumenta el riesgo de mortalidad en adultos"
             st.rerun()
     
     # Área principal
@@ -2655,16 +2704,15 @@ def main():
     
     with col1:
         search_query = st.text_area(
-            "🔍 Consulta de búsqueda (formato MeSH):",
+            "🔍 Consulta de búsqueda (formato MeSH SIMPLE que funciona):",
             value=st.session_state['query'],
             height=120,
-            placeholder='Ej: ("Ticagrelor"[Mesh] AND "Myocardial Ischemia"[Mesh] AND "Dyspnea"[Mesh])',
+            placeholder='Ej: ("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])',
             key="query_input",
-            help="Formato MeSH: Use [Mesh] para términos controlados, [Title/Abstract] para búsqueda en texto libre"
+            help="Formato MeSH simple: Use [Mesh] para términos controlados y [Subheading] para subencabezados. SIN operadores OR complejos."
         )
         if search_query != st.session_state['query']:
             st.session_state['query'] = search_query
-            # Si cambia la consulta, reiniciar estado de análisis
             st.session_state['analysis_completed'] = False
     
     with col2:
@@ -2672,19 +2720,16 @@ def main():
             "🔬 Conjetura a verificar (español):",
             value=st.session_state['hypothesis'],
             height=68,
-            placeholder='Ej: El fármaco X causa efecto Y en pacientes con Z',
+            placeholder='Ej: El alcoholismo aumenta el riesgo de mortalidad en adultos',
             key="hypothesis_input"
         )
         
         if hypothesis_es != st.session_state.get('hypothesis', ''):
             st.session_state['hypothesis'] = hypothesis_es
             translator = TranslationManager()
-            # IMPORTANTE: Traducir automáticamente a inglés para el análisis semántico
             st.session_state['hypothesis_en'] = translator.translate_to_english(hypothesis_es)
-            # Si cambia la hipótesis, reiniciar estado de análisis
             st.session_state['analysis_completed'] = False
         
-        # Mostrar la versión en inglés para referencia
         if st.session_state.get('hypothesis_en'):
             st.markdown(f"**🇬🇧 Inglés (para análisis):**")
             st.info(st.session_state['hypothesis_en'][:150] + ('...' if len(st.session_state['hypothesis_en']) > 150 else ''))
@@ -2693,10 +2738,7 @@ def main():
     with col2:
         analyze_button = st.button("🚀 INICIAR ANÁLISIS INTEGRADO", type="primary", use_container_width=True)
     
-    # ============================================================================
-    # BLOQUE DE ANÁLISIS (SOLO SE EJECUTA CUANDO SE HACE CLIC EN EL BOTÓN)
-    # ============================================================================
-    
+    # BLOQUE DE ANÁLISIS
     if analyze_button and search_query and hypothesis_es:
         user_email = st.session_state.get('user_email', '')
         if not user_email or not validate_email(user_email):
@@ -2710,7 +2752,6 @@ def main():
                 integrator = IntegratedScientificVerifier(user_email)
                 integrator.semantic_verifier.UMBRAL_RELEVANCIA = min_relevance
                 
-                # Usar la versión en inglés guardada en session_state para el análisis
                 hypothesis_for_analysis = st.session_state.get('hypothesis_en', hypothesis_es)
                 
                 progress_container = st.container()
@@ -2737,7 +2778,7 @@ def main():
                 with st.spinner("Ejecutando análisis integrado..."):
                     results_df = integrator.run_analysis(
                         search_query, 
-                        hypothesis_for_analysis,  # Pasar la versión en inglés
+                        hypothesis_for_analysis,
                         max_results, 
                         selected_dbs, 
                         year_range,
@@ -2745,7 +2786,6 @@ def main():
                     )
                     elapsed_time = time.time() - start_time
                 
-                # GUARDAR TODO EN SESSION STATE PARA PERSISTENCIA
                 if not results_df.empty:
                     st.session_state['integrator'] = integrator
                     st.session_state['last_results_df'] = results_df.copy()
@@ -2753,15 +2793,11 @@ def main():
                     st.session_state['analysis_completed'] = True
                     st.session_state['elapsed_time'] = elapsed_time
                     
-                    # Forzar rerun para mostrar resultados
                     st.rerun()
                 else:
                     st.warning("😕 No se encontraron artículos. Prueba con otra consulta o amplía el rango de años.")
     
-    # ============================================================================
-    # BLOQUE DE VISUALIZACIÓN DE RESULTADOS (SIEMPRE SE MUESTRA SI HAY RESULTADOS)
-    # ============================================================================
-    
+    # BLOQUE DE VISUALIZACIÓN DE RESULTADOS
     if st.session_state.get('analysis_completed', False) and st.session_state.get('last_results_df') is not None:
         integrator = st.session_state['integrator']
         results_df = st.session_state['last_results_df']
@@ -2809,17 +2845,15 @@ def main():
             with col2:
                 analyzed_df = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']
                 if not analyzed_df.empty:
-                    # Crear categorías más específicas
                     verdict_counts = analyzed_df['veredicto'].value_counts().reset_index()
                     verdict_counts.columns = ['veredicto', 'count']
                     
-                    # Mapeo de colores específico para cada tipo de veredicto
                     color_map = {
-                        'CORROBORA FUERTEMENTE': '#2E7D32',  # Verde oscuro
-                        'CORROBORA': '#4CAF50',              # Verde medio
-                        'EVIDENCIA NO CONCLUYENTE': '#ff9800', # Naranja
-                        'CONTRADICE': '#f44336',              # Rojo
-                        'CONTRADICE FUERTEMENTE': '#b71c1c'    # Rojo oscuro
+                        'CORROBORA FUERTEMENTE': '#2E7D32',
+                        'CORROBORA': '#4CAF50',
+                        'EVIDENCIA NO CONCLUYENTE': '#ff9800',
+                        'CONTRADICE': '#f44336',
+                        'CONTRADICE FUERTEMENTE': '#b71c1c'
                     }
                     
                     fig = px.pie(
@@ -2854,10 +2888,7 @@ def main():
                 }
             )
             
-            # ========================================================================
-            # NUEVA SECCIÓN: TODOS LOS ARTÍCULOS QUE CORROBORAN FUERTEMENTE
-            # ========================================================================
-            
+            # SECCIÓN: ARTÍCULOS QUE CORROBORAN FUERTEMENTE
             strong_evidence_df = results_df[results_df['veredicto'] == 'CORROBORA FUERTEMENTE']
             
             if not strong_evidence_df.empty:
@@ -2867,12 +2898,10 @@ def main():
                 
                 st.markdown("""
                 <div style="background-color: #e8f5e8; padding: 1rem; border-radius: 10px; margin-bottom: 2rem;">
-                <p style="margin:0; color: #2E7D32;">📌 Estos artículos proporcionan la evidencia más sólida a favor de tu hipótesis, 
-                con alta confianza y fuerte respaldo en los resultados.</p>
+                <p style="margin:0; color: #2E7D32;">📌 Estos artículos proporcionan la evidencia más sólida a favor de tu hipótesis.</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Mostrar cada artículo con su detalle completo
                 for idx, row in strong_evidence_df.iterrows():
                     badge_class = get_badge_class(row['base_datos'])
                     
@@ -2976,7 +3005,6 @@ def main():
                         verdict_stats.columns = ['Veredicto', 'Cantidad']
                         verdict_stats.to_excel(writer, sheet_name='Por Veredicto', index=False)
                     
-                    # Añadir hoja con los artículos de evidencia fuerte
                     if not strong_evidence_df.empty:
                         strong_evidence_df.to_excel(writer, sheet_name='Evidencia Fuerte', index=False)
                 
@@ -2992,7 +3020,7 @@ def main():
     if st.session_state.get('analysis_completed', False) and st.session_state.get('integrator') is not None:
         st.markdown("---")
         st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
-        st.markdown('<div class="email-box">, unsafe_allow_html=True')
+        st.markdown('<div class="email-box">', unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -3009,9 +3037,9 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v6.5 | 4 BASES ESTABLES • Formato MeSH • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v7.0 | FORMATO MeSH SIMPLE • 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    main()    
+    main()
