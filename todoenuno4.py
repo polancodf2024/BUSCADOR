@@ -11,7 +11,7 @@ CORRECCIONES CRÍTICAS:
 8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
 9. NUEVO: Visualización de TODOS los artículos que corroboran fuertemente la hipótesis
 10. CORREGIDO: Asistente de conjeturas - Ahora transfiere correctamente al campo de búsqueda
-11. ELIMINADO: DOAJ y Semantic Scholar (bases inestables)
+11. CORREGIDO: Consulta de búsqueda - Ahora acepta y procesa correctamente la hipótesis escrita
 """
 
 import streamlit as st
@@ -550,28 +550,29 @@ class HypothesisAssistant:
         # Extraer términos clave
         words = hypothesis_en.split()
         
-        # Identificar términos médicos comunes
-        medical_terms = ['causes', 'increases', 'reduces', 'prevents', 'treats', 
-                        'associated', 'related', 'risk', 'factor', 'effective',
-                        'efficacy', 'safety', 'outcome', 'effect', 'impact']
-        
         # Palabras a excluir (artículos, preposiciones, etc.)
         stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 
-                     'by', 'of', 'and', 'or', 'but', 'is', 'are', 'was', 'were'}
+                     'by', 'of', 'and', 'or', 'but', 'is', 'are', 'was', 'were',
+                     'this', 'that', 'these', 'those', 'has', 'have', 'had'}
         
         # Construir consulta
         query_terms = []
         for word in words:
             word_lower = word.lower().strip('.,;:()[]{}')
             if word_lower not in stop_words and len(word_lower) > 2:
+                # Para PubMed, es mejor mantener términos médicos importantes
+                if word_lower in ['causes', 'increases', 'reduces', 'prevents', 'treats',
+                                 'associated', 'related', 'risk', 'factor', 'effective',
+                                 'efficacy', 'safety', 'outcome', 'effect', 'impact']:
+                    continue  # Excluir verbos comunes de la consulta
                 query_terms.append(word_lower)
         
         # Si hay muy pocos términos, usar la frase completa entre comillas
-        if len(query_terms) < 3:
+        if len(query_terms) < 2:
             return f'"{hypothesis_en}"'
         
-        # Construir consulta combinando términos
-        query = ' AND '.join(query_terms[:5])  # Limitar a 5 términos para evitar consultas demasiado largas
+        # Construir consulta combinando términos con AND
+        query = ' AND '.join(query_terms[:5])  # Limitar a 5 términos
         
         return query
     
@@ -2062,12 +2063,14 @@ class IntegratedScientificVerifier:
         results_list = []
         total_articles = len(articles_df)
         
-        # Detectar si la hipótesis está en español y traducirla
+        # IMPORTANTE: La hipótesis para análisis debe estar en inglés
+        # Si la hipótesis tiene caracteres españoles, traducirla
         if any(c in hypothesis for c in 'áéíóúñ'):
             hypothesis_en = self.semantic_verifier.translator.translate_to_english(hypothesis)
             if st.session_state.get('debug_mode', False):
                 st.write(f"🌐 Hipótesis traducida a inglés: {hypothesis_en[:100]}...")
         else:
+            # Si ya está en inglés, usarla directamente
             hypothesis_en = hypothesis
         
         # Detectar dominio para diagnóstico
@@ -2110,7 +2113,7 @@ class IntegratedScientificVerifier:
             if article_text:
                 self.stats['with_text'] += 1
                 
-                # Usar la hipótesis en inglés para el análisis
+                # Usar la hipótesis en inglés para el análisis (ya traducida o proporcionada)
                 analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis_en)
                 
                 if analysis['success']:
@@ -2508,7 +2511,7 @@ def main():
         
         # EJEMPLOS OPTIMIZADOS
         if st.button("Cargar ejemplo: Ticagrelor y disnea"):
-            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
+            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)'
             st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
             st.rerun()
         
@@ -2550,12 +2553,14 @@ def main():
         if hypothesis_es != st.session_state.get('hypothesis', ''):
             st.session_state['hypothesis'] = hypothesis_es
             translator = TranslationManager()
+            # IMPORTANTE: Traducir automáticamente a inglés para el análisis semántico
             st.session_state['hypothesis_en'] = translator.translate_to_english(hypothesis_es)
             # Si cambia la hipótesis, reiniciar estado de análisis
             st.session_state['analysis_completed'] = False
         
+        # Mostrar la versión en inglés para referencia
         if st.session_state.get('hypothesis_en'):
-            st.markdown(f"**🇬🇧 Inglés (para búsqueda):**")
+            st.markdown(f"**🇬🇧 Inglés (para análisis):**")
             st.info(st.session_state['hypothesis_en'][:150] + ('...' if len(st.session_state['hypothesis_en']) > 150 else ''))
     
     col1, col2, col3 = st.columns(3)
@@ -2579,6 +2584,7 @@ def main():
                 integrator = IntegratedScientificVerifier(user_email)
                 integrator.semantic_verifier.UMBRAL_RELEVANCIA = min_relevance
                 
+                # Usar la versión en inglés guardada en session_state para el análisis
                 hypothesis_for_analysis = st.session_state.get('hypothesis_en', hypothesis_es)
                 
                 progress_container = st.container()
@@ -2605,7 +2611,7 @@ def main():
                 with st.spinner("Ejecutando análisis integrado..."):
                     results_df = integrator.run_analysis(
                         search_query, 
-                        hypothesis_for_analysis, 
+                        hypothesis_for_analysis,  # Pasar la versión en inglés
                         max_results, 
                         selected_dbs, 
                         year_range,
@@ -2877,9 +2883,9 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v6.3 | 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v6.4 | 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    main()                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+    main()        
