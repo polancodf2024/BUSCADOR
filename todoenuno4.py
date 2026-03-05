@@ -10,6 +10,8 @@ CORRECCIONES CRÍTICAS:
 7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
 8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
 9. NUEVO: Integración completa con Semantic Scholar y DOAJ
+10. NUEVO: Visualización de TODOS los artículos que corroboran fuertemente la hipótesis
+11. CORRECCIÓN: Semantic Scholar y DOAJ respetan límite máximo de 100 artículos
 """
 
 import streamlit as st
@@ -191,6 +193,14 @@ st.markdown("""
         border-left: 5px solid #1E88E5;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
+    .result-card-strong {
+        background: linear-gradient(135deg, #f0f9f0, #e8f5e8);
+        border-left: 5px solid #4CAF50;
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 8px rgba(76, 175, 80, 0.2);
+    }
     .verdict-assert {
         background: linear-gradient(135deg, #4CAF50, #2E7D32);
         color: white;
@@ -303,6 +313,32 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
         font-size: 0.95rem;
+    }
+    .strong-evidence-title {
+        background: linear-gradient(135deg, #4CAF50, #2E7D32);
+        color: white;
+        padding: 0.8rem 1.5rem;
+        border-radius: 30px;
+        display: inline-block;
+        font-weight: bold;
+        margin-bottom: 1.5rem;
+        font-size: 1.3rem;
+    }
+    .counter-badge {
+        background-color: #ff9800;
+        color: white;
+        border-radius: 20px;
+        padding: 0.2rem 0.8rem;
+        font-size: 0.9rem;
+        margin-left: 1rem;
+    }
+    .limit-info {
+        background-color: #e3f2fd;
+        border-left: 5px solid #2196f3;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        margin: 0.5rem 0;
+        font-size: 0.9rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1428,13 +1464,13 @@ class ScientificSearchEngine:
         return query
     
     # ========================================================================
-    # NUEVA FUNCIÓN: BÚSQUEDA EN SEMANTIC SCHOLAR
+    # NUEVA FUNCIÓN: BÚSQUEDA EN SEMANTIC SCHOLAR (LÍMITE 100)
     # ========================================================================
     
     def search_semantic_scholar(self, query: str, max_results: int = 100, year_range: tuple = None) -> list:
         """
         Busca artículos en Semantic Scholar API
-        Documentación: https://www.semanticscholar.org/product/api
+        LÍMITE: Máximo 100 resultados por consulta (impuesto por la API)
         """
         results = []
         try:
@@ -1447,10 +1483,13 @@ class ScientificSearchEngine:
             # URL base de Semantic Scholar
             url = "https://api.semanticscholar.org/graph/v1/paper/search"
             
+            # Forzar límite máximo de 100 (límite de la API)
+            api_limit = min(100, max_results)
+            
             # Parámetros de la consulta
             params = {
                 'query': clean_query,
-                'limit': min(100, max_results),  # API permite máximo 100 por página
+                'limit': api_limit,  # Máximo 100 por la API
                 'fields': 'title,authors,year,abstract,venue,citationCount,referenceCount,openAccessPdf,externalIds,url,publicationTypes',
                 'sort': 'relevance'  # Ordenar por relevancia
             }
@@ -1465,7 +1504,7 @@ class ScientificSearchEngine:
                 headers['x-api-key'] = self.semantic_api_key
             
             if st.session_state.get('debug_mode', False):
-                st.write(f"🔍 Semantic Scholar query: {clean_query}")
+                st.write(f"🔍 Semantic Scholar query: {clean_query} (límite: {api_limit})")
             
             # Hacer la petición
             time.sleep(self.delay)
@@ -1476,7 +1515,7 @@ class ScientificSearchEngine:
                 total_results = data.get('total', 0)
                 
                 if st.session_state.get('debug_mode', False):
-                    st.write(f"📊 Semantic Scholar: {total_results} resultados encontrados")
+                    st.write(f"📊 Semantic Scholar: {total_results} resultados encontrados, mostrando {api_limit}")
                 
                 # Procesar cada artículo
                 for paper in data.get('data', []):
@@ -1520,7 +1559,7 @@ class ScientificSearchEngine:
                         'referencias': paper.get('referenceCount', 0)
                     })
                     
-                    if len(results) >= max_results:
+                    if len(results) >= api_limit:
                         break
             
             elif response.status_code == 429:
@@ -1532,15 +1571,16 @@ class ScientificSearchEngine:
         except Exception as e:
             st.warning(f"Error en Semantic Scholar: {str(e)}")
         
-        return results[:max_results]
+        return results[:api_limit]  # Garantizar que no exceda el límite
     
     # ========================================================================
-    # NUEVA FUNCIÓN: BÚSQUEDA EN DOAJ (Directory of Open Access Journals)
+    # NUEVA FUNCIÓN: BÚSQUEDA EN DOAJ (LÍMITE 100)
     # ========================================================================
     
     def search_doaj(self, query: str, max_results: int = 100, year_range: tuple = None) -> list:
         """
         Busca artículos en DOAJ API
+        LÍMITE: Máximo 100 resultados por consulta (impuesto por la API)
         Documentación: https://doaj.org/api/docs/
         """
         results = []
@@ -1554,15 +1594,18 @@ class ScientificSearchEngine:
             # URL base de DOAJ
             url = "https://doaj.org/api/v1/search/articles/"
             
+            # Forzar límite máximo de 100 (límite de la API)
+            api_limit = min(100, max_results)
+            
             # Parámetros de la consulta
             params = {
                 'query': clean_query,
-                'pageSize': min(100, max_results),  # Máximo 100 por página
+                'pageSize': api_limit,  # Máximo 100 por página
                 'sort': 'year:desc'
             }
             
             if st.session_state.get('debug_mode', False):
-                st.write(f"🔍 DOAJ query: {clean_query}")
+                st.write(f"🔍 DOAJ query: {clean_query} (límite: {api_limit})")
             
             # Hacer la petición
             time.sleep(self.delay)
@@ -1573,7 +1616,7 @@ class ScientificSearchEngine:
                 total_results = data.get('total', 0)
                 
                 if st.session_state.get('debug_mode', False):
-                    st.write(f"📊 DOAJ: {total_results} resultados encontrados")
+                    st.write(f"📊 DOAJ: {total_results} resultados encontrados, mostrando {api_limit}")
                 
                 # Procesar cada artículo
                 for article in data.get('results', []):
@@ -1639,7 +1682,7 @@ class ScientificSearchEngine:
                         'keywords': keywords_str
                     })
                     
-                    if len(results) >= max_results:
+                    if len(results) >= api_limit:
                         break
             
             elif response.status_code == 429:
@@ -1651,7 +1694,7 @@ class ScientificSearchEngine:
         except Exception as e:
             st.warning(f"Error en DOAJ: {str(e)}")
         
-        return results[:max_results]
+        return results[:api_limit]  # Garantizar que no exceda el límite
     
     # ========================================================================
     # FUNCIONES EXISTENTES (PubMed, CrossRef, OpenAlex, Europe PMC)
@@ -2036,12 +2079,29 @@ class ScientificSearchEngine:
             'DOAJ': self.search_doaj                           # ✅ NUEVA
         }
         
+        # Información sobre límites por base
+        limit_info = {
+            'PubMed': max_results_per_db,
+            'CrossRef': max_results_per_db,
+            'OpenAlex': max_results_per_db,
+            'Europe PMC': max_results_per_db,
+            'Semantic Scholar': min(100, max_results_per_db),  # Límite 100
+            'DOAJ': min(100, max_results_per_db)               # Límite 100
+        }
+        
+        # Mostrar información sobre límites en modo debug
+        if st.session_state.get('debug_mode', False):
+            st.info("📊 **Límites por base de datos:**")
+            for db, limit in limit_info.items():
+                if db in selected_dbs:
+                    st.write(f"   • {db}: {limit} artículos")
+        
         for db in selected_dbs:
             if db in search_functions:
                 try:
-                    # Ajustar límites según la base de datos
+                    # Aplicar límites específicos
                     if db in ['Semantic Scholar', 'DOAJ']:
-                        db_max = min(100, max_results_per_db)  # Estas APIs tienen límites más bajos
+                        db_max = min(100, max_results_per_db)  # Estas APIs tienen límite máximo 100
                     else:
                         db_max = max_results_per_db
                     
@@ -2049,7 +2109,7 @@ class ScientificSearchEngine:
                         results = search_functions[db](query, db_max, year_range)
                         all_results.extend(results)
                         if results:
-                            st.success(f"✅ {db}: {len(results)} resultados")
+                            st.success(f"✅ {db}: {len(results)} resultados (límite: {db_max})")
                         else:
                             st.info(f"ℹ️ {db}: 0 resultados")
                 except Exception as e:
@@ -2174,7 +2234,8 @@ class IntegratedScientificVerifier:
             'with_text': 0,
             'corroboran': 0,
             'contradicen': 0,
-            'inconclusos': 0
+            'inconclusos': 0,
+            'corroboran_fuertemente': 0  # Nueva estadística
         }
     
     def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
@@ -2266,7 +2327,10 @@ class IntegratedScientificVerifier:
                     })
                     
                     self.stats['analyzed'] += 1
-                    if 'CORROBORA' in verdict['verdict_text']:
+                    if verdict['verdict_text'] == 'CORROBORA FUERTEMENTE':
+                        self.stats['corroboran_fuertemente'] += 1
+                        self.stats['corroboran'] += 1
+                    elif 'CORROBORA' in verdict['verdict_text']:
                         self.stats['corroboran'] += 1
                     elif 'CONTRADICE' in verdict['verdict_text']:
                         self.stats['contradicen'] += 1
@@ -2304,6 +2368,7 @@ class IntegratedScientificVerifier:
         report.append(f"Artículos analizados: {self.stats['analyzed']}")
         report.append("")
         report.append("RESULTADOS GLOBALES:")
+        report.append(f"✅ Corroboran fuertemente: {self.stats['corroboran_fuertemente']}")
         report.append(f"✅ Corroboran: {self.stats['corroboran']}")
         report.append(f"❌ Contradicen: {self.stats['contradicen']}")
         report.append(f"⚠️ Inconclusos: {self.stats['inconclusos']}")
@@ -2358,6 +2423,7 @@ class IntegratedScientificVerifier:
                 <p><strong>Total artículos encontrados:</strong> {self.stats['total_articles']}</p>
                 <p><strong>Artículos con texto disponible:</strong> {self.stats['with_text']}</p>
                 <p><strong>Artículos analizados:</strong> {self.stats['analyzed']}</p>
+                <p><strong>✅ Corroboran fuertemente:</strong> {self.stats['corroboran_fuertemente']}</p>
                 <p><strong>✅ Corroboran:</strong> {self.stats['corroboran']}</p>
                 <p><strong>❌ Contradicen:</strong> {self.stats['contradicen']}</p>
                 <p><strong>⚠️ Inconclusos:</strong> {self.stats['inconclusos']}</p>
@@ -2382,7 +2448,9 @@ class IntegratedScientificVerifier:
             confianza = float(row.get('confianza', 0)) if pd.notna(row.get('confianza')) else 0
             
             verdict_class = ""
-            if 'CORROBORA' in veredicto:
+            if 'CORROBORA FUERTEMENTE' in veredicto:
+                verdict_class = "verdict-assert"
+            elif 'CORROBORA' in veredicto:
                 verdict_class = "verdict-assert"
             elif 'CONTRADICE' in veredicto:
                 verdict_class = "verdict-reject"
@@ -2423,7 +2491,9 @@ def get_badge_class(db_name: str) -> str:
     return classes.get(db_name, 'badge-pubmed')
 
 def get_verdict_class(verdict: str) -> str:
-    if 'CORROBORA' in verdict:
+    if 'CORROBORA FUERTEMENTE' in verdict:
+        return 'verdict-assert'
+    elif 'CORROBORA' in verdict:
         return 'verdict-assert'
     elif 'CONTRADICE' in verdict:
         return 'verdict-reject'
@@ -2476,6 +2546,7 @@ def enviar_resultados_email(destinatario, integrator):
         <ul>
             <li><strong>Total artículos:</strong> {integrator.stats['total_articles']}</li>
             <li><strong>Artículos analizados:</strong> {integrator.stats['analyzed']}</li>
+            <li><strong>✅ Corroboran fuertemente:</strong> {integrator.stats['corroboran_fuertemente']}</li>
             <li><strong>✅ Corroboran:</strong> {integrator.stats['corroboran']}</li>
             <li><strong>❌ Contradicen:</strong> {integrator.stats['contradicen']}</li>
             <li><strong>⚠️ Inconclusos:</strong> {integrator.stats['inconclusos']}</li>
@@ -2497,6 +2568,7 @@ def enviar_resultados_email(destinatario, integrator):
     Resumen:
     - Total artículos: {integrator.stats['total_articles']}
     - Artículos analizados: {integrator.stats['analyzed']}
+    - ✅ Corroboran fuertemente: {integrator.stats['corroboran_fuertemente']}
     - ✅ Corroboran: {integrator.stats['corroboran']}
     - ❌ Contradicen: {integrator.stats['contradicen']}
     - ⚠️ Inconclusos: {integrator.stats['inconclusos']}
@@ -2575,15 +2647,25 @@ def main():
         st.markdown("### 📚 Bases de Datos")
         st.info("🔔 **6 bases disponibles**: PubMed, CrossRef, OpenAlex, Europe PMC, Semantic Scholar, DOAJ")
         
+        # Información sobre límites de API
+        st.markdown('<div class="limit-info">', unsafe_allow_html=True)
+        st.markdown("""
+        **📊 Límites por API:**
+        • PubMed, CrossRef, OpenAlex, Europe PMC: Hasta 1000
+        • Semantic Scholar: Máximo 100
+        • DOAJ: Máximo 100
+        """)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
         col1, col2 = st.columns(2)
         with col1:
             pubmed = st.checkbox('PubMed', value=True)
             crossref = st.checkbox('CrossRef', value=True)
             openalex = st.checkbox('OpenAlex', value=True)
-            semantic = st.checkbox('Semantic Scholar', value=True)  # ✅ AHORA SÍ FUNCIONA
+            semantic = st.checkbox('Semantic Scholar', value=True)
         with col2:
             europepmc = st.checkbox('Europe PMC', value=True)
-            doaj = st.checkbox('DOAJ', value=True)                   # ✅ AHORA SÍ FUNCIONA
+            doaj = st.checkbox('DOAJ', value=True)
         
         databases = {
             'PubMed': pubmed,
@@ -2611,6 +2693,10 @@ def main():
             min_value=10, max_value=1000, value=100, step=10
         )
         
+        # Mostrar límite efectivo para Semantic Scholar y DOAJ
+        if max_results > 100:
+            st.info(f"ℹ️ Semantic Scholar y DOAJ se limitarán a 100 resultados (límite de API)")
+        
         st.markdown("### 🔧 Umbrales de análisis")
         min_relevance = st.slider(
             "Relevancia mínima",
@@ -2629,14 +2715,14 @@ def main():
         - 500 artículos: ~25-35 minutos
         - 1000 artículos: ~50-70 minutos
         
-        **Nota:** Semantic Scholar y DOAJ tienen límites de 100 artículos por consulta.
+        **Nota:** Semantic Scholar y DOAJ tienen límites de 100 artículos por consulta (límite de API).
         """)
         
         st.markdown("### 📋 Ejemplos")
         
         # EJEMPLOS OPTIMIZADOS
         if st.button("Cargar ejemplo: Ticagrelor y disnea"):
-            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)' 
+            st.session_state['query'] = '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
             st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
             st.rerun()
         
@@ -2769,16 +2855,18 @@ def main():
             
             st.markdown("## 📊 RESULTADOS GLOBALES")
             
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
                 st.metric("Artículos encontrados", stats['total_articles'])
             with col2:
                 st.metric("Con texto", stats['with_text'])
             with col3:
-                st.metric("✅ Corroboran", stats['corroboran'])
+                st.metric("✅ Corrob. fuerte", stats['corroboran_fuertemente'])
             with col4:
-                st.metric("❌ Contradicen", stats['contradicen'])
+                st.metric("✅ Corroboran", stats['corroboran'])
             with col5:
+                st.metric("❌ Contradicen", stats['contradicen'])
+            with col6:
                 st.metric("⚠️ Inconclusos", stats['inconclusos'])
             
             col1, col2 = st.columns(2)
@@ -2805,16 +2893,30 @@ def main():
             with col2:
                 analyzed_df = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']
                 if not analyzed_df.empty:
+                    # Crear categorías más específicas
                     verdict_counts = analyzed_df['veredicto'].value_counts().reset_index()
                     verdict_counts.columns = ['veredicto', 'count']
+                    
+                    # Mapeo de colores específico para cada tipo de veredicto
+                    color_map = {
+                        'CORROBORA FUERTEMENTE': '#2E7D32',  # Verde oscuro
+                        'CORROBORA': '#4CAF50',              # Verde medio
+                        'EVIDENCIA NO CONCLUYENTE': '#ff9800', # Naranja
+                        'CONTRADICE': '#f44336',              # Rojo
+                        'CONTRADICE FUERTEMENTE': '#b71c1c'    # Rojo oscuro
+                    }
+                    
                     fig = px.pie(
-                        verdict_counts, values='count', names='veredicto',
+                        verdict_counts, 
+                        values='count', 
+                        names='veredicto',
                         title=f"Distribución de Veredictos (n={len(analyzed_df)})",
-                        color_discrete_sequence=['#4CAF50', '#f44336', '#ff9800']
+                        color='veredicto',
+                        color_discrete_map=color_map
                     )
                     st.plotly_chart(fig, use_container_width=True)
             
-            st.markdown("## 📋 ARTÍCULOS ANALIZADOS")
+            st.markdown("## 📋 TABLA COMPLETA DE ARTÍCULOS")
             
             display_cols = ['base_datos', 'titulo', 'año', 'veredicto', 'confianza', 
                            'evidencia_a_favor', 'evidencia_en_contra']
@@ -2824,7 +2926,7 @@ def main():
             st.dataframe(
                 display_df,
                 use_container_width=True,
-                height=400,
+                height=500,
                 column_config={
                     'base_datos': 'Base',
                     'titulo': 'Título',
@@ -2836,57 +2938,90 @@ def main():
                 }
             )
             
-            st.markdown("## 🔍 DETALLE DE ANÁLISIS (primeros 10 artículos)")
+            # ========================================================================
+            # NUEVA SECCIÓN: TODOS LOS ARTÍCULOS QUE CORROBORAN FUERTEMENTE
+            # ========================================================================
             
-            for idx, row in results_df.head(10).iterrows():
-                badge_class = get_badge_class(row['base_datos'])
+            strong_evidence_df = results_df[results_df['veredicto'] == 'CORROBORA FUERTEMENTE']
+            
+            if not strong_evidence_df.empty:
+                st.markdown("---")
+                st.markdown(f'<div class="strong-evidence-title">🔬 ARTÍCULOS QUE CORROBORAN FUERTEMENTE LA HIPÓTESIS <span class="counter-badge">{len(strong_evidence_df)} encontrados</span></div>', 
+                          unsafe_allow_html=True)
                 
-                if row['veredicto'] == 'TEXTO NO DISPONIBLE':
-                    st.markdown(f"""
-                    <div class="result-card">
-                        <span class="{badge_class}">{row['base_datos']}</span>
-                        <div class="result-title">{row['titulo']}</div>
-                        <div class="result-meta">
-                            <b>Año:</b> {row.get('año', 'No disponible')}<br>
-                            <b>DOI:</b> {row.get('doi', 'No disponible')}<br>
-                            <b>Estado:</b> ⚠️ TEXTO NO DISPONIBLE - {row['fuente_texto']}
-                        </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    verdict_class = get_verdict_class(row['veredicto'])
+                st.markdown("""
+                <div style="background-color: #e8f5e8; padding: 1rem; border-radius: 10px; margin-bottom: 2rem;">
+                <p style="margin:0; color: #2E7D32;">📌 Estos artículos proporcionan la evidencia más sólida a favor de tu hipótesis, 
+                con alta confianza y fuerte respaldo en los resultados.</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Mostrar cada artículo con su detalle completo
+                for idx, row in strong_evidence_df.iterrows():
+                    badge_class = get_badge_class(row['base_datos'])
                     
                     st.markdown(f"""
-                    <div class="result-card">
+                    <div class="result-card-strong">
                         <span class="{badge_class}">{row['base_datos']}</span>
-                        <div class="result-title">{row['titulo']}</div>
-                        <div class="result-meta">
-                            <b>Año:</b> {row.get('año', 'No disponible')}<br>
-                            <b>DOI:</b> {row.get('doi', 'No disponible')}<br>
-                            <span class="{verdict_class}">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})<br>
-                            <b>Evidencia:</b> {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra
+                        <div style="font-size: 1.2rem; font-weight: bold; margin: 0.5rem 0;">{row['titulo']}</div>
+                        <div style="color: #666; margin-bottom: 0.5rem;">
+                            <b>Autores:</b> {row.get('autores', 'No disponible')[:150]}...
+                        </div>
+                        <div style="margin: 0.5rem 0;">
+                            <b>Revista:</b> {row.get('revista', 'No disponible')} | 
+                            <b>Año:</b> {row.get('año', 'No disponible')}
+                        </div>
+                        <div style="margin: 0.5rem 0;">
+                            <b>DOI:</b> {row.get('doi', 'No disponible')}
+                        </div>
+                        <div style="margin: 1rem 0;">
+                            <span class="verdict-assert">{row['veredicto']}</span> 
+                            <span style="margin-left: 1rem; background-color: #4CAF50; color: white; padding: 0.3rem 0.8rem; border-radius: 15px;">
+                                Confianza: {row['confianza']:.1%}
+                            </span>
+                        </div>
+                        <div style="background-color: white; padding: 1rem; border-radius: 5px; margin: 0.5rem 0;">
+                            <div style="display: flex; justify-content: space-around; text-align: center;">
+                                <div>
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #4CAF50;">{row['evidencia_a_favor']}</div>
+                                    <div>Evidencias a favor</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #f44336;">{row['evidencia_en_contra']}</div>
+                                    <div>Evidencias en contra</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 1.5rem; font-weight: bold;">{row.get('oraciones_totales', 0)}</div>
+                                    <div>Oraciones totales</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 1.5rem; font-weight: bold;">{row.get('oraciones_relevantes', 0)}</div>
+                                    <div>Oraciones relevantes</div>
+                                </div>
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
                     
                     if row['detalle_evidencia']:
                         st.markdown(f"""
                         <div class="evidence-box">
-                            <b>Evidencia destacada:</b> {row['detalle_evidencia']}
+                            <b>🔍 Evidencia destacada:</b> {row['detalle_evidencia']}
                         </div>
                         """, unsafe_allow_html=True)
-                
-                col1, col2 = st.columns([1, 5])
-                with col1:
-                    if row.get('url') and pd.notna(row['url']):
-                        st.link_button("🔗 Ver", row['url'])
-                with col2:
-                    if row.get('doi') and pd.notna(row['doi']):
-                        doi_link = f"https://doi.org/{row['doi']}"
-                        st.link_button("📋 DOI", doi_link)
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-            
-            if len(results_df) > 10:
-                st.info(f"... y {len(results_df) - 10} artículos más. Exporta los resultados para ver el listado completo.")
+                    
+                    col1, col2 = st.columns([1, 5])
+                    with col1:
+                        if row.get('url') and pd.notna(row['url']):
+                            st.link_button("🔗 Ver artículo", row['url'], use_container_width=True)
+                    with col2:
+                        if row.get('doi') and pd.notna(row['doi']):
+                            doi_link = f"https://doi.org/{row['doi']}"
+                            st.link_button("📋 Ver DOI", doi_link, use_container_width=True)
+                    
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    st.markdown("---")
+            else:
+                st.info("ℹ️ No se encontraron artículos que corroboren fuertemente la hipótesis.")
             
             st.markdown("## 💾 EXPORTAR RESULTADOS")
             
@@ -2924,6 +3059,10 @@ def main():
                         verdict_stats = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']['veredicto'].value_counts().reset_index()
                         verdict_stats.columns = ['Veredicto', 'Cantidad']
                         verdict_stats.to_excel(writer, sheet_name='Por Veredicto', index=False)
+                    
+                    # Añadir hoja con los artículos de evidencia fuerte
+                    if not strong_evidence_df.empty:
+                        strong_evidence_df.to_excel(writer, sheet_name='Evidencia Fuerte', index=False)
                 
                 st.download_button(
                     "📥 Excel",
@@ -2954,7 +3093,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v5.0 | 6 BASES DE DATOS • PubMed • CrossRef • OpenAlex • Europe PMC • Semantic Scholar • DOAJ</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v6.1 | 6 BASES DE DATOS • Límites respetados • Visualización completa de evidencia fuerte</p>
     </div>
     """, unsafe_allow_html=True)
 
