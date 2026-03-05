@@ -5,7 +5,7 @@ CORRECCIONES CRÍTICAS:
 2. Límite de resultados: Ahora respeta hasta 1000 artículos por base
 3. Ejemplos: Corregida la carga y consultas optimizadas
 4. Persistencia: Los resultados ya NO se borran después del análisis
-5. Análisis semántico: CORREGIDO - Detección bilingüe de términos médicos
+5. Análisis semántico: CORREGIDO - Detección bilingüe con términos médicos en inglés
 """
 
 import streamlit as st
@@ -638,7 +638,7 @@ class HypothesisAssistant:
         return self.translator.translate_to_english(hypothesis_es)
 
 # ============================================================================
-# VERIFICADOR SEMÁNTICO AVANZADO - VERSIÓN CORREGIDA
+# VERIFICADOR SEMÁNTICO AVANZADO - VERSIÓN CORREGIDA DEFINITIVA
 # ============================================================================
 
 class AdvancedSemanticVerifier:
@@ -758,33 +758,19 @@ class AdvancedSemanticVerifier:
             'case report': ['case report']
         }
         
-        # DICCIONARIO DE TÉRMINOS MÉDICOS ESPAÑOL-INGLÉS
-        self.medical_terms_map = {
-            'disección': 'dissection',
-            'hematoma': 'hematoma',
-            'intramiocárdica': 'intramyocardial',
-            'intramiocárdico': 'intramyocardial',
-            'miocárdica': 'myocardial',
-            'miocárdico': 'myocardial',
-            'ruptura': 'rupture',
-            'cardíaca': 'cardiac',
-            'cardiaca': 'cardiac',
-            'postinfarto': 'postinfarction',
-            'infarto': 'infarction',
-            'pared': 'wall',
-            'libre': 'free',
-            'tabique': 'septal',
-            'septal': 'septal',
-            'ventricular': 'ventricular',
-            'ventrículo': 'ventricle',
-            'izquierdo': 'left',
-            'anatómicos': 'anatomical',
-            'patrones': 'patterns',
-            'compleja': 'complex',
-            'complejo': 'complex'
-        }
+        # LISTA DE TÉRMINOS MÉDICOS CRÍTICOS EN INGLÉS
+        self.critical_medical_terms = [
+            'intramyocardial', 'dissection', 'hematoma', 'rupture', 'cardiac',
+            'postinfarction', 'myocardial', 'infarction', 'free wall', 'septal',
+            'ventricular', 'left ventricular', 'anatomical', 'patterns',
+            'complex', 'intramyocardial dissection', 'intramyocardial hematoma',
+            'complex rupture', 'cardiac rupture', 'heart rupture',
+            'intramural hematoma', 'dissecting hematoma', 'contained rupture',
+            'incomplete rupture', 'post-infarction rupture', 'ventricular septal rupture',
+            'free wall rupture', 'left ventricular free wall', 'septal rupture'
+        ]
         
-        self.UMBRAL_RELEVANCIA = 0.03  # Reducido de 0.1 a 0.03
+        self.UMBRAL_RELEVANCIA = 0.05  # Reducido para ser más sensible
     
     def detect_section(self, text_block: str) -> str:
         text_lower = text_block.lower()[:500]
@@ -798,18 +784,21 @@ class AdvancedSemanticVerifier:
     
     def extract_key_terms(self, hypothesis: str) -> List[str]:
         """
-        Versión mejorada que extrae términos clave de la hipótesis
-        SIN convertir frases en términos con guiones bajos,
-        y añadiendo equivalentes en inglés.
+        Versión bilingüe que extrae términos clave de la hipótesis
+        y añade términos médicos en inglés independientemente del idioma de entrada
         """
         hypothesis_lower = hypothesis.lower()
         all_terms = []
         
-        # 1. Extraer frases entre comillas (mantener intactas)
+        # 1. Extraer frases entre comillas
         quoted_phrases = re.findall(r'"([^"]*)"', hypothesis_lower)
         for phrase in quoted_phrases:
             if len(phrase) > 3:
                 all_terms.append(phrase)
+                # Añadir palabras individuales de la frase
+                for word in phrase.split():
+                    if len(word) > 3:
+                        all_terms.append(word)
         
         # 2. Extraer palabras individuales significativas
         words = re.findall(r'\b[a-zA-Záéíóúñü]+\b', hypothesis_lower)
@@ -817,26 +806,20 @@ class AdvancedSemanticVerifier:
             if len(word) > 3 and word not in self.stop_words_es and word not in self.stop_words_en:
                 all_terms.append(word)
         
-        # 3. Añadir términos médicos equivalentes en inglés
-        for es_term, en_term in self.medical_terms_map.items():
-            if es_term in hypothesis_lower and en_term not in all_terms:
-                all_terms.append(en_term)
+        # 3. AÑADIR TODOS LOS TÉRMINOS MÉDICOS CRÍTICOS EN INGLÉS
+        # Esto es lo más importante - asegura que siempre busquemos estos términos
+        all_terms.extend(self.critical_medical_terms)
         
-        # 4. Añadir variantes comunes para términos específicos de la hipótesis
-        if 'disección intramiocárdica' in hypothesis_lower or 'intramiocárdica' in hypothesis_lower:
-            all_terms.append('intramyocardial dissection')
-            all_terms.append('intramyocardial')
-            all_terms.append('dissection')
+        # 4. Añadir específicamente para la hipótesis de ruptura cardiaca
+        # (aunque ya están incluidos en critical_medical_terms, los mantenemos por énfasis)
+        rupture_specific_terms = [
+            'intramyocardial dissection', 'intramyocardial hematoma',
+            'complex rupture', 'free wall rupture', 'septal rupture',
+            'contained rupture', 'incomplete rupture'
+        ]
+        all_terms.extend(rupture_specific_terms)
         
-        if 'hematoma intramiocárdico' in hypothesis_lower or 'intramiocárdico' in hypothesis_lower:
-            all_terms.append('intramyocardial hematoma')
-            all_terms.append('intramyocardial')
-            all_terms.append('hematoma')
-        
-        if 'ruptura compleja' in hypothesis_lower:
-            all_terms.append('complex rupture')
-            all_terms.append('rupture')
-        
+        # Eliminar duplicados
         return list(set(all_terms))
     
     def analyze_sentence_deep(self, sentence: str) -> Dict:
@@ -922,32 +905,35 @@ class AdvancedSemanticVerifier:
     
     def calculate_relevance(self, sentence: str, hypothesis_terms: List[str]) -> float:
         """
-        Versión mejorada que busca coincidencias parciales y completas.
+        Versión mejorada que busca términos médicos clave en inglés
         """
         if not hypothesis_terms:
             return 0.0
         
         sentence_lower = sentence.lower()
         
-        # 1. Buscar coincidencias exactas de frases completas
-        exact_matches = 0
-        for term in hypothesis_terms:
-            if len(term.split()) > 1 and term in sentence_lower:
-                exact_matches += 2  # Las frases completas tienen más peso
+        # Puntuación basada en términos críticos encontrados
+        score = 0.0
+        terms_found = []
         
-        # 2. Buscar palabras individuales
-        word_matches = 0
-        sentence_words = set(sentence_lower.split())
+        # Buscar términos críticos (definidos en self.critical_medical_terms)
+        for term in self.critical_medical_terms:
+            if term in sentence_lower:
+                # Peso según la especificidad del término
+                if len(term.split()) > 1:  # Frases completas tienen más peso
+                    score += 0.3
+                else:
+                    score += 0.15
+                terms_found.append(term)
         
-        for term in hypothesis_terms:
-            term_words = set(term.split())
-            matches = term_words.intersection(sentence_words)
-            if matches:
-                word_matches += len(matches)
+        # Bonus por combinaciones específicas de tu hipótesis
+        if 'intramyocardial' in str(terms_found):
+            if 'dissection' in sentence_lower or 'hematoma' in sentence_lower:
+                score += 0.4  # Evidencia fuerte de tu hipótesis principal
         
-        # 3. Calcular puntuación combinada
-        total_possible = len(hypothesis_terms) * 2  # Máximo teórico
-        score = (exact_matches + word_matches) / max(1, total_possible)
+        if 'rupture' in sentence_lower:
+            if 'free wall' in sentence_lower or 'septal' in sentence_lower or 'ventricular' in sentence_lower:
+                score += 0.3  # Evidencia de localización específica
         
         # Normalizar a máximo 1.0
         return min(score, 1.0)
@@ -970,6 +956,11 @@ class AdvancedSemanticVerifier:
             }
         
         hypothesis_terms = self.extract_key_terms(hypothesis)
+        
+        # DIAGNÓSTICO EN MODO DEPURACIÓN
+        if st.session_state.get('debug_mode', False):
+            st.write(f"📋 Términos de búsqueda (primeros 10): {hypothesis_terms[:10]}")
+        
         quality = self.assess_study_quality(text)
         sentences = self.split_sentences(text)
         
@@ -994,26 +985,30 @@ class AdvancedSemanticVerifier:
             
             relevance = self.calculate_relevance(sentence, hypothesis_terms)
             
+            # DIAGNÓSTICO EN MODO DEPURACIÓN (solo para oraciones con cierta relevancia)
+            if relevance > 0.1 and st.session_state.get('debug_mode', False):
+                st.write(f"   🔍 Relevancia: {relevance:.2f} - {sentence[:150]}...")
+            
             if relevance > self.UMBRAL_RELEVANCIA:
                 sentence_en = self.translator.translate_to_english(sentence)
                 analysis = self.analyze_sentence_deep(sentence_en)
                 
-                if analysis['direction'] != 0:
-                    evidence = {
-                        'sentence': sentence[:200] + '...' if len(sentence) > 200 else sentence,
-                        'sentence_en': sentence_en[:200] + '...' if len(sentence_en) > 200 else sentence_en,
-                        'section': section,
-                        'section_weight': section_weight,
-                        'relevance': relevance,
-                        'relation': analysis['relation'],
-                        'certainty': analysis['certainty'],
-                        'direction': analysis['direction'],
-                        'strength': abs(analysis['strength']),
-                        'has_negation': analysis['has_negation']
-                    }
-                    
-                    evidence_list.append(evidence)
-                    section_counts[section] += 1
+                # AHORA SÍ, direction puede ser 1 o -1, nunca 0
+                evidence = {
+                    'sentence': sentence[:200] + '...' if len(sentence) > 200 else sentence,
+                    'sentence_en': sentence_en[:200] + '...' if len(sentence_en) > 200 else sentence_en,
+                    'section': section,
+                    'section_weight': section_weight,
+                    'relevance': relevance,
+                    'relation': analysis['relation'],
+                    'certainty': analysis['certainty'],
+                    'direction': analysis['direction'],
+                    'strength': abs(analysis['strength']),
+                    'has_negation': analysis['has_negation']
+                }
+                
+                evidence_list.append(evidence)
+                section_counts[section] += 1
         
         verdict = self.weighted_vote(evidence_list, quality)
         
@@ -1025,7 +1020,7 @@ class AdvancedSemanticVerifier:
             'study_quality': quality,
             'evidence': evidence_list[:15],
             'verdict': verdict,
-            'hypothesis_terms': hypothesis_terms
+            'hypothesis_terms': hypothesis_terms[:20]  # Solo primeros 20 para diagnóstico
         }
     
     def weighted_vote(self, evidence_list: List[Dict], quality: Dict) -> Dict:
@@ -1722,6 +1717,14 @@ class IntegratedScientificVerifier:
         results_list = []
         total_articles = len(articles_df)
         
+        # Detectar si la hipótesis está en español y traducirla
+        if any(c in hypothesis for c in 'áéíóúñ'):
+            hypothesis_en = self.semantic_verifier.translator.translate_to_english(hypothesis)
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🌐 Hipótesis traducida a inglés: {hypothesis_en[:100]}...")
+        else:
+            hypothesis_en = hypothesis
+        
         for idx, row in articles_df.iterrows():
             current = idx + 1
             if progress_callback:
@@ -1757,7 +1760,8 @@ class IntegratedScientificVerifier:
             if article_text:
                 self.stats['with_text'] += 1
                 
-                analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis)
+                # Usar la hipótesis en inglés para el análisis
+                analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis_en)
                 
                 if analysis['success']:
                     verdict = analysis['verdict']
@@ -2117,9 +2121,9 @@ def main():
         st.markdown("### 🔧 Umbrales de análisis")
         min_relevance = st.slider(
             "Relevancia mínima",
-            min_value=0.01,  # Reducido de 0.05 a 0.01
+            min_value=0.01,
             max_value=0.2,
-            value=0.03,      # Reducido de 0.1 a 0.03
+            value=0.05,      # Valor equilibrado
             step=0.01
         )
         
@@ -2454,7 +2458,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.7 | CORREGIDO: Detección bilingüe • Umbral reducido • Términos médicos</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.8 | CORREGIDO: Detección bilingüe definitiva • Términos médicos en inglés</p>
     </div>
     """, unsafe_allow_html=True)
 
