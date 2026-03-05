@@ -10,8 +10,7 @@ CORRECCIONES CRÍTICAS:
 7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
 8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
 9. NUEVO: Visualización de TODOS los artículos que corroboran fuertemente la hipótesis
-10. CORREGIDO: Asistente de conjeturas - Ahora transfiere correctamente al campo de búsqueda
-11. CORREGIDO: Consulta de búsqueda - Ahora acepta y procesa correctamente la hipótesis escrita
+10. CORREGIDO: Asistente de conjeturas - Ahora genera consultas en formato MeSH
 """
 
 import streamlit as st
@@ -314,6 +313,14 @@ st.markdown("""
         font-size: 0.9rem;
         margin-left: 1rem;
     }
+    .mesh-query {
+        background-color: #1E1E1E;
+        color: #FFFFFF;
+        padding: 1rem;
+        border-radius: 5px;
+        font-family: 'Courier New', monospace;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -378,7 +385,7 @@ class TranslationManager:
             return text
 
 # ============================================================================
-# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN CORREGIDA
+# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN CORREGIDA CON FORMATO MeSH
 # ============================================================================
 
 class HypothesisAssistant:
@@ -423,6 +430,66 @@ class HypothesisAssistant:
             }
         }
         
+        # Mapeo de términos comunes a MeSH
+        self.mesh_terms_map = {
+            # Sujetos/Intervenciones
+            "ticagrelor": "Ticagrelor",
+            "ejercicio": "Exercise",
+            "ejercicio físico": "Exercise",
+            "physical activity": "Exercise",
+            "exercise": "Exercise",
+            "ruptura cardiaca": "Heart Rupture, Post-Infarction",
+            "ruptura cardíaca": "Heart Rupture, Post-Infarction",
+            "cardiac rupture": "Heart Rupture, Post-Infarction",
+            "infarto": "Myocardial Infarction",
+            "infarto de miocardio": "Myocardial Infarction",
+            "myocardial infarction": "Myocardial Infarction",
+            "diabetes": "Diabetes Mellitus, Type 2",
+            "diabetes tipo 2": "Diabetes Mellitus, Type 2",
+            "type 2 diabetes": "Diabetes Mellitus, Type 2",
+            "sobrepeso": "Overweight",
+            "overweight": "Overweight",
+            "obesidad": "Obesity",
+            "obesity": "Obesity",
+            "cardiopatía": "Heart Diseases",
+            "cardiopatía isquémica": "Myocardial Ischemia",
+            "myocardial ischemia": "Myocardial Ischemia",
+            
+            # Efectos/Desenlaces
+            "disnea": "Dyspnea",
+            "dyspnea": "Dyspnea",
+            "mortalidad": "Mortality",
+            "mortality": "Mortality",
+            "incidencia": "Incidence",
+            "incidence": "Incidence",
+            "prevención": "Prevention",
+            "prevention": "Prevention",
+            "efecto secundario": "Drug-Related Side Effects and Adverse Reactions",
+            "adverse effects": "Drug-Related Side Effects and Adverse Reactions",
+            "patrones anatómicos": "anatomical patterns[Title/Abstract]",
+            "anatomical patterns": "anatomical patterns[Title/Abstract]",
+            "disección": "dissection[Title/Abstract]",
+            "hematoma": "hematoma[Title/Abstract]",
+            "hematoma intramiocárdico": "intramyocardial hematoma[Title/Abstract]",
+            "intramyocardial hematoma": "intramyocardial hematoma[Title/Abstract]"
+        }
+        
+        # Subheadings comunes
+        self.subheadings = {
+            "prevención": "prevention and control",
+            "prevention": "prevention and control",
+            "tratamiento": "therapy",
+            "therapy": "therapy",
+            "diagnóstico": "diagnosis",
+            "diagnosis": "diagnosis",
+            "epidemiología": "epidemiology",
+            "epidemiology": "epidemiology",
+            "efectos adversos": "adverse effects",
+            "adverse effects": "adverse effects",
+            "fisiopatología": "physiopathology",
+            "physiopathology": "physiopathology"
+        }
+        
         self.examples = [
             {
                 "name": "Ticagrelor y disnea",
@@ -431,7 +498,8 @@ class HypothesisAssistant:
                 "poblacion": "pacientes con cardiopatía isquémica",
                 "tipo": "causal",
                 "verbo": "causa",
-                "hypothesis": "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
+                "hypothesis": "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica",
+                "mesh_query": '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
             },
             {
                 "name": "Ruptura cardiaca postinfarto",
@@ -440,7 +508,8 @@ class HypothesisAssistant:
                 "poblacion": "pacientes con infarto agudo de miocardio",
                 "tipo": "asociacion",
                 "verbo": "sigue",
-                "hypothesis": "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)"
+                "hypothesis": "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)",
+                "mesh_query": '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh] AND (pattern[Title/Abstract] OR patterns[Title/Abstract] OR anatomical[Title/Abstract] OR "left ventricular"[Title/Abstract] OR septal[Title/Abstract] OR "free wall"[Title/Abstract] OR dissection[Title/Abstract] OR hematoma[Title/Abstract]))'
             },
             {
                 "name": "Ejercicio y diabetes",
@@ -449,7 +518,8 @@ class HypothesisAssistant:
                 "poblacion": "adultos con sobrepeso",
                 "tipo": "prevencion",
                 "verbo": "reduce la incidencia de",
-                "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso"
+                "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso",
+                "mesh_query": '("Exercise"[Mesh] AND "Diabetes Mellitus, Type 2"[Mesh] AND "prevention and control"[Subheading])'
             }
         ]
     
@@ -530,10 +600,14 @@ class HypothesisAssistant:
         # También obtener traducción automática completa
         hypothesis_en = self.translator.translate_to_english(hypothesis_es)
         
+        # Generar consulta MeSH
+        mesh_query = self.generate_mesh_query(subject, effect, population, template_type, verb)
+        
         return {
             "es": hypothesis_es,
             "en": hypothesis_en,
             "en_direct": hypothesis_en_direct,
+            "mesh_query": mesh_query,
             "subject": subject,
             "effect": effect,
             "population": population,
@@ -543,44 +617,90 @@ class HypothesisAssistant:
             "verb_en": verb_en
         }
     
-    def hypothesis_to_search_query(self, hypothesis_en: str) -> str:
+    def generate_mesh_query(self, subject: str, effect: str, population: str, 
+                           template_type: str, verb: str = None) -> str:
         """
-        Convierte una hipótesis en inglés a una consulta de búsqueda optimizada
+        Genera una consulta en formato MeSH para PubMed
         """
-        # Extraer términos clave
-        words = hypothesis_en.split()
+        # Función auxiliar para obtener término MeSH
+        def get_mesh_term(term: str, field: str = "Mesh") -> str:
+            term_lower = term.lower().strip()
+            
+            # Buscar en el mapa de términos MeSH
+            for key, value in self.mesh_terms_map.items():
+                if key in term_lower or term_lower in key:
+                    if "[Title/Abstract]" in value:
+                        return value
+                    else:
+                        return f'"{value}"[{field}]'
+            
+            # Si no se encuentra, usar búsqueda en título/abstract
+            words = term.split()
+            if len(words) > 2:
+                return f'"{term}"[Title/Abstract]'
+            else:
+                return f'"{term}"[Title/Abstract]'
         
-        # Palabras a excluir (artículos, preposiciones, etc.)
-        stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 
-                     'by', 'of', 'and', 'or', 'but', 'is', 'are', 'was', 'were',
-                     'this', 'that', 'these', 'those', 'has', 'have', 'had'}
+        # Obtener términos MeSH
+        subject_mesh = get_mesh_term(subject)
+        effect_mesh = get_mesh_term(effect)
         
-        # Construir consulta
-        query_terms = []
-        for word in words:
-            word_lower = word.lower().strip('.,;:()[]{}')
-            if word_lower not in stop_words and len(word_lower) > 2:
-                # Para PubMed, es mejor mantener términos médicos importantes
-                if word_lower in ['causes', 'increases', 'reduces', 'prevents', 'treats',
-                                 'associated', 'related', 'risk', 'factor', 'effective',
-                                 'efficacy', 'safety', 'outcome', 'effect', 'impact']:
-                    continue  # Excluir verbos comunes de la consulta
-                query_terms.append(word_lower)
+        # Manejar población especial
+        population_lower = population.lower()
+        if "sobrepeso" in population_lower or "overweight" in population_lower:
+            population_mesh = '"Overweight"[Mesh]'
+        elif "obesidad" in population_lower or "obesity" in population_lower:
+            population_mesh = '"Obesity"[Mesh]'
+        elif "adultos" in population_lower:
+            population_mesh = '"Adult"[Mesh]'
+        elif "niños" in population_lower or "children" in population_lower:
+            population_mesh = '"Child"[Mesh]'
+        else:
+            population_mesh = get_mesh_term(population)
         
-        # Si hay muy pocos términos, usar la frase completa entre comillas
-        if len(query_terms) < 2:
-            return f'"{hypothesis_en}"'
+        # Construir la consulta según el tipo
+        query_parts = []
         
-        # Construir consulta combinando términos con AND
-        query = ' AND '.join(query_terms[:5])  # Limitar a 5 términos
+        # Siempre incluir sujeto y efecto
+        query_parts.append(subject_mesh)
+        query_parts.append(effect_mesh)
         
-        return query
+        # Añadir población si es relevante
+        if population and population.lower() not in ["pacientes", "patients", "personas", "people"]:
+            query_parts.append(population_mesh)
+        
+        # Añadir subheading si es relevante
+        if template_type == "prevencion":
+            for key, value in self.subheadings.items():
+                if key in verb.lower() if verb else False:
+                    query_parts.append(f'"{value}"[Subheading]')
+                    break
+            else:
+                query_parts.append('"prevention and control"[Subheading]')
+        
+        elif template_type == "riesgo":
+            for term in ["riesgo", "risk"]:
+                if term in verb.lower() if verb else False:
+                    query_parts.append('"risk"[Title/Abstract]')
+                    break
+        
+        elif template_type == "efectividad":
+            for term in ["efectivo", "effective", "eficaz", "efficacy"]:
+                if term in verb.lower() if verb else False:
+                    query_parts.append('"treatment outcome"[Mesh]')
+                    break
+        
+        # Unir con AND
+        query = " AND ".join(query_parts)
+        
+        # Envolver en paréntesis
+        return f"({query})"
     
     def render_assistant_ui(self):
         with st.expander("🤖 ASISTENTE DE CONJETURAS - Ayuda a construir tu hipótesis", expanded=False):
             st.markdown('<div class="assistant-box">', unsafe_allow_html=True)
             st.markdown("### 🎯 Construye tu conjetura científica")
-            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada:")
+            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada y su consulta MeSH:")
             
             col1, col2 = st.columns(2)
             
@@ -594,21 +714,21 @@ class HypothesisAssistant:
                 subject = st.text_input(
                     "🧪 Sujeto/Intervención:",
                     value=st.session_state.get('assistant_subject', ''),
-                    placeholder="Ej: ticagrelor, ejercicio, vacuna, fármaco X",
+                    placeholder="Ej: ticagrelor, ejercicio, ruptura cardiaca",
                     key="assistant_subject"
                 )
                 
                 effect = st.text_input(
                     "📊 Efecto/Desenlace:",
                     value=st.session_state.get('assistant_effect', ''),
-                    placeholder="Ej: disnea, mejoría, mortalidad, efecto secundario",
+                    placeholder="Ej: disnea, diabetes tipo 2, patrones anatómicos",
                     key="assistant_effect"
                 )
                 
                 population = st.text_input(
                     "👥 Población:",
                     value=st.session_state.get('assistant_population', ''),
-                    placeholder="Ej: pacientes con cardiopatía, adultos mayores, niños",
+                    placeholder="Ej: pacientes con cardiopatía, adultos con sobrepeso",
                     key="assistant_population"
                 )
             
@@ -667,12 +787,9 @@ class HypothesisAssistant:
                             # Guardar en session state
                             st.session_state['hypothesis'] = hypothesis_data["es"]
                             st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
+                            st.session_state['query'] = hypothesis_data["mesh_query"]
                             
-                            # Generar consulta de búsqueda automática
-                            search_query = self.hypothesis_to_search_query(hypothesis_data["en_direct"])
-                            st.session_state['query'] = search_query
-                            
-                            st.success("✅ Hipótesis y consulta de búsqueda cargadas")
+                            st.success("✅ Hipótesis y consulta MeSH cargadas")
                             st.rerun()
                     
                     with col2:
@@ -684,23 +801,20 @@ class HypothesisAssistant:
                             # Guardar en session state
                             st.session_state['hypothesis'] = hypothesis_data["es"]
                             st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
+                            st.session_state['query'] = hypothesis_data["mesh_query"]
                             
-                            # Generar consulta de búsqueda automática
-                            search_query = self.hypothesis_to_search_query(hypothesis_data["en_direct"])
-                            st.session_state['query'] = search_query
-                            
-                            st.success("✅ Hipótesis y consulta de búsqueda cargadas")
+                            st.success("✅ Hipótesis y consulta MeSH cargadas")
                             st.rerun()
                     
-                    # Botón adicional para copiar la consulta de búsqueda
-                    search_query = self.hypothesis_to_search_query(hypothesis_data["en_direct"])
+                    # Mostrar la consulta MeSH generada
                     st.markdown("---")
-                    st.markdown("**🔍 Consulta de búsqueda generada automáticamente:**")
-                    st.code(search_query, language="text")
+                    st.markdown("**🔍 Consulta MeSH para PubMed:**")
+                    st.markdown(f'<div class="mesh-query">{hypothesis_data["mesh_query"]}</div>', unsafe_allow_html=True)
                     
-                    if st.button("📋 Usar esta consulta de búsqueda", key="use_search_query", use_container_width=True):
-                        st.session_state['query'] = search_query
-                        st.success("✅ Consulta de búsqueda cargada")
+                    # Botón para usar la consulta MeSH
+                    if st.button("📋 Usar esta consulta MeSH", key="use_mesh_query", use_container_width=True):
+                        st.session_state['query'] = hypothesis_data["mesh_query"]
+                        st.success("✅ Consulta MeSH cargada en el campo de búsqueda")
                         st.rerun()
                     
                     st.session_state['last_hypothesis_data'] = hypothesis_data
@@ -715,17 +829,17 @@ class HypothesisAssistant:
                     st.markdown("### 📋 Ejemplo cargado:")
                     st.info(f"**Hipótesis:** {example['hypothesis']}")
                     
-                    col1, col2 = st.columns(2)
+                    st.markdown("**🔍 Consulta MeSH:**")
+                    st.markdown(f'<div class="mesh-query">{example["mesh_query"]}</div>', unsafe_allow_html=True)
+                    
+                    col1, col2, col3 = st.columns(3)
                     with col1:
                         if st.button("📌 Usar este ejemplo", key="use_example_main", use_container_width=True):
                             st.session_state['hypothesis'] = example['hypothesis']
                             translator = TranslationManager()
                             hypothesis_en = translator.translate_to_english(example['hypothesis'])
                             st.session_state['hypothesis_en'] = hypothesis_en
-                            
-                            # Generar consulta de búsqueda automática
-                            search_query = self.hypothesis_to_search_query(hypothesis_en)
-                            st.session_state['query'] = search_query
+                            st.session_state['query'] = example["mesh_query"]
                             
                             st.success("✅ Ejemplo cargado correctamente")
                             st.rerun()
@@ -735,6 +849,12 @@ class HypothesisAssistant:
                             st.session_state['assistant_subject'] = example['sujeto']
                             st.session_state['assistant_effect'] = example['efecto']
                             st.session_state['assistant_population'] = example['poblacion']
+                            st.rerun()
+                    
+                    with col3:
+                        if st.button("🔍 Usar solo consulta", key="use_mesh_only", use_container_width=True):
+                            st.session_state['query'] = example["mesh_query"]
+                            st.success("✅ Consulta MeSH cargada")
                             st.rerun()
             
             st.markdown('</div>', unsafe_allow_html=True)
@@ -748,6 +868,11 @@ class HypothesisAssistant:
             3. **Usa terminología médica**: Los artículos científicos usan términos MeSH estandarizados
             4. **Considera la dirección**: ¿Es causalidad, asociación, riesgo o protección?
             5. **Población relevante**: Especifica edad, condición, contexto cuando sea relevante
+            
+            **📊 Formato MeSH generado:**
+            - Los términos principales se buscan como MeSH: `"Término"[Mesh]`
+            - Los subheadings se usan para aspectos específicos: `"prevention and control"[Subheading]`
+            - Búsqueda en título/abstract: `"término"[Title/Abstract]`
             """)
             st.markdown('</div>', unsafe_allow_html=True)
     
@@ -2530,11 +2655,12 @@ def main():
     
     with col1:
         search_query = st.text_area(
-            "🔍 Consulta de búsqueda:",
+            "🔍 Consulta de búsqueda (formato MeSH):",
             value=st.session_state['query'],
             height=120,
             placeholder='Ej: ("Ticagrelor"[Mesh] AND "Myocardial Ischemia"[Mesh] AND "Dyspnea"[Mesh])',
-            key="query_input"
+            key="query_input",
+            help="Formato MeSH: Use [Mesh] para términos controlados, [Title/Abstract] para búsqueda en texto libre"
         )
         if search_query != st.session_state['query']:
             st.session_state['query'] = search_query
@@ -2866,7 +2992,7 @@ def main():
     if st.session_state.get('analysis_completed', False) and st.session_state.get('integrator') is not None:
         st.markdown("---")
         st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
-        st.markdown('<div class="email-box">', unsafe_allow_html=True)
+        st.markdown('<div class="email-box">, unsafe_allow_html=True')
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -2883,9 +3009,9 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v6.4 | 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v6.5 | 4 BASES ESTABLES • Formato MeSH • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    main()        
+    main()    
