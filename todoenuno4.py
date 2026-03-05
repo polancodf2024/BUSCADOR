@@ -6,6 +6,9 @@ CORRECCIONES CRÍTICAS:
 3. Ejemplos: Corregida la carga y consultas optimizadas
 4. Persistencia: Los resultados ya NO se borran después del análisis
 5. Análisis semántico: CORREGIDO - Detección bilingüe con términos médicos en inglés
+6. MULTIDOMINIO: Añadidos términos de farmacología y metabolismo
+7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
+8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
 """
 
 import streamlit as st
@@ -408,7 +411,7 @@ class HypothesisAssistant:
                 "poblacion": "pacientes con infarto agudo de miocardio",
                 "tipo": "asociacion",
                 "verbo": "sigue",
-                "hypothesis": "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles"
+                "hypothesis": "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)"
             },
             {
                 "name": "Ejercicio y diabetes",
@@ -638,7 +641,7 @@ class HypothesisAssistant:
         return self.translator.translate_to_english(hypothesis_es)
 
 # ============================================================================
-# VERIFICADOR SEMÁNTICO AVANZADO - VERSIÓN CORREGIDA DEFINITIVA
+# VERIFICADOR SEMÁNTICO AVANZADO - VERSIÓN MULTIDOMINIO CORREGIDA
 # ============================================================================
 
 class AdvancedSemanticVerifier:
@@ -758,8 +761,12 @@ class AdvancedSemanticVerifier:
             'case report': ['case report']
         }
         
-        # LISTA DE TÉRMINOS MÉDICOS CRÍTICOS EN INGLÉS
-        self.critical_medical_terms = [
+        # ====================================================================
+        # TÉRMINOS MÉDICOS POR DOMINIO (MULTIDISCIPLINARIO)
+        # ====================================================================
+        
+        # Cardiología (tu ejemplo de ruptura cardiaca)
+        self.cardiac_terms = [
             'intramyocardial', 'dissection', 'hematoma', 'rupture', 'cardiac',
             'postinfarction', 'myocardial', 'infarction', 'free wall', 'septal',
             'ventricular', 'left ventricular', 'anatomical', 'patterns',
@@ -767,10 +774,149 @@ class AdvancedSemanticVerifier:
             'complex rupture', 'cardiac rupture', 'heart rupture',
             'intramural hematoma', 'dissecting hematoma', 'contained rupture',
             'incomplete rupture', 'post-infarction rupture', 'ventricular septal rupture',
-            'free wall rupture', 'left ventricular free wall', 'septal rupture'
+            'free wall rupture', 'left ventricular free wall', 'septal rupture',
+            'myocardial rupture', 'ventricular rupture', 'cardiac tamponade',
+            'hemopericardium', 'pseudoaneurysm', 'true aneurysm'
         ]
         
-        self.UMBRAL_RELEVANCIA = 0.05  # Reducido para ser más sensible
+        # Farmacología (ticagrelor y disnea)
+        self.pharmacology_terms = [
+            'ticagrelor', 'dyspnea', 'breathlessness', 'shortness of breath',
+            'adverse effect', 'side effect', 'adverse event', 'myocardial ischemia',
+            'angina', 'antiplatelet', 'p2y12 inhibitor', 'p2y12', 'brilinta',
+            'clopidogrel', 'prasugrel', 'aspirin', 'dual antiplatelet therapy',
+            'dapt', 'platelet aggregation', 'inhibition', 'bleeding', 'hemorrhage',
+            'cardiovascular', 'acute coronary syndrome', 'acs', 'stable angina',
+            'percutaneous coronary intervention', 'pci', 'stent', 'thrombosis'
+        ]
+        
+        # Metabolismo/Endocrinología (ejercicio y diabetes)
+        self.metabolism_terms = [
+            'exercise', 'physical activity', 'aerobic', 'resistance training',
+            'diabetes', 'type 2 diabetes', 't2dm', 'type 2 diabetes mellitus',
+            'obesity', 'overweight', 'bmi', 'body mass index', 'insulin resistance',
+            'glucose', 'hba1c', 'glycemic control', 'glycated hemoglobin',
+            'weight loss', 'weight reduction', 'prevention', 'incidence',
+            'risk reduction', 'metabolic syndrome', 'impaired glucose tolerance',
+            'igt', 'fasting glucose', 'postprandial glucose', 'insulin sensitivity',
+            'metformin', 'lifestyle intervention', 'diet', 'nutrition', 'calorie restriction',
+            'sedentary', 'physical inactivity', 'cardiovascular disease', 'cvd'
+        ]
+        
+        # Términos generales de investigación
+        self.general_terms = [
+            'study', 'trial', 'cohort', 'analysis', 'meta-analysis',
+            'systematic review', 'randomized', 'controlled', 'prospective',
+            'retrospective', 'observational', 'cross-sectional', 'case-control',
+            'significant', 'statistically significant', 'association',
+            'correlation', 'risk factor', 'protective', 'hazard ratio',
+            'odds ratio', 'confidence interval', 'p value', 'multivariate',
+            'adjusted', 'confounding', 'bias', 'limitation', 'conclusion'
+        ]
+        
+        # Mapa de términos español-inglés (ampliado)
+        self.medical_terms_map = {
+            # Cardiología
+            'disección': 'dissection',
+            'hematoma': 'hematoma',
+            'intramiocárdica': 'intramyocardial',
+            'intramiocárdico': 'intramyocardial',
+            'miocárdica': 'myocardial',
+            'miocárdico': 'myocardial',
+            'ruptura': 'rupture',
+            'cardíaca': 'cardiac',
+            'cardiaca': 'cardiac',
+            'postinfarto': 'postinfarction',
+            'infarto': 'infarction',
+            'pared': 'wall',
+            'libre': 'free',
+            'tabique': 'septal',
+            'septal': 'septal',
+            'ventricular': 'ventricular',
+            'ventrículo': 'ventricle',
+            'izquierdo': 'left',
+            'anatómicos': 'anatomical',
+            'patrones': 'patterns',
+            'compleja': 'complex',
+            'complejo': 'complex',
+            'aneurisma': 'aneurysm',
+            'seudoaneurisma': 'pseudoaneurysm',
+            
+            # Farmacología
+            'disnea': 'dyspnea',
+            'falta de aire': 'shortness of breath',
+            'efecto secundario': 'side effect',
+            'efecto adverso': 'adverse effect',
+            'cardiopatía': 'heart disease',
+            'isquémica': 'ischemic',
+            'isquemia': 'ischemia',
+            'antiagregante': 'antiplatelet',
+            'sangrado': 'bleeding',
+            'hemorragia': 'hemorrhage',
+            
+            # Metabolismo
+            'ejercicio': 'exercise',
+            'actividad física': 'physical activity',
+            'diabetes': 'diabetes',
+            'tipo 2': 'type 2',
+            'sobrepeso': 'overweight',
+            'obesidad': 'obesity',
+            'glucosa': 'glucose',
+            'insulina': 'insulin',
+            'resistencia a la insulina': 'insulin resistance',
+            'prevención': 'prevention',
+            'incidencia': 'incidence',
+            'riesgo': 'risk',
+            'reducción': 'reduction'
+        }
+        
+        self.UMBRAL_RELEVANCIA = 0.05
+        
+        # Combinar todos los términos para búsqueda general
+        self.all_medical_terms = list(set(
+            self.cardiac_terms + 
+            self.pharmacology_terms + 
+            self.metabolism_terms + 
+            self.general_terms
+        ))
+    
+    def detect_domain(self, hypothesis: str) -> str:
+        """
+        Detecta automáticamente el dominio de la hipótesis
+        """
+        hypo_lower = hypothesis.lower()
+        
+        # Palabras clave para cada dominio
+        cardiac_keywords = ['ruptura', 'cardíaca', 'cardiaca', 'infarto', 'miocárdico', 
+                           'corazón', 'ventrículo', 'disección', 'hematoma', 'cardiac', 
+                           'myocardial', 'infarction', 'rupture', 'intramyocardial']
+        
+        pharmacology_keywords = ['ticagrelor', 'fármaco', 'medicamento', 'disnea', 'efecto secundario',
+                                'adverse', 'side effect', 'dyspnea', 'drug', 'antiplatelet']
+        
+        metabolism_keywords = ['ejercicio', 'diabetes', 'sobrepeso', 'obesidad', 'glucosa',
+                              'exercise', 'diabetes', 'obesity', 'overweight', 'glucose',
+                              'metabolic', 'insulin', 'weight loss']
+        
+        # Contar coincidencias
+        cardiac_score = sum(1 for kw in cardiac_keywords if kw in hypo_lower)
+        pharmacology_score = sum(1 for kw in pharmacology_keywords if kw in hypo_lower)
+        metabolism_score = sum(1 for kw in metabolism_keywords if kw in hypo_lower)
+        
+        # Determinar dominio dominante
+        scores = {
+            'cardiac': cardiac_score,
+            'pharmacology': pharmacology_score,
+            'metabolism': metabolism_score
+        }
+        
+        max_domain = max(scores, key=scores.get)
+        max_score = scores[max_domain]
+        
+        if max_score == 0:
+            return 'general'
+        
+        return max_domain
     
     def detect_section(self, text_block: str) -> str:
         text_lower = text_block.lower()[:500]
@@ -784,8 +930,7 @@ class AdvancedSemanticVerifier:
     
     def extract_key_terms(self, hypothesis: str) -> List[str]:
         """
-        Versión bilingüe que extrae términos clave de la hipótesis
-        y añade términos médicos en inglés independientemente del idioma de entrada
+        Versión multidisciplinaria con términos médicos de múltiples dominios
         """
         hypothesis_lower = hypothesis.lower()
         all_terms = []
@@ -795,7 +940,6 @@ class AdvancedSemanticVerifier:
         for phrase in quoted_phrases:
             if len(phrase) > 3:
                 all_terms.append(phrase)
-                # Añadir palabras individuales de la frase
                 for word in phrase.split():
                     if len(word) > 3:
                         all_terms.append(word)
@@ -806,20 +950,24 @@ class AdvancedSemanticVerifier:
             if len(word) > 3 and word not in self.stop_words_es and word not in self.stop_words_en:
                 all_terms.append(word)
         
-        # 3. AÑADIR TODOS LOS TÉRMINOS MÉDICOS CRÍTICOS EN INGLÉS
-        # Esto es lo más importante - asegura que siempre busquemos estos términos
-        all_terms.extend(self.critical_medical_terms)
+        # 3. Añadir términos del mapa español-inglés
+        for es_term, en_term in self.medical_terms_map.items():
+            if es_term in hypothesis_lower and en_term not in all_terms:
+                all_terms.append(en_term)
         
-        # 4. Añadir específicamente para la hipótesis de ruptura cardiaca
-        # (aunque ya están incluidos en critical_medical_terms, los mantenemos por énfasis)
-        rupture_specific_terms = [
-            'intramyocardial dissection', 'intramyocardial hematoma',
-            'complex rupture', 'free wall rupture', 'septal rupture',
-            'contained rupture', 'incomplete rupture'
-        ]
-        all_terms.extend(rupture_specific_terms)
+        # 4. Detectar dominio y añadir términos específicos
+        domain = self.detect_domain(hypothesis)
         
-        # Eliminar duplicados
+        if domain == 'cardiac':
+            all_terms.extend(self.cardiac_terms)
+        elif domain == 'pharmacology':
+            all_terms.extend(self.pharmacology_terms)
+        elif domain == 'metabolism':
+            all_terms.extend(self.metabolism_terms)
+        
+        # 5. Añadir términos generales siempre
+        all_terms.extend(self.general_terms)
+        
         return list(set(all_terms))
     
     def analyze_sentence_deep(self, sentence: str) -> Dict:
@@ -903,39 +1051,102 @@ class AdvancedSemanticVerifier:
             'sample_size': sample_size
         }
     
-    def calculate_relevance(self, sentence: str, hypothesis_terms: List[str]) -> float:
+    def calculate_relevance(self, sentence: str, hypothesis_terms: List[str], domain: str = 'general') -> float:
         """
-        Versión mejorada que busca términos médicos clave en inglés
+        Versión mejorada con pesos específicos por dominio
         """
         if not hypothesis_terms:
             return 0.0
         
         sentence_lower = sentence.lower()
         
-        # Puntuación basada en términos críticos encontrados
+        # Puntuación base por términos médicos generales
         score = 0.0
         terms_found = []
         
-        # Buscar términos críticos (definidos en self.critical_medical_terms)
-        for term in self.critical_medical_terms:
+        # Buscar en todos los términos médicos
+        for term in self.all_medical_terms:
             if term in sentence_lower:
-                # Peso según la especificidad del término
-                if len(term.split()) > 1:  # Frases completas tienen más peso
+                if len(term.split()) > 1:  # Frases completas pesan más
+                    score += 0.15
+                else:
+                    score += 0.08
+                terms_found.append(term)
+        
+        # ====================================================================
+        # BONUS ESPECÍFICOS POR DOMINIO
+        # ====================================================================
+        
+        # DOMINIO CARDIOLOGÍA (ruptura cardiaca)
+        if domain == 'cardiac':
+            if 'intramyocardial' in sentence_lower:
+                if 'dissection' in sentence_lower or 'hematoma' in sentence_lower:
+                    score += 0.5  # Evidencia fuerte de tu hipótesis principal
+                else:
+                    score += 0.2
+            
+            if 'rupture' in sentence_lower:
+                if 'free wall' in sentence_lower:
+                    score += 0.4
+                elif 'septal' in sentence_lower:
+                    score += 0.4
+                elif 'ventricular' in sentence_lower:
                     score += 0.3
                 else:
                     score += 0.15
-                terms_found.append(term)
+            
+            if 'contained rupture' in sentence_lower or 'incomplete rupture' in sentence_lower:
+                score += 0.45
+            
+            if 'pseudoaneurysm' in sentence_lower or 'false aneurysm' in sentence_lower:
+                score += 0.35
         
-        # Bonus por combinaciones específicas de tu hipótesis
-        if 'intramyocardial' in str(terms_found):
-            if 'dissection' in sentence_lower or 'hematoma' in sentence_lower:
-                score += 0.4  # Evidencia fuerte de tu hipótesis principal
+        # DOMINIO FARMACOLOGÍA (ticagrelor y disnea)
+        elif domain == 'pharmacology':
+            if 'ticagrelor' in sentence_lower:
+                score += 0.3
+                if 'dyspnea' in sentence_lower or 'breath' in sentence_lower:
+                    score += 0.5  # Relación directa ticagrelor-disnea
+                elif 'adverse' in sentence_lower or 'side effect' in sentence_lower:
+                    score += 0.3
+            
+            if 'dyspnea' in sentence_lower or 'shortness of breath' in sentence_lower:
+                score += 0.25
+                if 'antiplatelet' in sentence_lower or 'p2y12' in sentence_lower:
+                    score += 0.3
+            
+            if 'myocardial ischemia' in sentence_lower or 'acute coronary syndrome' in sentence_lower:
+                score += 0.2
         
-        if 'rupture' in sentence_lower:
-            if 'free wall' in sentence_lower or 'septal' in sentence_lower or 'ventricular' in sentence_lower:
-                score += 0.3  # Evidencia de localización específica
+        # DOMINIO METABOLISMO (ejercicio y diabetes)
+        elif domain == 'metabolism':
+            if 'exercise' in sentence_lower or 'physical activity' in sentence_lower:
+                score += 0.3
+                if 'diabetes' in sentence_lower or 'type 2 diabetes' in sentence_lower:
+                    score += 0.5  # Relación directa ejercicio-diabetes
+                elif 'glucose' in sentence_lower or 'hba1c' in sentence_lower:
+                    score += 0.35
+                elif 'weight loss' in sentence_lower or 'obesity' in sentence_lower:
+                    score += 0.3
+            
+            if 'diabetes' in sentence_lower or 't2dm' in sentence_lower:
+                score += 0.25
+                if 'prevention' in sentence_lower or 'incidence' in sentence_lower:
+                    score += 0.4
+                elif 'risk' in sentence_lower and ('reduction' in sentence_lower or 'decrease' in sentence_lower):
+                    score += 0.35
+            
+            if 'insulin resistance' in sentence_lower or 'metabolic syndrome' in sentence_lower:
+                score += 0.3
         
-        # Normalizar a máximo 1.0
+        # Bonus por calidad de estudio (aplica a todos los dominios)
+        study_indicators = ['randomized', 'controlled trial', 'cohort', 'meta-analysis', 
+                           'systematic review', 'prospective']
+        for indicator in study_indicators:
+            if indicator in sentence_lower:
+                score += 0.1
+                break
+        
         return min(score, 1.0)
     
     def split_sentences(self, text: str) -> List[str]:
@@ -955,11 +1166,15 @@ class AdvancedSemanticVerifier:
                 'verdict': None
             }
         
+        # Detectar dominio de la hipótesis
+        domain = self.detect_domain(hypothesis)
+        
         hypothesis_terms = self.extract_key_terms(hypothesis)
         
         # DIAGNÓSTICO EN MODO DEPURACIÓN
         if st.session_state.get('debug_mode', False):
-            st.write(f"📋 Términos de búsqueda (primeros 10): {hypothesis_terms[:10]}")
+            st.write(f"📋 Dominio detectado: **{domain}**")
+            st.write(f"📋 Términos de búsqueda (primeros 15): {hypothesis_terms[:15]}")
         
         quality = self.assess_study_quality(text)
         sentences = self.split_sentences(text)
@@ -983,7 +1198,7 @@ class AdvancedSemanticVerifier:
             section = section_map.get(block_idx, 'unknown')
             section_weight = self.section_weights.get(section, 1.0)
             
-            relevance = self.calculate_relevance(sentence, hypothesis_terms)
+            relevance = self.calculate_relevance(sentence, hypothesis_terms, domain)
             
             # DIAGNÓSTICO EN MODO DEPURACIÓN (solo para oraciones con cierta relevancia)
             if relevance > 0.1 and st.session_state.get('debug_mode', False):
@@ -993,7 +1208,6 @@ class AdvancedSemanticVerifier:
                 sentence_en = self.translator.translate_to_english(sentence)
                 analysis = self.analyze_sentence_deep(sentence_en)
                 
-                # AHORA SÍ, direction puede ser 1 o -1, nunca 0
                 evidence = {
                     'sentence': sentence[:200] + '...' if len(sentence) > 200 else sentence,
                     'sentence_en': sentence_en[:200] + '...' if len(sentence_en) > 200 else sentence_en,
@@ -1014,13 +1228,14 @@ class AdvancedSemanticVerifier:
         
         return {
             'success': True,
+            'domain': domain,
             'total_sentences': len(sentences),
             'relevant_sentences': len(evidence_list),
             'section_distribution': dict(section_counts),
             'study_quality': quality,
             'evidence': evidence_list[:15],
             'verdict': verdict,
-            'hypothesis_terms': hypothesis_terms[:20]  # Solo primeros 20 para diagnóstico
+            'hypothesis_terms': hypothesis_terms[:20]
         }
     
     def weighted_vote(self, evidence_list: List[Dict], quality: Dict) -> Dict:
@@ -1725,6 +1940,11 @@ class IntegratedScientificVerifier:
         else:
             hypothesis_en = hypothesis
         
+        # Detectar dominio para diagnóstico
+        domain = self.semantic_verifier.detect_domain(hypothesis)
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🎯 Dominio detectado: {domain}")
+        
         for idx, row in articles_df.iterrows():
             current = idx + 1
             if progress_callback:
@@ -2027,7 +2247,7 @@ def enviar_resultados_email(destinatario, integrator):
 
 def main():
     st.markdown('<h1 class="main-header">🔬 Buscador y Verificador Semántico Integrado</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • VERSIÓN COMPLETA CORREGIDA</p>', 
+    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • VERSIÓN COMPLETA CORREGIDA • MULTIDOMINIO</p>', 
                 unsafe_allow_html=True)
     
     # Inicializar session state con TODAS las variables necesarias
@@ -2123,7 +2343,7 @@ def main():
             "Relevancia mínima",
             min_value=0.01,
             max_value=0.2,
-            value=0.05,      # Valor equilibrado
+            value=0.05,
             step=0.01
         )
         
@@ -2458,7 +2678,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.8 | CORREGIDO: Detección bilingüe definitiva • Términos médicos en inglés</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v4.0 | MULTIDOMINIO • Cardiología • Farmacología • Metabolismo</p>
     </div>
     """, unsafe_allow_html=True)
 
