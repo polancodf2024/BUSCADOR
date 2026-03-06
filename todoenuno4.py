@@ -1,16 +1,16 @@
 """
-Buscador y Verificador Semántico Integrado - VERSIÓN COMPLETA CORREGIDA
-CORRECCIONES CRÍTICAS:
-1. PubMed: Manejo correcto de términos MeSH con comas
-2. Límite de resultados: Ahora respeta hasta 1000 artículos por base
-3. Ejemplos: Corregida la carga y consultas optimizadas
-4. Persistencia: Los resultados ya NO se borran después del análisis
-5. Análisis semántico: CORREGIDO - Detección bilingüe con términos médicos en inglés
-6. MULTIDOMINIO: Añadidos términos de farmacología y metabolismo
-7. PESOS ESPECÍFICOS: Bonos por dominio para ticagrelor y ejercicio-diabetes
-8. DETECCIÓN AUTOMÁTICA: El programa detecta el dominio de la hipótesis
-9. NUEVO: Visualización de TODOS los artículos que corroboran fuertemente la hipótesis
-10. CORREGIDO: Asistente de conjeturas - Ahora genera consultas en formato MeSH correcto
+Integrated Semantic Search and Verifier - COMPLETE CORRECTED VERSION
+CRITICAL FIXES:
+1. PubMed: Correct handling of MeSH terms with commas
+2. Result limit: Now respects up to 1000 articles per database
+3. Examples: Fixed loading and optimized queries
+4. Persistence: Results are NO longer deleted after analysis
+5. Semantic analysis: FIXED - Bilingual detection with medical terms in English
+6. MULTIDOMAIN: Added pharmacology and metabolism terms
+7. SPECIFIC WEIGHTS: Domain bonuses for ticagrelor and exercise-diabetes
+8. AUTOMATIC DETECTION: Program detects hypothesis domain
+9. NEW: Visualization of ALL articles that strongly support the hypothesis
+10. FIXED: Hypothesis assistant - Now generates queries in correct MeSH format
 """
 
 import streamlit as st
@@ -41,16 +41,16 @@ from email.utils import formatdate
 import ssl
 import numpy as np
 
-# Configuración de la página
+# Page configuration
 st.set_page_config(
-    page_title="🔬 Buscador y Verificador Semántico Integrado",
+    page_title="🔬 Integrated Semantic Search and Verifier",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ============================================================================
-# CONFIGURACIÓN DE CORREO
+# EMAIL CONFIGURATION
 # ============================================================================
 
 class EmailConfig:
@@ -73,47 +73,47 @@ EMAIL_CONFIG = EmailConfig()
 def validate_email(email):
     if not email or email == "":
         return False
-    if email == "usuario@ejemplo.com":
+    if email == "user@example.com":
         return False
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
-def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, archivos=None):
+def send_email(recipient, subject, html_message=None, text_message=None, attachments=None):
     if not EMAIL_CONFIG.available:
-        st.error("Configuración de correo no disponible. Verifica los secrets de la aplicación.")
+        st.error("Email configuration not available. Check application secrets.")
         return False
     
-    if not validate_email(destinatario):
-        st.error("Dirección de correo no válida")
+    if not validate_email(recipient):
+        st.error("Invalid email address")
         return False
     
-    if not asunto or (not mensaje_html and not mensaje_texto):
-        st.error("Faltan datos requeridos para enviar el correo")
+    if not subject or (not html_message and not text_message):
+        st.error("Missing required data to send email")
         return False
     
     try:
         msg = MIMEMultipart('alternative')
         msg['From'] = EMAIL_CONFIG.EMAIL_USER
-        msg['To'] = destinatario
-        msg['Subject'] = asunto
+        msg['To'] = recipient
+        msg['Subject'] = subject
         msg['Date'] = formatdate(localtime=True)
         
-        if mensaje_texto:
-            msg.attach(MIMEText(mensaje_texto, 'plain', 'utf-8'))
+        if text_message:
+            msg.attach(MIMEText(text_message, 'plain', 'utf-8'))
         
-        if mensaje_html:
-            msg.attach(MIMEText(mensaje_html, 'html', 'utf-8'))
+        if html_message:
+            msg.attach(MIMEText(html_message, 'html', 'utf-8'))
         
-        if archivos:
-            for archivo in archivos:
-                if len(archivo['contenido']) > EMAIL_CONFIG.MAX_FILE_SIZE_MB * 1024 * 1024:
-                    st.warning(f"El archivo {archivo['nombre']} excede el tamaño máximo y no será enviado")
+        if attachments:
+            for attachment in attachments:
+                if len(attachment['content']) > EMAIL_CONFIG.MAX_FILE_SIZE_MB * 1024 * 1024:
+                    st.warning(f"File {attachment['name']} exceeds maximum size and will not be sent")
                     continue
                 
                 part = MIMEBase('application', 'octet-stream')
-                part.set_payload(archivo['contenido'])
+                part.set_payload(attachment['content'])
                 encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{archivo["nombre"]}"')
+                part.add_header('Content-Disposition', f'attachment; filename="{attachment["name"]}"')
                 msg.attach(part)
         
         context = ssl.create_default_context()
@@ -126,11 +126,11 @@ def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, a
         return True
         
     except Exception as e:
-        st.error(f"Error enviando correo: {str(e)}")
+        st.error(f"Error sending email: {str(e)}")
         return False
 
 # ============================================================================
-# CONFIGURACIÓN NLTK
+# NLTK CONFIGURATION
 # ============================================================================
 
 def setup_nltk():
@@ -140,7 +140,7 @@ def setup_nltk():
         try:
             nltk.download('punkt', quiet=True)
         except:
-            st.warning("No se pudo descargar punkt. Usando tokenización alternativa.")
+            st.warning("Could not download punkt. Using alternative tokenization.")
             return False
     
     try:
@@ -149,7 +149,7 @@ def setup_nltk():
         try:
             nltk.download('stopwords', quiet=True)
         except:
-            st.warning("No se pudieron descargar stopwords. Usando lista básica.")
+            st.warning("Could not download stopwords. Using basic list.")
             return False
     
     try:
@@ -166,7 +166,7 @@ if NLTK_READY:
     from nltk.tokenize import sent_tokenize
 
 # ============================================================================
-# ESTILOS CSS
+# CSS STYLES
 # ============================================================================
 
 st.markdown("""
@@ -334,12 +334,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# TOKENIZADOR ALTERNATIVO
+# ALTERNATIVE TOKENIZER
 # ============================================================================
 
 def simple_sent_tokenize(text: str) -> List[str]:
-    abbreviations = ['Dr.', 'Dra.', 'Prof.', 'vs.', 'Fig.', 'Eq.', 'et al.', 
-                    'i.e.', 'e.g.', 'p.ej.', 'vol.', 'no.', 'pp.', 'eds.']
+    abbreviations = ['Dr.', 'Prof.', 'vs.', 'Fig.', 'Eq.', 'et al.', 
+                    'i.e.', 'e.g.', 'vol.', 'no.', 'pp.', 'eds.']
     
     for i, abbr in enumerate(abbreviations):
         text = text.replace(abbr, f"ABBR{i}")
@@ -354,305 +354,213 @@ def simple_sent_tokenize(text: str) -> List[str]:
     return sentences
 
 # ============================================================================
-# CLASE DE TRADUCCIÓN
-# ============================================================================
-
-class TranslationManager:
-    def __init__(self):
-        self.cache = {}
-        try:
-            self.translator = GoogleTranslator(source='auto', target='es')
-            self.translator_en = GoogleTranslator(source='auto', target='en')
-            self.available = True
-        except:
-            self.available = False
-    
-    def translate_to_spanish(self, text: str) -> str:
-        if not text or len(text) > 4000 or not self.available:
-            return text
-        cache_key = f"es_{text[:100]}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-        try:
-            result = self.translator.translate(text[:3500])
-            self.cache[cache_key] = result
-            return result
-        except:
-            return text
-    
-    def translate_to_english(self, text: str) -> str:
-        if not text or len(text) > 4000 or not self.available:
-            return text
-        cache_key = f"en_{text[:100]}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-        try:
-            result = self.translator_en.translate(text[:3500])
-            self.cache[cache_key] = result
-            return result
-        except:
-            return text
-
-# ============================================================================
-# ASISTENTE DE CONSTRUCCIÓN DE CONJETURAS - VERSIÓN CORREGIDA
+# HYPOTHESIS ASSISTANT - COMPLETELY IN ENGLISH
 # ============================================================================
 
 class HypothesisAssistant:
     def __init__(self):
-        self.translator = TranslationManager()
         
         self.templates = {
             "causal": {
-                "es": "El/La {sujeto} {verbo} {efecto} en {poblacion}",
                 "en": "The {subject} {verb} {effect} in {population}",
-                "description": "Relación causal directa",
-                "verbs_es": ["causa", "produce", "induce", "provoca", "genera"],
-                "verbs_en": ["causes", "produces", "induces", "provokes", "generates"]
+                "description": "Direct causal relationship",
+                "verbs": ["causes", "produces", "induces", "provokes", "generates"]
             },
-            "asociacion": {
-                "es": "Existe una asociación entre {sujeto} y {efecto} en {poblacion}",
+            "association": {
                 "en": "There is an association between {subject} and {effect} in {population}",
-                "description": "Asociación o correlación",
-                "verbs_es": ["se asocia con", "se relaciona con", "se correlaciona con"],
-                "verbs_en": ["is associated with", "is related to", "is correlated with"]
+                "description": "Association or correlation",
+                "verbs": ["is associated with", "is related to", "is correlated with"]
             },
-            "riesgo": {
-                "es": "El/La {sujeto} aumenta el riesgo de {efecto} en {poblacion}",
+            "risk": {
                 "en": "The {subject} increases the risk of {effect} in {population}",
-                "description": "Factor de riesgo",
-                "verbs_es": ["aumenta el riesgo de", "incrementa la probabilidad de", "es factor de riesgo para"],
-                "verbs_en": ["increases the risk of", "is a risk factor for"]
+                "description": "Risk factor",
+                "verbs": ["increases the risk of", "is a risk factor for"]
             },
-            "prevencion": {
-                "es": "El/La {sujeto} reduce la incidencia de {efecto} en {poblacion}",
+            "prevention": {
                 "en": "The {subject} reduces the incidence of {effect} in {population}",
-                "description": "Factor protector o preventivo",
-                "verbs_es": ["reduce", "disminuye", "previene", "protege contra"],
-                "verbs_en": ["reduces", "decreases", "prevents", "protects against"]
+                "description": "Protective or preventive factor",
+                "verbs": ["reduces", "decreases", "prevents", "protects against"]
             },
-            "efectividad": {
-                "es": "El/La {sujeto} es efectivo para tratar {efecto} en {poblacion}",
+            "effectiveness": {
                 "en": "The {subject} is effective in treating {effect} in {population}",
-                "description": "Efectividad terapéutica",
-                "verbs_es": ["es efectivo para", "es eficaz para", "demuestra eficacia en"],
-                "verbs_en": ["is effective in", "demonstrates efficacy in"]
+                "description": "Therapeutic effectiveness",
+                "verbs": ["is effective in", "demonstrates efficacy in"]
             }
         }
         
-        # MAPA DE TÉRMINOS MeSH - FORMATO CORRECTO
+        # MeSH TERMS MAP - COMPLETE
         self.mesh_terms_map = {
-            # Sujetos/Intervenciones
+            # Subjects/Interventions
             "ticagrelor": "Ticagrelor",
-            "ejercicio": "Exercise",
-            "ejercicio físico": "Exercise",
-            "physical activity": "Exercise",
             "exercise": "Exercise",
-            "ruptura cardiaca": "Heart Rupture, Post-Infarction",
-            "ruptura cardíaca": "Heart Rupture, Post-Infarction",
+            "physical activity": "Exercise",
             "cardiac rupture": "Heart Rupture, Post-Infarction",
-            "infarto": "Myocardial Infarction",
-            "infarto de miocardio": "Myocardial Infarction",
+            "heart rupture": "Heart Rupture, Post-Infarction",
             "myocardial infarction": "Myocardial Infarction",
+            "heart attack": "Myocardial Infarction",
             "diabetes": "Diabetes Mellitus, Type 2",
-            "diabetes tipo 2": "Diabetes Mellitus, Type 2",
             "type 2 diabetes": "Diabetes Mellitus, Type 2",
-            "sobrepeso": "Overweight",
             "overweight": "Overweight",
-            "obesidad": "Obesity",
             "obesity": "Obesity",
-            "cardiopatía": "Heart Diseases",
-            "cardiopatía isquémica": "Myocardial Ischemia",
+            "heart disease": "Heart Diseases",
             "myocardial ischemia": "Myocardial Ischemia",
+            "alcoholism": "Alcoholism",
+            "alcohol": "Alcohol Drinking",
+            "alcohol drinking": "Alcohol Drinking",
+            "smoking": "Smoking",
+            "cigarette smoking": "Smoking",
             
-            # Efectos/Desenlaces
-            "disnea": "Dyspnea",
+            # Effects/Outcomes
             "dyspnea": "Dyspnea",
-            "mortalidad": "Mortality",
+            "shortness of breath": "Dyspnea",
             "mortality": "Mortality",
-            "muerte": "Mortality",
             "death": "Mortality",
-            "incidencia": "Incidence",
             "incidence": "Incidence",
-            "efecto secundario": "Drug-Related Side Effects and Adverse Reactions",
+            "side effect": "Drug-Related Side Effects and Adverse Reactions",
             "adverse effects": "Drug-Related Side Effects and Adverse Reactions",
+            "association": "Epidemiologic Studies",
             
-            # Población
-            "adultos": "Adult",
-            "adult": "Adult",
+            # Population
             "adults": "Adult",
-            "niños": "Child",
+            "adult": "Adult",
             "children": "Child",
-            "mayores": "Aged",
+            "child": "Child",
+            "elderly": "Aged",
             "aged": "Aged",
-            "ancianos": "Aged"
+            "patients": "Patients",
+            "older adults": "Aged"
         }
         
-        # SUBHEADINGS - FORMATO CORRECTO (van pegados al término con /)
+        # SUBHEADINGS - CORRECT FORMAT (attached to term with /)
         self.subheadings = {
-            "prevención": "prevention and control",
             "prevention": "prevention and control",
-            "tratamiento": "therapy",
             "therapy": "therapy",
-            "diagnóstico": "diagnosis",
+            "treatment": "therapy",
             "diagnosis": "diagnosis",
-            "epidemiología": "epidemiology",
             "epidemiology": "epidemiology",
-            "efectos adversos": "adverse effects",
             "adverse effects": "adverse effects",
-            "fisiopatología": "physiopathology",
             "physiopathology": "physiopathology",
-            "mortalidad": "mortality",
-            "mortality": "mortality"
+            "mortality": "mortality",
+            "association": "epidemiology"
         }
         
-        # EJEMPLOS CON FORMATO CORRECTO
+        # EXAMPLES WITH CORRECT FORMAT
         self.examples = [
             {
-                "name": "Ticagrelor y disnea",
-                "sujeto": "ticagrelor",
-                "efecto": "disnea",
-                "poblacion": "pacientes con cardiopatía isquémica",
-                "tipo": "causal",
-                "verbo": "causa",
-                "hypothesis": "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica",
+                "name": "Ticagrelor and dyspnea",
+                "subject": "ticagrelor",
+                "effect": "dyspnea",
+                "population": "patients with myocardial ischemia",
+                "type": "causal",
+                "verb": "causes",
+                "hypothesis": "Ticagrelor causes dyspnea as a side effect in patients with myocardial ischemia",
                 "mesh_query": '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
             },
             {
-                "name": "Ruptura cardiaca postinfarto",
-                "sujeto": "ruptura cardiaca postinfarto",
-                "efecto": "patrones anatómicos de ruptura",
-                "poblacion": "pacientes con infarto agudo de miocardio",
-                "tipo": "asociacion",
-                "verbo": "sigue",
-                "hypothesis": "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)",
+                "name": "Post-infarction cardiac rupture",
+                "subject": "post-infarction cardiac rupture",
+                "effect": "anatomical rupture patterns",
+                "population": "patients with acute myocardial infarction",
+                "type": "association",
+                "verb": "follows",
+                "hypothesis": "In post-infarction cardiac rupture, the heart ruptures following recognizable anatomical patterns (intramyocardial dissection, intramyocardial hematoma, or complex rupture)",
                 "mesh_query": '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh])'
             },
             {
-                "name": "Ejercicio y diabetes",
-                "sujeto": "ejercicio físico regular",
-                "efecto": "diabetes tipo 2",
-                "poblacion": "adultos con sobrepeso",
-                "tipo": "prevencion",
-                "verbo": "reduce la incidencia de",
-                "hypothesis": "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso",
+                "name": "Exercise and diabetes",
+                "subject": "regular physical exercise",
+                "effect": "type 2 diabetes",
+                "population": "overweight adults",
+                "type": "prevention",
+                "verb": "reduces the incidence of",
+                "hypothesis": "Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults",
                 "mesh_query": '("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
+            },
+            {
+                "name": "Alcoholism and mortality",
+                "subject": "alcoholism",
+                "effect": "mortality",
+                "population": "adults",
+                "type": "risk",
+                "verb": "increases the risk of",
+                "hypothesis": "Alcoholism increases the risk of mortality in adults",
+                "mesh_query": '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
+            },
+            {
+                "name": "Smoking and lung cancer",
+                "subject": "smoking",
+                "effect": "lung cancer",
+                "population": "adults",
+                "type": "risk",
+                "verb": "increases the risk of",
+                "hypothesis": "Smoking increases the risk of lung cancer in adults",
+                "mesh_query": '("Smoking"[Mesh] AND "Lung Neoplasms"[Mesh] AND "Adult"[Mesh])'
             }
         ]
     
-    def get_available_verbs(self, template_type: str, language: str = "es") -> List[str]:
+    def get_available_verbs(self, template_type: str) -> List[str]:
         if template_type in self.templates:
-            return self.templates[template_type].get(f"verbs_{language}", [])
+            return self.templates[template_type].get("verbs", [])
         return []
     
     def build_hypothesis(self, subject: str, effect: str, population: str, 
                         template_type: str, verb: str = None) -> Dict:
         if template_type not in self.templates:
-            return {"es": "", "en": ""}
+            return {"en": ""}
         
         template = self.templates[template_type]
         
-        if not verb and template.get(f"verbs_es"):
-            verb = template[f"verbs_es"][0]
+        if not verb and template.get("verbs"):
+            verb = template["verbs"][0]
         
         if verb:
-            if "{verbo}" in template["es"]:
-                hypothesis_es = template["es"].format(
-                    sujeto=subject,
-                    verbo=verb,
-                    efecto=effect,
-                    poblacion=population
-                )
-            else:
-                hypothesis_es = template["es"].format(
-                    sujeto=subject,
-                    efecto=effect,
-                    poblacion=population
-                )
+            hypothesis_en = template["en"].format(
+                subject=subject,
+                verb=verb,
+                effect=effect,
+                population=population
+            )
         else:
-            hypothesis_es = template["es"].format(
-                sujeto=subject,
-                efecto=effect,
-                poblacion=population
+            hypothesis_en = template["en"].format(
+                subject=subject,
+                effect=effect,
+                population=population
             )
         
-        # Traducir componentes individuales
-        subject_en = self.translator.translate_to_english(subject)
-        effect_en = self.translator.translate_to_english(effect)
-        population_en = self.translator.translate_to_english(population)
-        
-        verb_en = ""
-        if verb and template.get(f"verbs_es") and template.get(f"verbs_en"):
-            try:
-                verb_idx = template["verbs_es"].index(verb)
-                verbs_en = template["verbs_en"]
-                verb_en = verbs_en[verb_idx] if verb_idx < len(verbs_en) else verbs_en[0]
-            except ValueError:
-                verb_en = self.translator.translate_to_english(verb)
-        elif verb:
-            verb_en = self.translator.translate_to_english(verb)
-        
-        # Construir versión en inglés directa
-        if verb_en:
-            if "{verb}" in template["en"]:
-                hypothesis_en_direct = template["en"].format(
-                    subject=subject_en,
-                    verb=verb_en,
-                    effect=effect_en,
-                    population=population_en
-                )
-            else:
-                hypothesis_en_direct = template["en"].format(
-                    subject=subject_en,
-                    effect=effect_en,
-                    population=population_en
-                )
-        else:
-            hypothesis_en_direct = template["en"].format(
-                subject=subject_en,
-                effect=effect_en,
-                population=population_en
-            )
-        
-        # Traducción automática completa
-        hypothesis_en = self.translator.translate_to_english(hypothesis_es)
-        
-        # Generar consulta MeSH en formato CORRECTO
+        # Generate MeSH query in CORRECT format
         mesh_query = self.generate_correct_mesh_query(subject, effect, population, template_type, verb)
         
         return {
-            "es": hypothesis_es,
             "en": hypothesis_en,
-            "en_direct": hypothesis_en_direct,
             "mesh_query": mesh_query,
             "subject": subject,
             "effect": effect,
             "population": population,
             "type": template_type,
             "type_description": template["description"],
-            "verb": verb,
-            "verb_en": verb_en
+            "verb": verb
         }
     
     def find_mesh_term(self, text: str) -> Optional[str]:
         """
-        Busca un término en el mapa MeSH
+        Search for a term in the MeSH map
         """
         if not text:
             return None
         
         text_lower = text.lower().strip()
         
-        # Buscar coincidencia exacta primero
+        # Search exact match first
         for key, value in self.mesh_terms_map.items():
             if key == text_lower:
                 return value
         
-        # Buscar coincidencia parcial
+        # Search partial match
         for key, value in self.mesh_terms_map.items():
             if key in text_lower or text_lower in key:
                 return value
         
-        # Buscar por palabras clave
+        # Search by keywords
         words = text_lower.split()
         for word in words:
             if len(word) > 3:
@@ -665,92 +573,92 @@ class HypothesisAssistant:
     def generate_correct_mesh_query(self, subject: str, effect: str, population: str, 
                                    template_type: str, verb: str = None) -> str:
         """
-        Genera una consulta en formato MeSH CORRECTO para PubMed
-        Formato correcto: 
-        - Para términos con subheading: "Término/subheading"[Mesh]
-        - Para términos sin subheading: "Término"[Mesh]
-        - Unir con AND
+        Generate a query in CORRECT MeSH format for PubMed
+        Correct format: 
+        - For terms with subheading: "Term/subheading"[Mesh]
+        - For terms without subheading: "Term"[Mesh]
+        - Join with AND
         """
         query_parts = []
         
         # Debug info
         if st.session_state.get('debug_mode', False):
-            st.write("🔍 Generando consulta MeSH:")
-            st.write(f"   Sujeto: {subject}")
-            st.write(f"   Efecto: {effect}")
-            st.write(f"   Población: {population}")
-            st.write(f"   Tipo: {template_type}")
+            st.write("🔍 Generating MeSH query:")
+            st.write(f"   Subject: {subject}")
+            st.write(f"   Effect: {effect}")
+            st.write(f"   Population: {population}")
+            st.write(f"   Type: {template_type}")
         
-        # Obtener término para sujeto
+        # Get term for subject
         subject_term = self.find_mesh_term(subject)
         if subject_term:
             if st.session_state.get('debug_mode', False):
-                st.write(f"   ✓ Sujeto encontrado: {subject_term}")
+                st.write(f"   ✓ Subject found: {subject_term}")
             
-            # Añadir subheading si es prevención
-            if template_type == "prevencion":
+            # Add subheading for prevention type
+            if template_type == "prevention":
                 subject_final = f'"{subject_term}/prevention and control"[Mesh]'
             else:
                 subject_final = f'"{subject_term}"[Mesh]'
             query_parts.append(subject_final)
         else:
             if st.session_state.get('debug_mode', False):
-                st.write(f"   ✗ Sujeto NO encontrado en mapa MeSH")
+                st.write(f"   ✗ Subject NOT found in MeSH map")
         
-        # Obtener término para efecto
+        # Get term for effect
         effect_term = self.find_mesh_term(effect)
         if effect_term:
             if st.session_state.get('debug_mode', False):
-                st.write(f"   ✓ Efecto encontrado: {effect_term}")
+                st.write(f"   ✓ Effect found: {effect_term}")
             
-            # Añadir subheading si es prevención
-            if template_type == "prevencion":
+            # Add subheading for prevention type
+            if template_type == "prevention":
                 effect_final = f'"{effect_term}/prevention and control"[Mesh]'
-            elif template_type == "riesgo" and effect_term in ["Mortality", "Incidence"]:
+            elif template_type == "risk" and effect_term in ["Mortality", "Incidence"]:
                 effect_final = f'"{effect_term}/mortality"[Mesh]'
             else:
                 effect_final = f'"{effect_term}"[Mesh]'
             query_parts.append(effect_final)
         else:
             if st.session_state.get('debug_mode', False):
-                st.write(f"   ✗ Efecto NO encontrado en mapa MeSH")
+                st.write(f"   ✗ Effect NOT found in MeSH map")
         
-        # Obtener término para población
+        # Get term for population
         population_term = self.find_mesh_term(population)
         if population_term:
             if st.session_state.get('debug_mode', False):
-                st.write(f"   ✓ Población encontrada: {population_term}")
+                st.write(f"   ✓ Population found: {population_term}")
             population_final = f'"{population_term}"[Mesh]'
             query_parts.append(population_final)
         else:
             if st.session_state.get('debug_mode', False):
-                st.write(f"   ✗ Población NO encontrada en mapa MeSH")
+                st.write(f"   ✗ Population NOT found in MeSH map")
         
-        # Si no hay partes en la consulta, usar una consulta por defecto
+        # If no query parts, use default query
         if not query_parts:
             if st.session_state.get('debug_mode', False):
-                st.write("   ⚠️ No se encontraron términos MeSH, usando consulta por defecto")
+                st.write("   ⚠️ No MeSH terms found, using default query")
             return '("research"[Title/Abstract])'
         
-        # Unir con AND y envolver en paréntesis
+        # Join with AND and wrap in parentheses
         query = " AND ".join(query_parts)
         final_query = f"({query})"
         
         if st.session_state.get('debug_mode', False):
-            st.write(f"   ✅ Consulta generada: {final_query}")
+            st.write(f"   ✅ Query generated: {final_query}")
         
         return final_query
     
     def render_assistant_ui(self):
-        with st.expander("🤖 ASISTENTE DE CONJETURAS - Ayuda a construir tu hipótesis", expanded=False):
+        with st.expander("🤖 HYPOTHESIS ASSISTANT - Build your scientific hypothesis", expanded=False):
             st.markdown('<div class="assistant-box">', unsafe_allow_html=True)
-            st.markdown("### 🎯 Construye tu conjetura científica")
-            st.markdown("Completa los siguientes campos para generar una hipótesis bien formada y su consulta MeSH en formato CORRECTO:")
+            st.markdown("### 🎯 Build your scientific hypothesis")
+            st.markdown("Complete the following fields to generate a well-formed hypothesis and its MeSH query in CORRECT format:")
             
-            # Mostrar ejemplo del formato correcto
+            # Show example of correct format
             st.markdown("""
             <div class="query-example">
-            <b>✅ FORMATO CORRECTO PARA PubMed:</b><br>
+            <b>✅ CORRECT MeSH FORMAT:</b><br>
             ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])
             </div>
             """, unsafe_allow_html=True)
@@ -759,35 +667,35 @@ class HypothesisAssistant:
             
             with col1:
                 example_option = st.selectbox(
-                    "📋 Cargar ejemplo:",
-                    ["Personalizado"] + [e["name"] for e in self.examples],
+                    "📋 Load example:",
+                    ["Custom"] + [e["name"] for e in self.examples],
                     key="example_selector"
                 )
                 
                 subject = st.text_input(
-                    "🧪 Sujeto/Intervención:",
+                    "🧪 Subject/Intervention:",
                     value=st.session_state.get('assistant_subject', ''),
-                    placeholder="Ej: ticagrelor, ejercicio, ruptura cardiaca",
+                    placeholder="e.g., ticagrelor, exercise, alcoholism",
                     key="assistant_subject"
                 )
                 
                 effect = st.text_input(
-                    "📊 Efecto/Desenlace:",
+                    "📊 Effect/Outcome:",
                     value=st.session_state.get('assistant_effect', ''),
-                    placeholder="Ej: disnea, diabetes tipo 2, mortalidad",
+                    placeholder="e.g., dyspnea, type 2 diabetes, mortality",
                     key="assistant_effect"
                 )
                 
                 population = st.text_input(
-                    "👥 Población:",
+                    "👥 Population:",
                     value=st.session_state.get('assistant_population', ''),
-                    placeholder="Ej: adultos, pacientes con sobrepeso, niños",
+                    placeholder="e.g., adults, overweight patients, children",
                     key="assistant_population"
                 )
             
             with col2:
                 template_type = st.selectbox(
-                    "🔄 Tipo de relación:",
+                    "🔄 Relationship type:",
                     options=list(self.templates.keys()),
                     format_func=lambda x: f"{x} - {self.templates[x]['description']}",
                     key="template_type"
@@ -796,7 +704,7 @@ class HypothesisAssistant:
                 available_verbs = self.get_available_verbs(template_type)
                 if available_verbs:
                     verb = st.selectbox(
-                        "🔤 Verbo/relación:",
+                        "🔤 Verb/relationship:",
                         options=available_verbs,
                         key="selected_verb"
                     )
@@ -804,19 +712,19 @@ class HypothesisAssistant:
                     verb = None
                 
                 st.markdown("---")
-                st.markdown("##### 💡 Sugerencias:")
+                st.markdown("##### 💡 Suggestions:")
                 if template_type == "causal":
-                    st.info("Usa verbos fuertes como 'causa', 'induce' para relaciones causales directas")
-                elif template_type == "asociacion":
-                    st.info("Usa 'se asocia con', 'se relaciona con' para correlaciones sin causalidad establecida")
-                elif template_type == "riesgo":
-                    st.info("Adecuado cuando el sujeto aumenta la probabilidad del efecto")
-                elif template_type == "prevencion":
-                    st.info("Usa cuando el sujeto reduce el riesgo o protege contra el efecto")
-                elif template_type == "efectividad":
-                    st.info("Ideal para evaluar intervenciones terapéuticas")
+                    st.info("Use strong verbs like 'causes', 'induces' for direct causal relationships")
+                elif template_type == "association":
+                    st.info("Use 'is associated with', 'is related to' for correlations without established causality")
+                elif template_type == "risk":
+                    st.info("Use when the subject increases the probability of the effect")
+                elif template_type == "prevention":
+                    st.info("Use when the subject reduces risk or protects against the effect")
+                elif template_type == "effectiveness":
+                    st.info("Ideal for evaluating therapeutic interventions")
             
-            if st.button("✨ GENERAR CONJETURA", type="primary", use_container_width=True):
+            if st.button("✨ GENERATE HYPOTHESIS", type="primary", use_container_width=True):
                 if subject and effect and population:
                     hypothesis_data = self.build_hypothesis(
                         subject=subject,
@@ -827,136 +735,102 @@ class HypothesisAssistant:
                     )
                     
                     st.markdown("---")
-                    st.markdown("### 📝 CONJETURA GENERADA")
+                    st.markdown("### 📝 GENERATED HYPOTHESIS")
                     
-                    col1, col2 = st.columns(2)
+                    st.markdown("**🇬🇧 English:**")
+                    st.success(hypothesis_data["en"])
                     
-                    with col1:
-                        st.markdown("**🇪🇸 Español:**")
-                        st.success(hypothesis_data["es"])
+                    # Button to use the hypothesis
+                    if st.button("📌 Use this hypothesis", key="use_hypothesis", use_container_width=True):
+                        st.session_state['hypothesis'] = hypothesis_data["en"]
+                        st.session_state['query'] = hypothesis_data["mesh_query"]
                         
-                        # Botón para usar la hipótesis en español
-                        if st.button("📌 Usar esta hipótesis", key="use_hypothesis_es", use_container_width=True):
-                            st.session_state['hypothesis'] = hypothesis_data["es"]
-                            st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
-                            st.session_state['query'] = hypothesis_data["mesh_query"]
-                            
-                            st.success("✅ Hipótesis y consulta MeSH cargadas")
-                            st.rerun()
+                        st.success("✅ Hypothesis and MeSH query loaded")
+                        st.rerun()
                     
-                    with col2:
-                        st.markdown("**🇬🇧 Inglés (para búsqueda):**")
-                        st.info(hypothesis_data["en_direct"])
-                        
-                        # Botón para usar la versión en inglés
-                        if st.button("📌 Usar esta versión (inglés)", key="use_hypothesis_en", use_container_width=True):
-                            st.session_state['hypothesis'] = hypothesis_data["es"]
-                            st.session_state['hypothesis_en'] = hypothesis_data["en_direct"]
-                            st.session_state['query'] = hypothesis_data["mesh_query"]
-                            
-                            st.success("✅ Hipótesis y consulta MeSH cargadas")
-                            st.rerun()
-                    
-                    # Mostrar la consulta MeSH generada
+                    # Show the generated MeSH query
                     st.markdown("---")
-                    st.markdown("**🔍 Consulta MeSH para PubMed (formato CORRECTO):**")
+                    st.markdown("**🔍 MeSH query for PubMed (CORRECT format):**")
                     st.markdown(f'<div class="mesh-query">{hypothesis_data["mesh_query"]}</div>', unsafe_allow_html=True)
                     
-                    # Botón para usar la consulta MeSH
-                    if st.button("📋 Usar esta consulta MeSH", key="use_mesh_query", use_container_width=True):
+                    # Button to use the MeSH query
+                    if st.button("📋 Use this MeSH query", key="use_mesh_query", use_container_width=True):
                         st.session_state['query'] = hypothesis_data["mesh_query"]
-                        st.success("✅ Consulta MeSH cargada en el campo de búsqueda")
+                        st.success("✅ MeSH query loaded in search field")
                         st.rerun()
                     
                     st.session_state['last_hypothesis_data'] = hypothesis_data
                     
                 else:
-                    st.warning("⚠️ Completa todos los campos para generar la conjetura")
+                    st.warning("⚠️ Complete all fields to generate the hypothesis")
             
-            if example_option != "Personalizado":
+            if example_option != "Custom":
                 example = next((e for e in self.examples if e["name"] == example_option), None)
                 if example:
                     st.markdown("---")
-                    st.markdown("### 📋 Ejemplo cargado:")
-                    st.info(f"**Hipótesis:** {example['hypothesis']}")
+                    st.markdown("### 📋 Loaded example:")
+                    st.info(f"**Hypothesis:** {example['hypothesis']}")
                     
-                    st.markdown("**🔍 Consulta MeSH (formato CORRECTO):**")
+                    st.markdown("**🔍 MeSH query (CORRECT format):**")
                     st.markdown(f'<div class="mesh-query">{example["mesh_query"]}</div>', unsafe_allow_html=True)
                     
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        if st.button("📌 Usar este ejemplo", key="use_example_main", use_container_width=True):
+                        if st.button("📌 Use this example", key="use_example_main", use_container_width=True):
                             st.session_state['hypothesis'] = example['hypothesis']
-                            translator = TranslationManager()
-                            hypothesis_en = translator.translate_to_english(example['hypothesis'])
-                            st.session_state['hypothesis_en'] = hypothesis_en
                             st.session_state['query'] = example["mesh_query"]
                             
-                            st.success("✅ Ejemplo cargado correctamente")
+                            st.success("✅ Example loaded successfully")
                             st.rerun()
                     
                     with col2:
-                        if st.button("📋 Cargar en el asistente", key="load_example_assistant", use_container_width=True):
-                            st.session_state['assistant_subject'] = example['sujeto']
-                            st.session_state['assistant_effect'] = example['efecto']
-                            st.session_state['assistant_population'] = example['poblacion']
+                        if st.button("📋 Load in assistant", key="load_example_assistant", use_container_width=True):
+                            st.session_state['assistant_subject'] = example['subject']
+                            st.session_state['assistant_effect'] = example['effect']
+                            st.session_state['assistant_population'] = example['population']
                             st.rerun()
                     
                     with col3:
-                        if st.button("🔍 Usar solo consulta", key="use_mesh_only", use_container_width=True):
+                        if st.button("🔍 Use only query", key="use_mesh_only", use_container_width=True):
                             st.session_state['query'] = example["mesh_query"]
-                            st.success("✅ Consulta MeSH cargada")
+                            st.success("✅ MeSH query loaded")
                             st.rerun()
             
             st.markdown('</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="tip-box">', unsafe_allow_html=True)
             st.markdown("""
-            **💡 Consejos para una buena conjetura:**
+            **💡 Tips for a good hypothesis:**
             
-            1. **Sé específico**: Cuanto más específico, mejor podrá verificar la evidencia
-            2. **Define claramente**: El sujeto, efecto y población deben estar claramente definidos
-            3. **Usa terminología médica**: Los artículos científicos usan términos MeSH estandarizados
-            4. **Considera la dirección**: ¿Es causalidad, asociación, riesgo o protección?
-            5. **Población relevante**: Especifica edad, condición, contexto cuando sea relevante
+            1. **Be specific**: The more specific, the better the evidence verification
+            2. **Clearly define**: Subject, effect, and population must be clearly defined
+            3. **Use medical terminology**: Scientific articles use standardized MeSH terms
+            4. **Consider the direction**: Is it causality, association, risk, or protection?
+            5. **Relevant population**: Specify age, condition, context when relevant
             
-            **📊 FORMATO MeSH CORRECTO:**
-            - Para términos con subheading: `"Término/subheading"[Mesh]`
-            - Para términos sin subheading: `"Término"[Mesh]`
-            - Unir con AND
+            **📊 CORRECT MeSH FORMAT:**
+            - For terms with subheading: `"Term/subheading"[Mesh]`
+            - For terms without subheading: `"Term"[Mesh]`
+            - Join with AND
             
-            **✅ EJEMPLO CORRECTO:**<br>
+            **✅ CORRECT EXAMPLE:**<br>
             `("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])`
             """, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
-    
-    def translate_hypothesis_for_search(self, hypothesis_es: str) -> str:
-        if not hypothesis_es:
-            return ""
-        
-        if 'hypothesis_en' in st.session_state and st.session_state['hypothesis_en']:
-            return st.session_state['hypothesis_en']
-        
-        return self.translator.translate_to_english(hypothesis_es)
 
 # ============================================================================
-# VERIFICADOR SEMÁNTICO AVANZADO - VERSIÓN MULTIDOMINIO CORREGIDA
+# ADVANCED SEMANTIC VERIFIER
 # ============================================================================
 
 class AdvancedSemanticVerifier:
     def __init__(self):
         if NLTK_READY:
-            self.stop_words_es = set(stopwords.words('spanish'))
             self.stop_words_en = set(stopwords.words('english'))
-            self.stemmer = SnowballStemmer('spanish')
+            self.stemmer = SnowballStemmer('english')
         else:
-            self.stop_words_es = {'el', 'la', 'los', 'las', 'de', 'del', 'y', 'o', 
-                                  'a', 'en', 'por', 'para', 'con', 'sin', 'sobre'}
             self.stop_words_en = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on',
                                  'at', 'to', 'for', 'with', 'without', 'by'}
             self.stemmer = None
-        
-        self.translator = TranslationManager()
         
         self.section_weights = {
             'abstract': 1.5,
@@ -969,14 +843,12 @@ class AdvancedSemanticVerifier:
         }
         
         self.section_keywords = {
-            'abstract': ['abstract', 'resumen', 'background', 'objective', 'objetivo', 
-                        'methods', 'métodos', 'results', 'resultados'],
-            'introduction': ['introduction', 'introducción', 'background', 'antecedentes'],
-            'methods': ['methods', 'métodos', 'methodology', 'metodología', 
-                       'material and methods', 'material y métodos'],
-            'results': ['results', 'resultados', 'findings', 'hallazgos'],
-            'discussion': ['discussion', 'discusión'],
-            'conclusion': ['conclusion', 'conclusiones', 'concluding', 'conclusión']
+            'abstract': ['abstract', 'background', 'objective', 'methods', 'results'],
+            'introduction': ['introduction', 'background'],
+            'methods': ['methods', 'methodology', 'material and methods'],
+            'results': ['results', 'findings'],
+            'discussion': ['discussion'],
+            'conclusion': ['conclusion', 'conclusions', 'concluding']
         }
         
         self.certainty_levels = {
@@ -1003,13 +875,11 @@ class AdvancedSemanticVerifier:
         }
         
         self.negation_patterns = [
-            r'no\s+(hay|existe|se\s+observó|se\s+encontró)\s+(asociación|relación|correlación)',
-            r'no\s+(se\s+)?(demostró|evidenció|confirmó)\s+',
-            r'no\s+(fue|resultó)\s+(significativo|estadísticamente\s+significativo)',
-            r'p\s*[>=]\s*0\.0[5-9]',
-            r'p\s*>\s*0\.05',
+            r'no\s+(association|relationship|correlation)',
             r'not\s+(associated|related|correlated)',
-            r'no\s+(significant|statistically\s+significant)'
+            r'no\s+(significant|statistically\s+significant)',
+            r'p\s*[>=]\s*0\.0[5-9]',
+            r'p\s*>\s*0\.05'
         ]
         
         self.relation_types = {
@@ -1060,40 +930,34 @@ class AdvancedSemanticVerifier:
             'case report': ['case report']
         }
         
-        # Términos médicos por dominio
+        # Medical terms by domain
         self.cardiac_terms = [
             'intramyocardial', 'dissection', 'hematoma', 'rupture', 'cardiac',
             'postinfarction', 'myocardial', 'infarction', 'free wall', 'septal',
             'ventricular', 'left ventricular', 'anatomical', 'patterns',
             'complex', 'intramyocardial dissection', 'intramyocardial hematoma',
-            'complex rupture', 'cardiac rupture', 'heart rupture',
-            'intramural hematoma', 'dissecting hematoma', 'contained rupture',
-            'incomplete rupture', 'post-infarction rupture', 'ventricular septal rupture',
-            'free wall rupture', 'left ventricular free wall', 'septal rupture',
-            'myocardial rupture', 'ventricular rupture', 'cardiac tamponade',
-            'hemopericardium', 'pseudoaneurysm', 'true aneurysm'
+            'complex rupture', 'cardiac rupture', 'heart rupture'
         ]
         
         self.pharmacology_terms = [
             'ticagrelor', 'dyspnea', 'breathlessness', 'shortness of breath',
             'adverse effect', 'side effect', 'adverse event', 'myocardial ischemia',
-            'angina', 'antiplatelet', 'p2y12 inhibitor', 'p2y12', 'brilinta',
-            'clopidogrel', 'prasugrel', 'aspirin', 'dual antiplatelet therapy',
-            'dapt', 'platelet aggregation', 'inhibition', 'bleeding', 'hemorrhage',
-            'cardiovascular', 'acute coronary syndrome', 'acs', 'stable angina',
-            'percutaneous coronary intervention', 'pci', 'stent', 'thrombosis'
+            'angina', 'antiplatelet', 'p2y12 inhibitor', 'bleeding', 'hemorrhage',
+            'cardiovascular', 'acute coronary syndrome', 'acs'
         ]
         
         self.metabolism_terms = [
             'exercise', 'physical activity', 'aerobic', 'resistance training',
             'diabetes', 'type 2 diabetes', 't2dm', 'type 2 diabetes mellitus',
             'obesity', 'overweight', 'bmi', 'body mass index', 'insulin resistance',
-            'glucose', 'hba1c', 'glycemic control', 'glycated hemoglobin',
-            'weight loss', 'weight reduction', 'prevention', 'incidence',
-            'risk reduction', 'metabolic syndrome', 'impaired glucose tolerance',
-            'igt', 'fasting glucose', 'postprandial glucose', 'insulin sensitivity',
-            'metformin', 'lifestyle intervention', 'diet', 'nutrition', 'calorie restriction',
-            'sedentary', 'physical inactivity', 'cardiovascular disease', 'cvd'
+            'glucose', 'hba1c', 'glycemic control', 'weight loss', 'prevention',
+            'incidence', 'risk reduction', 'metabolic syndrome'
+        ]
+        
+        self.addiction_terms = [
+            'alcoholism', 'alcohol dependence', 'alcohol use disorder', 'alcohol abuse',
+            'smoking', 'cigarette smoking', 'tobacco', 'nicotine', 'addiction',
+            'substance abuse', 'substance use disorder'
         ]
         
         self.general_terms = [
@@ -1102,64 +966,8 @@ class AdvancedSemanticVerifier:
             'retrospective', 'observational', 'cross-sectional', 'case-control',
             'significant', 'statistically significant', 'association',
             'correlation', 'risk factor', 'protective', 'hazard ratio',
-            'odds ratio', 'confidence interval', 'p value', 'multivariate',
-            'adjusted', 'confounding', 'bias', 'limitation', 'conclusion'
+            'odds ratio', 'confidence interval', 'p value'
         ]
-        
-        # Mapa de términos español-inglés
-        self.medical_terms_map = {
-            'disección': 'dissection',
-            'hematoma': 'hematoma',
-            'intramiocárdica': 'intramyocardial',
-            'intramiocárdico': 'intramyocardial',
-            'miocárdica': 'myocardial',
-            'miocárdico': 'myocardial',
-            'ruptura': 'rupture',
-            'cardíaca': 'cardiac',
-            'cardiaca': 'cardiac',
-            'postinfarto': 'postinfarction',
-            'infarto': 'infarction',
-            'pared': 'wall',
-            'libre': 'free',
-            'tabique': 'septal',
-            'septal': 'septal',
-            'ventricular': 'ventricular',
-            'ventrículo': 'ventricle',
-            'izquierdo': 'left',
-            'anatómicos': 'anatomical',
-            'patrones': 'patterns',
-            'compleja': 'complex',
-            'complejo': 'complex',
-            'aneurisma': 'aneurysm',
-            'seudoaneurisma': 'pseudoaneurysm',
-            'disnea': 'dyspnea',
-            'falta de aire': 'shortness of breath',
-            'efecto secundario': 'side effect',
-            'efecto adverso': 'adverse effect',
-            'cardiopatía': 'heart disease',
-            'isquémica': 'ischemic',
-            'isquemia': 'ischemia',
-            'antiagregante': 'antiplatelet',
-            'sangrado': 'bleeding',
-            'hemorragia': 'hemorrhage',
-            'ejercicio': 'exercise',
-            'actividad física': 'physical activity',
-            'diabetes': 'diabetes',
-            'tipo 2': 'type 2',
-            'sobrepeso': 'overweight',
-            'obesidad': 'obesity',
-            'glucosa': 'glucose',
-            'insulina': 'insulin',
-            'resistencia a la insulina': 'insulin resistance',
-            'prevención': 'prevention',
-            'incidencia': 'incidence',
-            'riesgo': 'risk',
-            'reducción': 'reduction',
-            'adultos': 'adults',
-            'niños': 'children',
-            'mayores': 'aged',
-            'ancianos': 'aged'
-        }
         
         self.UMBRAL_RELEVANCIA = 0.05
         
@@ -1167,31 +975,35 @@ class AdvancedSemanticVerifier:
             self.cardiac_terms + 
             self.pharmacology_terms + 
             self.metabolism_terms + 
+            self.addiction_terms +
             self.general_terms
         ))
     
     def detect_domain(self, hypothesis: str) -> str:
         hypo_lower = hypothesis.lower()
         
-        cardiac_keywords = ['ruptura', 'cardíaca', 'cardiaca', 'infarto', 'miocárdico', 
-                           'corazón', 'ventrículo', 'disección', 'hematoma', 'cardiac', 
-                           'myocardial', 'infarction', 'rupture', 'intramyocardial']
+        cardiac_keywords = ['cardiac', 'myocardial', 'infarction', 'rupture', 'intramyocardial',
+                           'heart', 'ventricular', 'septal']
         
-        pharmacology_keywords = ['ticagrelor', 'fármaco', 'medicamento', 'disnea', 'efecto secundario',
-                                'adverse', 'side effect', 'dyspnea', 'drug', 'antiplatelet']
+        pharmacology_keywords = ['ticagrelor', 'drug', 'adverse', 'side effect', 'dyspnea',
+                                'antiplatelet', 'pharmacology']
         
-        metabolism_keywords = ['ejercicio', 'diabetes', 'sobrepeso', 'obesidad', 'glucosa',
-                              'exercise', 'diabetes', 'obesity', 'overweight', 'glucose',
-                              'metabolic', 'insulin', 'weight loss']
+        metabolism_keywords = ['exercise', 'diabetes', 'obesity', 'overweight', 'glucose',
+                              'metabolic', 'insulin', 'weight']
+        
+        addiction_keywords = ['alcohol', 'alcoholism', 'smoking', 'tobacco', 'addiction',
+                             'substance', 'dependence']
         
         cardiac_score = sum(1 for kw in cardiac_keywords if kw in hypo_lower)
         pharmacology_score = sum(1 for kw in pharmacology_keywords if kw in hypo_lower)
         metabolism_score = sum(1 for kw in metabolism_keywords if kw in hypo_lower)
+        addiction_score = sum(1 for kw in addiction_keywords if kw in hypo_lower)
         
         scores = {
             'cardiac': cardiac_score,
             'pharmacology': pharmacology_score,
-            'metabolism': metabolism_score
+            'metabolism': metabolism_score,
+            'addiction': addiction_score
         }
         
         max_domain = max(scores, key=scores.get)
@@ -1224,14 +1036,10 @@ class AdvancedSemanticVerifier:
                     if len(word) > 3:
                         all_terms.append(word)
         
-        words = re.findall(r'\b[a-zA-Záéíóúñü]+\b', hypothesis_lower)
+        words = re.findall(r'\b[a-zA-Z]+\b', hypothesis_lower)
         for word in words:
-            if len(word) > 3 and word not in self.stop_words_es and word not in self.stop_words_en:
+            if len(word) > 3 and word not in self.stop_words_en:
                 all_terms.append(word)
-        
-        for es_term, en_term in self.medical_terms_map.items():
-            if es_term in hypothesis_lower and en_term not in all_terms:
-                all_terms.append(en_term)
         
         domain = self.detect_domain(hypothesis)
         
@@ -1241,6 +1049,8 @@ class AdvancedSemanticVerifier:
             all_terms.extend(self.pharmacology_terms)
         elif domain == 'metabolism':
             all_terms.extend(self.metabolism_terms)
+        elif domain == 'addiction':
+            all_terms.extend(self.addiction_terms)
         
         all_terms.extend(self.general_terms)
         
@@ -1360,12 +1170,6 @@ class AdvancedSemanticVerifier:
                     score += 0.3
                 else:
                     score += 0.15
-            
-            if 'contained rupture' in sentence_lower or 'incomplete rupture' in sentence_lower:
-                score += 0.45
-            
-            if 'pseudoaneurysm' in sentence_lower or 'false aneurysm' in sentence_lower:
-                score += 0.35
         
         elif domain == 'pharmacology':
             if 'ticagrelor' in sentence_lower:
@@ -1379,9 +1183,6 @@ class AdvancedSemanticVerifier:
                 score += 0.25
                 if 'antiplatelet' in sentence_lower or 'p2y12' in sentence_lower:
                     score += 0.3
-            
-            if 'myocardial ischemia' in sentence_lower or 'acute coronary syndrome' in sentence_lower:
-                score += 0.2
         
         elif domain == 'metabolism':
             if 'exercise' in sentence_lower or 'physical activity' in sentence_lower:
@@ -1399,8 +1200,21 @@ class AdvancedSemanticVerifier:
                     score += 0.4
                 elif 'risk' in sentence_lower and ('reduction' in sentence_lower or 'decrease' in sentence_lower):
                     score += 0.35
+        
+        elif domain == 'addiction':
+            if 'alcohol' in sentence_lower or 'alcoholism' in sentence_lower:
+                score += 0.4
+                if 'mortality' in sentence_lower or 'death' in sentence_lower:
+                    score += 0.5
+                elif 'risk' in sentence_lower:
+                    score += 0.3
             
-            if 'insulin resistance' in sentence_lower or 'metabolic syndrome' in sentence_lower:
+            if 'smoking' in sentence_lower or 'tobacco' in sentence_lower:
+                score += 0.4
+                if 'cancer' in sentence_lower or 'mortality' in sentence_lower:
+                    score += 0.5
+            
+            if 'mortality' in sentence_lower:
                 score += 0.3
         
         study_indicators = ['randomized', 'controlled trial', 'cohort', 'meta-analysis', 
@@ -1425,7 +1239,7 @@ class AdvancedSemanticVerifier:
         if not text or len(text.strip()) < 100:
             return {
                 'success': False,
-                'error': 'Texto insuficiente para análisis',
+                'error': 'Insufficient text for analysis',
                 'verdict': None
             }
         
@@ -1434,8 +1248,8 @@ class AdvancedSemanticVerifier:
         hypothesis_terms = self.extract_key_terms(hypothesis)
         
         if st.session_state.get('debug_mode', False):
-            st.write(f"📋 Dominio detectado: **{domain}**")
-            st.write(f"📋 Términos de búsqueda (primeros 15): {hypothesis_terms[:15]}")
+            st.write(f"📋 Detected domain: **{domain}**")
+            st.write(f"📋 Search terms (first 15): {hypothesis_terms[:15]}")
         
         quality = self.assess_study_quality(text)
         sentences = self.split_sentences(text)
@@ -1461,16 +1275,11 @@ class AdvancedSemanticVerifier:
             
             relevance = self.calculate_relevance(sentence, hypothesis_terms, domain)
             
-            if relevance > 0.1 and st.session_state.get('debug_mode', False):
-                st.write(f"   🔍 Relevancia: {relevance:.2f} - {sentence[:150]}...")
-            
             if relevance > self.UMBRAL_RELEVANCIA:
-                sentence_en = self.translator.translate_to_english(sentence)
-                analysis = self.analyze_sentence_deep(sentence_en)
+                analysis = self.analyze_sentence_deep(sentence)
                 
                 evidence = {
                     'sentence': sentence[:200] + '...' if len(sentence) > 200 else sentence,
-                    'sentence_en': sentence_en[:200] + '...' if len(sentence_en) > 200 else sentence_en,
                     'section': section,
                     'section_weight': section_weight,
                     'relevance': relevance,
@@ -1504,7 +1313,7 @@ class AdvancedSemanticVerifier:
                 'score': 0,
                 'confidence': 0,
                 'verdict': 'inconclusive',
-                'verdict_text': 'EVIDENCIA NO CONCLUYENTE',
+                'verdict_text': 'INCONCLUSIVE EVIDENCE',
                 'support_count': 0,
                 'against_count': 0
             }
@@ -1566,19 +1375,19 @@ class AdvancedSemanticVerifier:
         
         if avg_score > 0.8:
             verdict = 'strongly_supports'
-            text = 'CORROBORA FUERTEMENTE'
+            text = 'STRONGLY SUPPORTS'
         elif avg_score > 0.3:
             verdict = 'supports'
-            text = 'CORROBORA'
+            text = 'SUPPORTS'
         elif avg_score > -0.3:
             verdict = 'inconclusive'
-            text = 'EVIDENCIA NO CONCLUYENTE'
+            text = 'INCONCLUSIVE'
         elif avg_score > -0.8:
             verdict = 'contradicts'
-            text = 'CONTRADICE'
+            text = 'CONTRADICTS'
         else:
             verdict = 'strongly_contradicts'
-            text = 'CONTRADICE FUERTEMENTE'
+            text = 'STRONGLY CONTRADICTS'
         
         return {
             'score': avg_score,
@@ -1591,7 +1400,7 @@ class AdvancedSemanticVerifier:
         }
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA
+# SCIENTIFIC SEARCH ENGINE
 # ============================================================================
 
 class ScientificSearchEngine:
@@ -1635,14 +1444,12 @@ class ScientificSearchEngine:
     def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
         query = ' '.join(query.split())
         
-        # Manejar el formato correcto con subheadings
+        # Handle correct format with subheadings
         mesh_with_subheading_pattern = r'"([^/]+)/([^"]+)"\[Mesh\]'
         
         def replace_mesh_with_subheading(match):
             term = match.group(1).strip()
             subheading = match.group(2).strip()
-            # En PubMed, los subheadings se formatean como term[Subheading] O term/subheading[mh]
-            # Usaremos el formato term/subheading[mh] que es el más común
             return f'"{term}/{subheading}"[mh]'
         
         query = re.sub(mesh_with_subheading_pattern, replace_mesh_with_subheading, query)
@@ -1712,7 +1519,7 @@ class ScientificSearchEngine:
             count = int(search_data.get('esearchresult', {}).get('count', 0))
             
             if st.session_state.get('debug_mode', False):
-                st.write(f"📊 PubMed: {count} resultados encontrados")
+                st.write(f"📊 PubMed: {count} results found")
             
             if not webenv or not query_key or count == 0:
                 return []
@@ -1749,7 +1556,7 @@ class ScientificSearchEngine:
             return all_results
             
         except Exception as e:
-            st.warning(f"Error en PubMed: {str(e)}")
+            st.warning(f"Error in PubMed: {str(e)}")
             return []
     
     def fetch_pubmed_batch(self, ids_batch: list) -> list:
@@ -1776,7 +1583,7 @@ class ScientificSearchEngine:
             for article in root.findall('.//PubmedArticle'):
                 try:
                     title_elem = article.find('.//ArticleTitle')
-                    title = title_elem.text if title_elem is not None and title_elem.text else "Título no disponible"
+                    title = title_elem.text if title_elem is not None and title_elem.text else "Title not available"
                     
                     authors = []
                     author_list = article.findall('.//Author')
@@ -1831,23 +1638,23 @@ class ScientificSearchEngine:
                             abstract = abstract_elem.text
                     
                     results.append({
-                        'base_datos': 'PubMed',
-                        'titulo': title,
-                        'autores': ', '.join(authors)[:200],
-                        'revista': journal,
-                        'año': year,
+                        'database': 'PubMed',
+                        'title': title,
+                        'authors': ', '.join(authors)[:200],
+                        'journal': journal,
+                        'year': year,
                         'doi': doi,
                         'url': f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else "",
                         'pmid': pmid,
                         'abstract': abstract[:500] + '...' if len(abstract) > 500 else abstract,
-                        'tipo': 'Artículo'
+                        'type': 'Article'
                     })
                     
                 except Exception as e:
                     continue
                     
         except Exception as e:
-            st.warning(f"Error en fetch_pubmed_batch: {str(e)}")
+            st.warning(f"Error in fetch_pubmed_batch: {str(e)}")
         
         return results
     
@@ -1887,18 +1694,18 @@ class ScientificSearchEngine:
                         authors.append(author['family'])
                 
                 results.append({
-                    'base_datos': 'CrossRef',
-                    'titulo': item.get('title', ['Título no disponible'])[0],
-                    'autores': ', '.join(authors)[:200],
-                    'revista': item.get('container-title', [''])[0] if item.get('container-title') else '',
-                    'año': year,
+                    'database': 'CrossRef',
+                    'title': item.get('title', ['Title not available'])[0],
+                    'authors': ', '.join(authors)[:200],
+                    'journal': item.get('container-title', [''])[0] if item.get('container-title') else '',
+                    'year': year,
                     'doi': item.get('DOI', ''),
                     'url': f"https://doi.org/{item['DOI']}" if item.get('DOI') else '',
-                    'tipo': item.get('type', '')
+                    'type': item.get('type', '')
                 })
                 
         except Exception as e:
-            st.warning(f"Error en CrossRef: {str(e)}")
+            st.warning(f"Error in CrossRef: {str(e)}")
         
         return results[:max_results]
     
@@ -1931,25 +1738,25 @@ class ScientificSearchEngine:
                     break
                 
                 for item in page_results:
-                    titulo = item.get('title')
-                    if titulo is None:
-                        titulo = "Título no disponible"
+                    title = item.get('title')
+                    if title is None:
+                        title = "Title not available"
                     
-                    autores_list = []
+                    authors_list = []
                     for a in item.get('authorships', [])[:5]:
                         author_data = a.get('author', {})
                         if author_data is not None:
                             author_name = author_data.get('display_name')
                             if author_name:
-                                autores_list.append(author_name)
+                                authors_list.append(author_name)
                     
-                    revista = ""
+                    journal = ""
                     host_venue = item.get('host_venue')
                     if host_venue is not None:
-                        revista = host_venue.get('display_name', '')
+                        journal = host_venue.get('display_name', '')
                     
-                    año = item.get('publication_year')
-                    año_str = str(año) if año is not None else ""
+                    year = item.get('publication_year')
+                    year_str = str(year) if year is not None else ""
                     
                     doi = item.get('doi')
                     if doi is not None:
@@ -1958,14 +1765,14 @@ class ScientificSearchEngine:
                         doi = ""
                     
                     results.append({
-                        'base_datos': 'OpenAlex',
-                        'titulo': titulo,
-                        'autores': ', '.join(autores_list),
-                        'revista': revista,
-                        'año': año_str,
+                        'database': 'OpenAlex',
+                        'title': title,
+                        'authors': ', '.join(authors_list),
+                        'journal': journal,
+                        'year': year_str,
                         'doi': doi,
                         'url': f"https://doi.org/{doi}" if doi else "",
-                        'tipo': item.get('type', ''),
+                        'type': item.get('type', ''),
                     })
                     
                     if len(results) >= max_results:
@@ -1976,7 +1783,7 @@ class ScientificSearchEngine:
                     break
                 
         except Exception as e:
-            st.warning(f"Error en OpenAlex: {str(e)}")
+            st.warning(f"Error in OpenAlex: {str(e)}")
         
         return results[:max_results]
     
@@ -2010,17 +1817,17 @@ class ScientificSearchEngine:
                 
                 for item in page_results:
                     results.append({
-                        'base_datos': 'Europe PMC',
-                        'titulo': item.get('title', 'Título no disponible'),
-                        'autores': ', '.join([a.get('fullName', '') for a in item.get('authorList', {}).get('author', [])[:5]]),
-                        'revista': item.get('journalTitle', ''),
-                        'año': str(item.get('pubYear', '')),
+                        'database': 'Europe PMC',
+                        'title': item.get('title', 'Title not available'),
+                        'authors': ', '.join([a.get('fullName', '') for a in item.get('authorList', {}).get('author', [])[:5]]),
+                        'journal': item.get('journalTitle', ''),
+                        'year': str(item.get('pubYear', '')),
                         'doi': item.get('doi', ''),
                         'url': f"https://europepmc.org/article/{item.get('source', '')}/{item.get('id', '')}",
                         'pmid': item.get('pmid', ''),
                         'pmcid': item.get('pmcid', ''),
                         'abstract': item.get('abstractText', '')[:300] + '...' if item.get('abstractText') else '',
-                        'tipo': 'Artículo'
+                        'type': 'Article'
                     })
                     
                     if len(results) >= max_results:
@@ -2031,7 +1838,7 @@ class ScientificSearchEngine:
                     break
                 
         except Exception as e:
-            st.warning(f"Error en Europe PMC: {str(e)}")
+            st.warning(f"Error in Europe PMC: {str(e)}")
         
         return results[:max_results]
     
@@ -2052,23 +1859,23 @@ class ScientificSearchEngine:
         for db in selected_dbs:
             if db in search_functions:
                 try:
-                    with st.spinner(f"🔍 Buscando en {db}..."):
+                    with st.spinner(f"🔍 Searching {db}..."):
                         results = search_functions[db](query, max_results_per_db, year_range)
                         all_results.extend(results)
                         if results:
-                            st.success(f"✅ {db}: {len(results)} resultados")
+                            st.success(f"✅ {db}: {len(results)} results")
                         else:
-                            st.info(f"ℹ️ {db}: 0 resultados")
+                            st.info(f"ℹ️ {db}: 0 results")
                 except Exception as e:
-                    st.warning(f"Error en {db}: {str(e)}")
+                    st.warning(f"Error in {db}: {str(e)}")
             else:
-                st.warning(f"⚠️ {db}: Base de datos no disponible")
+                st.warning(f"⚠️ {db}: Database not available")
         
         if all_results:
             df = pd.DataFrame(all_results)
             
-            if 'año' in df.columns:
-                df['año'] = pd.to_numeric(df['año'], errors='coerce')
+            if 'year' in df.columns:
+                df['year'] = pd.to_numeric(df['year'], errors='coerce')
             
             if 'doi' in df.columns:
                 df = df.drop_duplicates(subset=['doi'], keep='first')
@@ -2078,7 +1885,7 @@ class ScientificSearchEngine:
             return pd.DataFrame()
 
 # ============================================================================
-# OBTENEDOR DE TEXTO DE ARTÍCULOS
+# ARTICLE TEXT FETCHER
 # ============================================================================
 
 class ArticleTextFetcher:
@@ -2111,7 +1918,7 @@ class ArticleTextFetcher:
     
     def get_text_from_doi(self, doi: str) -> Tuple[Optional[str], str]:
         if not doi or pd.isna(doi) or doi == '':
-            return None, "DOI vacío"
+            return None, "Empty DOI"
         
         doi = str(doi).strip()
         if doi.startswith('https://doi.org/'):
@@ -2128,7 +1935,7 @@ class ArticleTextFetcher:
                 data = response.json()
                 oa_url = data.get('open_access', {}).get('oa_url')
                 if oa_url:
-                    return f"Open Access disponible en: {oa_url}", f"OpenAlex (OA URL)"
+                    return f"Open Access available at: {oa_url}", f"OpenAlex (OA URL)"
         except:
             pass
         
@@ -2163,10 +1970,10 @@ class ArticleTextFetcher:
         except:
             pass
         
-        return None, "No se pudo obtener texto completo"
+        return None, "Could not obtain full text"
 
 # ============================================================================
-# CLASE PRINCIPAL INTEGRADA
+# MAIN INTEGRATED CLASS
 # ============================================================================
 
 class IntegratedScientificVerifier:
@@ -2179,10 +1986,10 @@ class IntegratedScientificVerifier:
             'total_articles': 0,
             'analyzed': 0,
             'with_text': 0,
-            'corroboran': 0,
-            'contradicen': 0,
-            'inconclusos': 0,
-            'corroboran_fuertemente': 0
+            'support': 0,
+            'contradict': 0,
+            'inconclusive': 0,
+            'strongly_support': 0
         }
     
     def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
@@ -2192,7 +1999,7 @@ class IntegratedScientificVerifier:
         self.stats = {k: 0 for k in self.stats}
         
         if progress_callback:
-            progress_callback("🔍 Buscando artículos en bases de datos...", 0.05)
+            progress_callback("🔍 Searching articles in databases...", 0.05)
         
         articles_df = self.search_engine.search_all(
             query, max_results_per_db, selected_dbs, year_range
@@ -2204,22 +2011,14 @@ class IntegratedScientificVerifier:
         self.stats['total_articles'] = len(articles_df)
         
         if progress_callback:
-            progress_callback(f"✅ Encontrados {len(articles_df)} artículos. Iniciando análisis...", 0.1)
+            progress_callback(f"✅ Found {len(articles_df)} articles. Starting analysis...", 0.1)
         
         results_list = []
         total_articles = len(articles_df)
         
-        # IMPORTANTE: La hipótesis para análisis debe estar en inglés
-        if any(c in hypothesis for c in 'áéíóúñ'):
-            hypothesis_en = self.semantic_verifier.translator.translate_to_english(hypothesis)
-            if st.session_state.get('debug_mode', False):
-                st.write(f"🌐 Hipótesis traducida a inglés: {hypothesis_en[:100]}...")
-        else:
-            hypothesis_en = hypothesis
-        
         domain = self.semantic_verifier.detect_domain(hypothesis)
         if st.session_state.get('debug_mode', False):
-            st.write(f"🎯 Dominio detectado: {domain}")
+            st.write(f"🎯 Detected domain: {domain}")
         
         for idx, row in articles_df.iterrows():
             current = idx + 1
@@ -2227,118 +2026,118 @@ class IntegratedScientificVerifier:
                 progress_value = 0.1 + 0.85 * (current / total_articles)
                 progress_value = min(0.95, max(0.1, progress_value))
                 progress_callback(
-                    f"🔬 Analizando artículo {current}/{total_articles}: {str(row['titulo'])[:50]}...", 
+                    f"🔬 Analyzing article {current}/{total_articles}: {str(row['title'])[:50]}...", 
                     progress_value
                 )
             
             article_text, source = self.text_fetcher.get_text_from_doi(row.get('doi', ''))
             
             result_row = {
-                'base_datos': row.get('base_datos', 'Desconocida'),
-                'titulo': row.get('titulo', 'Sin título'),
-                'autores': row.get('autores', ''),
-                'revista': row.get('revista', ''),
-                'año': row.get('año', ''),
+                'database': row.get('database', 'Unknown'),
+                'title': row.get('title', 'No title'),
+                'authors': row.get('authors', ''),
+                'journal': row.get('journal', ''),
+                'year': row.get('year', ''),
                 'doi': row.get('doi', ''),
                 'url': row.get('url', ''),
-                'texto_disponible': article_text is not None,
-                'fuente_texto': source if article_text else 'No disponible',
-                'veredicto': '',
-                'confianza': 0,
-                'puntuacion': 0,
-                'evidencia_a_favor': 0,
-                'evidencia_en_contra': 0,
-                'oraciones_totales': 0,
-                'oraciones_relevantes': 0,
-                'detalle_evidencia': ''
+                'text_available': article_text is not None,
+                'text_source': source if article_text else 'Not available',
+                'verdict': '',
+                'confidence': 0,
+                'score': 0,
+                'evidence_for': 0,
+                'evidence_against': 0,
+                'total_sentences': 0,
+                'relevant_sentences': 0,
+                'evidence_detail': ''
             }
             
             if article_text:
                 self.stats['with_text'] += 1
                 
-                analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis_en)
+                analysis = self.semantic_verifier.verify_article_text(article_text, hypothesis)
                 
                 if analysis['success']:
                     verdict = analysis['verdict']
                     
                     result_row.update({
-                        'veredicto': verdict['verdict_text'],
-                        'confianza': verdict['confidence'],
-                        'puntuacion': verdict['score'],
-                        'evidencia_a_favor': verdict['support_count'],
-                        'evidencia_en_contra': verdict['against_count'],
-                        'oraciones_totales': analysis['total_sentences'],
-                        'oraciones_relevantes': analysis['relevant_sentences']
+                        'verdict': verdict['verdict_text'],
+                        'confidence': verdict['confidence'],
+                        'score': verdict['score'],
+                        'evidence_for': verdict['support_count'],
+                        'evidence_against': verdict['against_count'],
+                        'total_sentences': analysis['total_sentences'],
+                        'relevant_sentences': analysis['relevant_sentences']
                     })
                     
                     self.stats['analyzed'] += 1
-                    if verdict['verdict_text'] == 'CORROBORA FUERTEMENTE':
-                        self.stats['corroboran_fuertemente'] += 1
-                        self.stats['corroboran'] += 1
-                    elif 'CORROBORA' in verdict['verdict_text']:
-                        self.stats['corroboran'] += 1
-                    elif 'CONTRADICE' in verdict['verdict_text']:
-                        self.stats['contradicen'] += 1
+                    if verdict['verdict_text'] == 'STRONGLY SUPPORTS':
+                        self.stats['strongly_support'] += 1
+                        self.stats['support'] += 1
+                    elif 'SUPPORTS' in verdict['verdict_text']:
+                        self.stats['support'] += 1
+                    elif 'CONTRADICTS' in verdict['verdict_text']:
+                        self.stats['contradict'] += 1
                     else:
-                        self.stats['inconclusos'] += 1
+                        self.stats['inconclusive'] += 1
                     
                     if analysis['evidence']:
                         ev_summary = []
                         for ev in analysis['evidence'][:3]:
                             ev_summary.append(f"[{ev['section']}] {ev['relation']} ({ev['certainty']})")
-                        result_row['detalle_evidencia'] = ' | '.join(ev_summary)
+                        result_row['evidence_detail'] = ' | '.join(ev_summary)
             else:
-                result_row['veredicto'] = 'TEXTO NO DISPONIBLE'
+                result_row['verdict'] = 'TEXT NOT AVAILABLE'
             
             results_list.append(result_row)
             time.sleep(0.1)
         
         if progress_callback:
-            progress_callback("✅ Análisis completado", 1.0)
+            progress_callback("✅ Analysis completed", 1.0)
         
         self.results = pd.DataFrame(results_list)
         return self.results
     
     def generate_report(self) -> str:
         if self.results.empty:
-            return "No hay resultados para generar reporte."
+            return "No results to generate report."
         
         report = []
         report.append("="*80)
-        report.append("REPORTE DE VERIFICACIÓN SEMÁNTICA INTEGRADA")
+        report.append("INTEGRATED SEMANTIC VERIFICATION REPORT")
         report.append("="*80)
-        report.append(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        report.append(f"Total artículos encontrados: {self.stats['total_articles']}")
-        report.append(f"Artículos con texto disponible: {self.stats['with_text']}")
-        report.append(f"Artículos analizados: {self.stats['analyzed']}")
+        report.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"Total articles found: {self.stats['total_articles']}")
+        report.append(f"Articles with text available: {self.stats['with_text']}")
+        report.append(f"Articles analyzed: {self.stats['analyzed']}")
         report.append("")
-        report.append("RESULTADOS GLOBALES:")
-        report.append(f"✅ Corroboran fuertemente: {self.stats['corroboran_fuertemente']}")
-        report.append(f"✅ Corroboran: {self.stats['corroboran']}")
-        report.append(f"❌ Contradicen: {self.stats['contradicen']}")
-        report.append(f"⚠️ Inconclusos: {self.stats['inconclusos']}")
+        report.append("GLOBAL RESULTS:")
+        report.append(f"✅ Strongly support: {self.stats['strongly_support']}")
+        report.append(f"✅ Support: {self.stats['support']}")
+        report.append(f"❌ Contradict: {self.stats['contradict']}")
+        report.append(f"⚠️ Inconclusive: {self.stats['inconclusive']}")
         report.append("")
-        report.append("DETALLE POR ARTÍCULO:")
+        report.append("DETAIL BY ARTICLE:")
         report.append("-"*80)
         
         for idx, row in self.results.iterrows():
-            report.append(f"\n📄 {row['titulo']}")
-            report.append(f"   Base: {row['base_datos']} | Año: {row['año']}")
+            report.append(f"\n📄 {row['title']}")
+            report.append(f"   Database: {row['database']} | Year: {row['year']}")
             report.append(f"   DOI: {row['doi']}")
             
-            if row['veredicto'] == 'TEXTO NO DISPONIBLE':
-                report.append(f"   ⚠️ {row['veredicto']} - {row['fuente_texto']}")
+            if row['verdict'] == 'TEXT NOT AVAILABLE':
+                report.append(f"   ⚠️ {row['verdict']} - {row['text_source']}")
             else:
-                report.append(f"   Veredicto: {row['veredicto']} (Confianza: {row['confianza']:.1%})")
-                report.append(f"   Evidencia: {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra")
-                if row['detalle_evidencia']:
-                    report.append(f"   Evidencia destacada: {row['detalle_evidencia']}")
+                report.append(f"   Verdict: {row['verdict']} (Confidence: {row['confidence']:.1%})")
+                report.append(f"   Evidence: {row['evidence_for']} for, {row['evidence_against']} against")
+                if row['evidence_detail']:
+                    report.append(f"   Highlighted evidence: {row['evidence_detail']}")
         
         return "\n".join(report)
     
     def generate_html_report(self) -> str:
         if self.results.empty:
-            return "<p>No hay resultados para generar reporte.</p>"
+            return "<p>No results to generate report.</p>"
         
         html = f"""
         <!DOCTYPE html>
@@ -2360,55 +2159,55 @@ class IntegratedScientificVerifier:
             </style>
         </head>
         <body>
-            <h1>🔬 Reporte de Verificación Semántica</h1>
-            <p><strong>Fecha:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <h1>🔬 Semantic Verification Report</h1>
+            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
             
-            <h2>📊 Resultados Globales</h2>
+            <h2>📊 Global Results</h2>
             <div class="stats">
-                <p><strong>Total artículos encontrados:</strong> {self.stats['total_articles']}</p>
-                <p><strong>Artículos con texto disponible:</strong> {self.stats['with_text']}</p>
-                <p><strong>Artículos analizados:</strong> {self.stats['analyzed']}</p>
-                <p><strong>✅ Corroboran fuertemente:</strong> {self.stats['corroboran_fuertemente']}</p>
-                <p><strong>✅ Corroboran:</strong> {self.stats['corroboran']}</p>
-                <p><strong>❌ Contradicen:</strong> {self.stats['contradicen']}</p>
-                <p><strong>⚠️ Inconclusos:</strong> {self.stats['inconclusos']}</p>
+                <p><strong>Total articles found:</strong> {self.stats['total_articles']}</p>
+                <p><strong>Articles with text available:</strong> {self.stats['with_text']}</p>
+                <p><strong>Articles analyzed:</strong> {self.stats['analyzed']}</p>
+                <p><strong>✅ Strongly support:</strong> {self.stats['strongly_support']}</p>
+                <p><strong>✅ Support:</strong> {self.stats['support']}</p>
+                <p><strong>❌ Contradict:</strong> {self.stats['contradict']}</p>
+                <p><strong>⚠️ Inconclusive:</strong> {self.stats['inconclusive']}</p>
             </div>
             
-            <h2>📋 Detalle de Artículos</h2>
+            <h2>📋 Article Details</h2>
             <table>
                 <tr>
-                    <th>Base</th>
-                    <th>Título</th>
-                    <th>Año</th>
-                    <th>Veredicto</th>
-                    <th>Confianza</th>
+                    <th>Database</th>
+                    <th>Title</th>
+                    <th>Year</th>
+                    <th>Verdict</th>
+                    <th>Confidence</th>
                 </tr>
         """
         
         for idx, row in self.results.iterrows():
-            titulo = str(row.get('titulo', '')) if pd.notna(row.get('titulo')) else "Título no disponible"
-            base_datos = str(row.get('base_datos', '')) if pd.notna(row.get('base_datos')) else "Desconocida"
-            año = str(row.get('año', '')) if pd.notna(row.get('año')) else ""
-            veredicto = str(row.get('veredicto', '')) if pd.notna(row.get('veredicto')) else "NO DISPONIBLE"
-            confianza = float(row.get('confianza', 0)) if pd.notna(row.get('confianza')) else 0
+            title = str(row.get('title', '')) if pd.notna(row.get('title')) else "Title not available"
+            database = str(row.get('database', '')) if pd.notna(row.get('database')) else "Unknown"
+            year = str(row.get('year', '')) if pd.notna(row.get('year')) else ""
+            verdict = str(row.get('verdict', '')) if pd.notna(row.get('verdict')) else "NOT AVAILABLE"
+            confidence = float(row.get('confidence', 0)) if pd.notna(row.get('confidence')) else 0
             
             verdict_class = ""
-            if 'CORROBORA FUERTEMENTE' in veredicto:
+            if 'STRONGLY SUPPORTS' in verdict:
                 verdict_class = "verdict-assert"
-            elif 'CORROBORA' in veredicto:
+            elif 'SUPPORTS' in verdict:
                 verdict_class = "verdict-assert"
-            elif 'CONTRADICE' in veredicto:
+            elif 'CONTRADICTS' in verdict:
                 verdict_class = "verdict-reject"
-            elif 'NO CONCLUYENTE' in veredicto:
+            elif 'INCONCLUSIVE' in verdict:
                 verdict_class = "verdict-inconclusive"
             
             html += f"""
                 <tr>
-                    <td>{base_datos}</td>
-                    <td>{titulo[:100]}...</td>
-                    <td>{año}</td>
-                    <td class="{verdict_class}">{veredicto}</td>
-                    <td>{confianza:.1%}</td>
+                    <td>{database}</td>
+                    <td>{title[:100]}...</td>
+                    <td>{year}</td>
+                    <td class="{verdict_class}">{verdict}</td>
+                    <td>{confidence:.1%}</td>
                 </tr>
             """
         
@@ -2421,7 +2220,7 @@ class IntegratedScientificVerifier:
         return html
 
 # ============================================================================
-# FUNCIONES DE VISUALIZACIÓN
+# VISUALIZATION FUNCTIONS
 # ============================================================================
 
 def get_badge_class(db_name: str) -> str:
@@ -2434,115 +2233,113 @@ def get_badge_class(db_name: str) -> str:
     return classes.get(db_name, 'badge-pubmed')
 
 def get_verdict_class(verdict: str) -> str:
-    if 'CORROBORA FUERTEMENTE' in verdict:
+    if 'STRONGLY SUPPORTS' in verdict:
         return 'verdict-assert'
-    elif 'CORROBORA' in verdict:
+    elif 'SUPPORTS' in verdict:
         return 'verdict-assert'
-    elif 'CONTRADICE' in verdict:
+    elif 'CONTRADICTS' in verdict:
         return 'verdict-reject'
-    elif 'NO CONCLUYENTE' in verdict:
+    elif 'INCONCLUSIVE' in verdict:
         return 'verdict-inconclusive'
     else:
         return ''
 
 # ============================================================================
-# FUNCIÓN PARA ENVIAR RESULTADOS POR CORREO
+# FUNCTION TO SEND RESULTS BY EMAIL
 # ============================================================================
 
-def enviar_resultados_email(destinatario, integrator):
+def send_results_email(recipient, integrator):
     if integrator is None or integrator.results is None or integrator.results.empty:
-        st.warning("No hay resultados para enviar por correo.")
+        st.warning("No results to send by email.")
         return False
     
-    reporte_txt = integrator.generate_report()
-    reporte_html = integrator.generate_html_report()
+    report_txt = integrator.generate_report()
+    report_html = integrator.generate_html_report()
     
-    archivos = []
+    attachments = []
     
     csv_buffer = io.BytesIO()
     integrator.results.to_csv(csv_buffer, index=False, encoding='utf-8')
-    archivos.append({
-        'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        'contenido': csv_buffer.getvalue()
+    attachments.append({
+        'name': f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        'content': csv_buffer.getvalue()
     })
     
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        integrator.results.to_excel(writer, sheet_name='Resultados', index=False)
+        integrator.results.to_excel(writer, sheet_name='Results', index=False)
         summary = pd.DataFrame([integrator.stats])
-        summary.to_excel(writer, sheet_name='Resumen', index=False)
-    archivos.append({
-        'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        'contenido': excel_buffer.getvalue()
+        summary.to_excel(writer, sheet_name='Summary', index=False)
+    attachments.append({
+        'name': f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        'content': excel_buffer.getvalue()
     })
     
-    asunto = f"🔬 Reporte de Verificación Semántica - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    subject = f"🔬 Semantic Verification Report - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     
-    mensaje_html = f"""
+    html_message = f"""
     <html>
     <body>
-        <h2>🔬 Reporte de Verificación Semántica</h2>
-        <p>Estimado usuario,</p>
-        <p>Adjunto encontrarás los resultados completos de tu análisis de verificación semántica.</p>
+        <h2>🔬 Semantic Verification Report</h2>
+        <p>Dear user,</p>
+        <p>Attached you will find the complete results of your semantic verification analysis.</p>
         
-        <h3>📊 Resumen</h3>
+        <h3>📊 Summary</h3>
         <ul>
-            <li><strong>Total artículos:</strong> {integrator.stats['total_articles']}</li>
-            <li><strong>Artículos analizados:</strong> {integrator.stats['analyzed']}</li>
-            <li><strong>✅ Corroboran fuertemente:</strong> {integrator.stats['corroboran_fuertemente']}</li>
-            <li><strong>✅ Corroboran:</strong> {integrator.stats['corroboran']}</li>
-            <li><strong>❌ Contradicen:</strong> {integrator.stats['contradicen']}</li>
-            <li><strong>⚠️ Inconclusos:</strong> {integrator.stats['inconclusos']}</li>
+            <li><strong>Total articles:</strong> {integrator.stats['total_articles']}</li>
+            <li><strong>Articles analyzed:</strong> {integrator.stats['analyzed']}</li>
+            <li><strong>✅ Strongly support:</strong> {integrator.stats['strongly_support']}</li>
+            <li><strong>✅ Support:</strong> {integrator.stats['support']}</li>
+            <li><strong>❌ Contradict:</strong> {integrator.stats['contradict']}</li>
+            <li><strong>⚠️ Inconclusive:</strong> {integrator.stats['inconclusive']}</li>
         </ul>
         
-        <p>Puedes encontrar el detalle completo en los archivos adjuntos.</p>
+        <p>You can find the complete details in the attached files.</p>
         
         <hr>
         <p style="color: #666; font-size: 0.9em;">
-            Este es un mensaje automático del Buscador y Verificador Semántico Integrado.
+            This is an automated message from the Integrated Semantic Search and Verifier.
         </p>
     </body>
     </html>
     """
     
-    mensaje_texto = f"""
-    Reporte de Verificación Semántica
+    text_message = f"""
+    Semantic Verification Report
     
-    Resumen:
-    - Total artículos: {integrator.stats['total_articles']}
-    - Artículos analizados: {integrator.stats['analyzed']}
-    - ✅ Corroboran fuertemente: {integrator.stats['corroboran_fuertemente']}
-    - ✅ Corroboran: {integrator.stats['corroboran']}
-    - ❌ Contradicen: {integrator.stats['contradicen']}
-    - ⚠️ Inconclusos: {integrator.stats['inconclusos']}
+    Summary:
+    - Total articles: {integrator.stats['total_articles']}
+    - Articles analyzed: {integrator.stats['analyzed']}
+    - ✅ Strongly support: {integrator.stats['strongly_support']}
+    - ✅ Support: {integrator.stats['support']}
+    - ❌ Contradict: {integrator.stats['contradict']}
+    - ⚠️ Inconclusive: {integrator.stats['inconclusive']}
     
-    Los archivos adjuntos contienen el detalle completo.
+    The attached files contain the complete details.
     """
     
-    return enviar_correo(
-        destinatario=destinatario,
-        asunto=asunto,
-        mensaje_html=mensaje_html,
-        mensaje_texto=mensaje_texto,
-        archivos=archivos
+    return send_email(
+        recipient=recipient,
+        subject=subject,
+        html_message=html_message,
+        text_message=text_message,
+        attachments=attachments
     )
 
 # ============================================================================
-# INTERFAZ PRINCIPAL DE STREAMLIT
+# MAIN STREAMLIT INTERFACE
 # ============================================================================
 
 def main():
-    st.markdown('<h1 class="main-header">🔬 Buscador y Verificador Semántico Integrado</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">ALTO VOLUMEN: Hasta 1000 artículos por base • Análisis AI automático • VERSIÓN ESTABLE • MULTIDOMINIO • 4 BASES DE DATOS</p>', 
+    st.markdown('<h1 class="main-header">🔬 Integrated Semantic Search and Verifier</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">HIGH VOLUME: Up to 1000 articles per database • Automatic AI analysis • STABLE VERSION • MULTIDOMAIN • 4 DATABASES</p>', 
                 unsafe_allow_html=True)
     
-    # Inicializar session state
+    # Initialize session state
     if 'query' not in st.session_state:
         st.session_state['query'] = ""
     if 'hypothesis' not in st.session_state:
         st.session_state['hypothesis'] = ""
-    if 'hypothesis_en' not in st.session_state:
-        st.session_state['hypothesis_en'] = ""
     if 'user_email' not in st.session_state:
         st.session_state['user_email'] = ""
     if 'integrator' not in st.session_state:
@@ -2550,7 +2347,7 @@ def main():
     if 'debug_mode' not in st.session_state:
         st.session_state['debug_mode'] = False
     
-    # Variables para el asistente
+    # Variables for assistant
     if 'assistant_subject' not in st.session_state:
         st.session_state['assistant_subject'] = ""
     if 'assistant_effect' not in st.session_state:
@@ -2558,7 +2355,7 @@ def main():
     if 'assistant_population' not in st.session_state:
         st.session_state['assistant_population'] = ""
     
-    # Variables para persistencia
+    # Variables for persistence
     if 'analysis_completed' not in st.session_state:
         st.session_state['analysis_completed'] = False
     if 'last_results_df' not in st.session_state:
@@ -2573,30 +2370,30 @@ def main():
     
     with st.sidebar:
         st.image("https://img.icons8.com/fluency/96/000000/artificial-intelligence.png", width=80)
-        st.markdown("## ⚙️ Configuración")
+        st.markdown("## ⚙️ Configuration")
         
         email = st.text_input(
-            "📧 Email (requerido para NCBI y para recibir resultados)", 
+            "📧 Email (required for NCBI and to receive results)", 
             value=st.session_state.get('user_email', ''),
-            placeholder="tu@email.com",
+            placeholder="your@email.com",
             key="email_input"
         )
         st.session_state['user_email'] = email
         
         debug_mode = st.checkbox(
-            "🔧 Modo depuración",
+            "🔧 Debug mode",
             value=st.session_state.get('debug_mode', False),
             key="debug_checkbox"
         )
         st.session_state['debug_mode'] = debug_mode
         
         if NLTK_READY:
-            st.success("✅ NLTK configurado correctamente")
+            st.success("✅ NLTK configured correctly")
         else:
-            st.warning("⚠️ Usando tokenizador alternativo")
+            st.warning("⚠️ Using alternative tokenizer")
         
-        st.markdown("### 📚 Bases de Datos")
-        st.info("🔔 **4 bases estables**: PubMed, CrossRef, OpenAlex, Europe PMC")
+        st.markdown("### 📚 Databases")
+        st.info("🔔 **4 stable databases**: PubMed, CrossRef, OpenAlex, Europe PMC")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -2615,112 +2412,114 @@ def main():
         
         st.markdown("---")
         
-        st.markdown("### 📅 Filtro de Años")
+        st.markdown("### 📅 Year Filter")
         col1, col2 = st.columns(2)
         with col1:
-            year_from = st.number_input("Desde", min_value=1900, max_value=2025, value=2015)
+            year_from = st.number_input("From", min_value=1900, max_value=2025, value=2015)
         with col2:
-            year_to = st.number_input("Hasta", min_value=1900, max_value=2025, value=2025)
+            year_to = st.number_input("To", min_value=1900, max_value=2025, value=2025)
         
         year_range = (year_from, year_to) if year_from < year_to else None
         
-        st.markdown("### 📊 Resultados por base")
+        st.markdown("### 📊 Results per database")
         max_results = st.slider(
-            "Máximo resultados por base:", 
+            "Maximum results per database:", 
             min_value=10, max_value=1000, value=100, step=10
         )
         
-        st.markdown("### 🔧 Umbrales de análisis")
+        st.markdown("### 🔧 Analysis thresholds")
         min_relevance = st.slider(
-            "Relevancia mínima",
+            "Minimum relevance",
             min_value=0.01,
             max_value=0.2,
             value=0.05,
             step=0.01
         )
         
-        st.markdown("### ⚠️ Advertencia")
+        st.markdown("### ⚠️ Warning")
         st.warning("""
-        **Tiempo de procesamiento:**
-        - 50 artículos: ~2-3 minutos
-        - 100 artículos: ~5-7 minutos
-        - 200 artículos: ~10-15 minutos
-        - 500 artículos: ~25-35 minutos
-        - 1000 artículos: ~50-70 minutos
+        **Processing time:**
+        - 50 articles: ~2-3 minutes
+        - 100 articles: ~5-7 minutes
+        - 200 articles: ~10-15 minutes
+        - 500 articles: ~25-35 minutes
+        - 1000 articles: ~50-70 minutes
         """)
         
-        st.markdown("### 📋 Ejemplos")
+        st.markdown("### 📋 Examples")
         
-        # EJEMPLOS OPTIMIZADOS CON FORMATO CORRECTO
-        if st.button("Cargar ejemplo: Ticagrelor y disnea"):
+        # OPTIMIZED EXAMPLES WITH CORRECT FORMAT
+        if st.button("Load example: Ticagrelor and dyspnea"):
             st.session_state['query'] = '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
-            st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
+            st.session_state['hypothesis'] = "Ticagrelor causes dyspnea as a side effect in patients with myocardial ischemia"
             st.rerun()
         
-        if st.button("Cargar ejemplo: Ruptura cardiaca postinfarto"):
+        if st.button("Load example: Post-infarction cardiac rupture"):
             st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh])'
-            st.session_state['hypothesis'] = "En la ruptura cardiaca postinfarto, el corazón se rompe siguiendo patrones anatómicos reconocibles (disección intramiocárdica, hematoma intramiocárdico o ruptura compleja)"
+            st.session_state['hypothesis'] = "In post-infarction cardiac rupture, the heart ruptures following recognizable anatomical patterns (intramyocardial dissection, intramyocardial hematoma, or complex rupture)"
             st.rerun()
         
-        if st.button("Cargar ejemplo: Ejercicio y diabetes"):
+        if st.button("Load example: Exercise and diabetes"):
             st.session_state['query'] = '("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
-            st.session_state['hypothesis'] = "El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso"
+            st.session_state['hypothesis'] = "Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults"
+            st.rerun()
+        
+        if st.button("Load example: Alcoholism and mortality"):
+            st.session_state['query'] = '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
+            st.session_state['hypothesis'] = "Alcoholism increases the risk of mortality in adults"
+            st.rerun()
+        
+        if st.button("Load example: Smoking and lung cancer"):
+            st.session_state['query'] = '("Smoking"[Mesh] AND "Lung Neoplasms"[Mesh] AND "Adult"[Mesh])'
+            st.session_state['hypothesis'] = "Smoking increases the risk of lung cancer in adults"
             st.rerun()
     
-    # Área principal
+    # Main area
     col1, col2 = st.columns([2, 1])
     
     with col1:
         search_query = st.text_area(
-            "🔍 Consulta de búsqueda (formato MeSH CORRECTO):",
+            "🔍 Search query (CORRECT MeSH format):",
             value=st.session_state['query'],
             height=120,
-            placeholder='Ej: ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])',
+            placeholder='e.g., ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])',
             key="query_input",
-            help="Formato MeSH correcto: Use [Mesh] con subheading pegado al término: 'Término/subheading'[Mesh]"
+            help="Correct MeSH format: Use [Mesh] with subheading attached to the term: 'Term/subheading'[Mesh]"
         )
         if search_query != st.session_state['query']:
             st.session_state['query'] = search_query
             st.session_state['analysis_completed'] = False
     
     with col2:
-        hypothesis_es = st.text_area(
-            "🔬 Conjetura a verificar (español):",
+        hypothesis = st.text_area(
+            "🔬 Hypothesis to verify:",
             value=st.session_state['hypothesis'],
             height=68,
-            placeholder='Ej: El ejercicio físico regular reduce la incidencia de diabetes tipo 2 en adultos con sobrepeso',
+            placeholder='e.g., Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults',
             key="hypothesis_input"
         )
         
-        if hypothesis_es != st.session_state.get('hypothesis', ''):
-            st.session_state['hypothesis'] = hypothesis_es
-            translator = TranslationManager()
-            st.session_state['hypothesis_en'] = translator.translate_to_english(hypothesis_es)
+        if hypothesis != st.session_state.get('hypothesis', ''):
+            st.session_state['hypothesis'] = hypothesis
             st.session_state['analysis_completed'] = False
-        
-        if st.session_state.get('hypothesis_en'):
-            st.markdown(f"**🇬🇧 Inglés (para análisis):**")
-            st.info(st.session_state['hypothesis_en'][:150] + ('...' if len(st.session_state['hypothesis_en']) > 150 else ''))
     
     col1, col2, col3 = st.columns(3)
     with col2:
-        analyze_button = st.button("🚀 INICIAR ANÁLISIS INTEGRADO", type="primary", use_container_width=True)
+        analyze_button = st.button("🚀 START INTEGRATED ANALYSIS", type="primary", use_container_width=True)
     
-    # BLOQUE DE ANÁLISIS
-    if analyze_button and search_query and hypothesis_es:
+    # ANALYSIS BLOCK
+    if analyze_button and search_query and hypothesis:
         user_email = st.session_state.get('user_email', '')
         if not user_email or not validate_email(user_email):
-            st.error("❌ Ingresa un email válido en la barra lateral")
+            st.error("❌ Enter a valid email in the sidebar")
         else:
             selected_dbs = [db for db, selected in databases.items() if selected]
             
             if not selected_dbs:
-                st.error("❌ Selecciona al menos una base de datos")
+                st.error("❌ Select at least one database")
             else:
                 integrator = IntegratedScientificVerifier(user_email)
                 integrator.semantic_verifier.UMBRAL_RELEVANCIA = min_relevance
-                
-                hypothesis_for_analysis = st.session_state.get('hypothesis_en', hypothesis_es)
                 
                 progress_container = st.container()
                 with progress_container:
@@ -2741,12 +2540,12 @@ def main():
                         estimated_total = elapsed / value
                         remaining = estimated_total * (1 - value)
                         if remaining > 0:
-                            time_estimate.text(f"⏱️ Tiempo transcurrido: {elapsed:.1f}s | Estimado restante: {remaining:.1f}s")
+                            time_estimate.text(f"⏱️ Elapsed time: {elapsed:.1f}s | Estimated remaining: {remaining:.1f}s")
                 
-                with st.spinner("Ejecutando análisis integrado..."):
+                with st.spinner("Running integrated analysis..."):
                     results_df = integrator.run_analysis(
                         search_query, 
-                        hypothesis_for_analysis,
+                        hypothesis,
                         max_results, 
                         selected_dbs, 
                         year_range,
@@ -2763,9 +2562,9 @@ def main():
                     
                     st.rerun()
                 else:
-                    st.warning("😕 No se encontraron artículos. Prueba con otra consulta o amplía el rango de años.")
+                    st.warning("😕 No articles found. Try another query or expand the year range.")
     
-    # BLOQUE DE VISUALIZACIÓN DE RESULTADOS
+    # RESULTS VISUALIZATION BLOCK
     if st.session_state.get('analysis_completed', False) and st.session_state.get('last_results_df') is not None:
         integrator = st.session_state['integrator']
         results_df = st.session_state['last_results_df']
@@ -2773,33 +2572,33 @@ def main():
         elapsed_time = st.session_state['elapsed_time']
         
         if not results_df.empty:
-            st.success(f"✅ Análisis completado en {elapsed_time:.1f} segundos ({elapsed_time/60:.1f} minutos)")
+            st.success(f"✅ Analysis completed in {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
             
-            st.markdown("## 📊 RESULTADOS GLOBALES")
+            st.markdown("## 📊 GLOBAL RESULTS")
             
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
-                st.metric("Artículos encontrados", stats['total_articles'])
+                st.metric("Articles found", stats['total_articles'])
             with col2:
-                st.metric("Con texto", stats['with_text'])
+                st.metric("With text", stats['with_text'])
             with col3:
-                st.metric("✅ Corrob. fuerte", stats['corroboran_fuertemente'])
+                st.metric("✅ Strong support", stats['strongly_support'])
             with col4:
-                st.metric("✅ Corroboran", stats['corroboran'])
+                st.metric("✅ Support", stats['support'])
             with col5:
-                st.metric("❌ Contradicen", stats['contradicen'])
+                st.metric("❌ Contradict", stats['contradict'])
             with col6:
-                st.metric("⚠️ Inconclusos", stats['inconclusos'])
+                st.metric("⚠️ Inconclusive", stats['inconclusive'])
             
             col1, col2 = st.columns(2)
             
             with col1:
-                db_counts = results_df['base_datos'].value_counts().reset_index()
-                db_counts.columns = ['base_datos', 'count']
+                db_counts = results_df['database'].value_counts().reset_index()
+                db_counts.columns = ['database', 'count']
                 fig = px.bar(
-                    db_counts, x='base_datos', y='count',
-                    title=f"Artículos por Base de Datos",
-                    color='base_datos',
+                    db_counts, x='database', y='count',
+                    title=f"Articles by Database",
+                    color='database',
                     color_discrete_map={
                         'PubMed': '#1E88E5',
                         'CrossRef': '#43A047',
@@ -2811,141 +2610,141 @@ def main():
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                analyzed_df = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']
+                analyzed_df = results_df[results_df['verdict'] != 'TEXT NOT AVAILABLE']
                 if not analyzed_df.empty:
-                    verdict_counts = analyzed_df['veredicto'].value_counts().reset_index()
-                    verdict_counts.columns = ['veredicto', 'count']
+                    verdict_counts = analyzed_df['verdict'].value_counts().reset_index()
+                    verdict_counts.columns = ['verdict', 'count']
                     
                     color_map = {
-                        'CORROBORA FUERTEMENTE': '#2E7D32',
-                        'CORROBORA': '#4CAF50',
-                        'EVIDENCIA NO CONCLUYENTE': '#ff9800',
-                        'CONTRADICE': '#f44336',
-                        'CONTRADICE FUERTEMENTE': '#b71c1c'
+                        'STRONGLY SUPPORTS': '#2E7D32',
+                        'SUPPORTS': '#4CAF50',
+                        'INCONCLUSIVE': '#ff9800',
+                        'CONTRADICTS': '#f44336',
+                        'STRONGLY CONTRADICTS': '#b71c1c'
                     }
                     
                     fig = px.pie(
                         verdict_counts, 
                         values='count', 
-                        names='veredicto',
-                        title=f"Distribución de Veredictos (n={len(analyzed_df)})",
-                        color='veredicto',
+                        names='verdict',
+                        title=f"Verdict Distribution (n={len(analyzed_df)})",
+                        color='verdict',
                         color_discrete_map=color_map
                     )
                     st.plotly_chart(fig, use_container_width=True)
             
-            st.markdown("## 📋 TABLA COMPLETA DE ARTÍCULOS")
+            st.markdown("## 📋 COMPLETE ARTICLES TABLE")
             
-            display_cols = ['base_datos', 'titulo', 'año', 'veredicto', 'confianza', 
-                           'evidencia_a_favor', 'evidencia_en_contra']
+            display_cols = ['database', 'title', 'year', 'verdict', 'confidence', 
+                           'evidence_for', 'evidence_against']
             display_df = results_df[display_cols].copy()
-            display_df['confianza'] = display_df['confianza'].apply(lambda x: f"{x:.1%}" if x > 0 else 'N/A')
+            display_df['confidence'] = display_df['confidence'].apply(lambda x: f"{x:.1%}" if x > 0 else 'N/A')
             
             st.dataframe(
                 display_df,
                 use_container_width=True,
                 height=500,
                 column_config={
-                    'base_datos': 'Base',
-                    'titulo': 'Título',
-                    'año': 'Año',
-                    'veredicto': 'Veredicto',
-                    'confianza': 'Confianza',
-                    'evidencia_a_favor': 'A favor',
-                    'evidencia_en_contra': 'En contra'
+                    'database': 'Database',
+                    'title': 'Title',
+                    'year': 'Year',
+                    'verdict': 'Verdict',
+                    'confidence': 'Confidence',
+                    'evidence_for': 'For',
+                    'evidence_against': 'Against'
                 }
             )
             
-            # SECCIÓN: ARTÍCULOS QUE CORROBORAN FUERTEMENTE
-            strong_evidence_df = results_df[results_df['veredicto'] == 'CORROBORA FUERTEMENTE']
+            # SECTION: ARTICLES THAT STRONGLY SUPPORT THE HYPOTHESIS
+            strong_evidence_df = results_df[results_df['verdict'] == 'STRONGLY SUPPORTS']
             
             if not strong_evidence_df.empty:
                 st.markdown("---")
-                st.markdown(f'<div class="strong-evidence-title">🔬 ARTÍCULOS QUE CORROBORAN FUERTEMENTE LA HIPÓTESIS <span class="counter-badge">{len(strong_evidence_df)} encontrados</span></div>', 
+                st.markdown(f'<div class="strong-evidence-title">🔬 ARTICLES THAT STRONGLY SUPPORT THE HYPOTHESIS <span class="counter-badge">{len(strong_evidence_df)} found</span></div>', 
                           unsafe_allow_html=True)
                 
                 st.markdown("""
                 <div style="background-color: #e8f5e8; padding: 1rem; border-radius: 10px; margin-bottom: 2rem;">
-                <p style="margin:0; color: #2E7D32;">📌 Estos artículos proporcionan la evidencia más sólida a favor de tu hipótesis.</p>
+                <p style="margin:0; color: #2E7D32;">📌 These articles provide the strongest evidence in favor of your hypothesis.</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
                 for idx, row in strong_evidence_df.iterrows():
-                    badge_class = get_badge_class(row['base_datos'])
+                    badge_class = get_badge_class(row['database'])
                     
                     st.markdown(f"""
                     <div class="result-card-strong">
-                        <span class="{badge_class}">{row['base_datos']}</span>
-                        <div style="font-size: 1.2rem; font-weight: bold; margin: 0.5rem 0;">{row['titulo']}</div>
+                        <span class="{badge_class}">{row['database']}</span>
+                        <div style="font-size: 1.2rem; font-weight: bold; margin: 0.5rem 0;">{row['title']}</div>
                         <div style="color: #666; margin-bottom: 0.5rem;">
-                            <b>Autores:</b> {row.get('autores', 'No disponible')[:150]}...
+                            <b>Authors:</b> {row.get('authors', 'Not available')[:150]}...
                         </div>
                         <div style="margin: 0.5rem 0;">
-                            <b>Revista:</b> {row.get('revista', 'No disponible')} | 
-                            <b>Año:</b> {row.get('año', 'No disponible')}
+                            <b>Journal:</b> {row.get('journal', 'Not available')} | 
+                            <b>Year:</b> {row.get('year', 'Not available')}
                         </div>
                         <div style="margin: 0.5rem 0;">
-                            <b>DOI:</b> {row.get('doi', 'No disponible')}
+                            <b>DOI:</b> {row.get('doi', 'Not available')}
                         </div>
                         <div style="margin: 1rem 0;">
-                            <span class="verdict-assert">{row['veredicto']}</span> 
+                            <span class="verdict-assert">{row['verdict']}</span> 
                             <span style="margin-left: 1rem; background-color: #4CAF50; color: white; padding: 0.3rem 0.8rem; border-radius: 15px;">
-                                Confianza: {row['confianza']:.1%}
+                                Confidence: {row['confidence']:.1%}
                             </span>
                         </div>
                         <div style="background-color: white; padding: 1rem; border-radius: 5px; margin: 0.5rem 0;">
                             <div style="display: flex; justify-content: space-around; text-align: center;">
                                 <div>
-                                    <div style="font-size: 1.5rem; font-weight: bold; color: #4CAF50;">{row['evidencia_a_favor']}</div>
-                                    <div>Evidencias a favor</div>
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #4CAF50;">{row['evidence_for']}</div>
+                                    <div>Evidence for</div>
                                 </div>
                                 <div>
-                                    <div style="font-size: 1.5rem; font-weight: bold; color: #f44336;">{row['evidencia_en_contra']}</div>
-                                    <div>Evidencias en contra</div>
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #f44336;">{row['evidence_against']}</div>
+                                    <div>Evidence against</div>
                                 </div>
                                 <div>
-                                    <div style="font-size: 1.5rem; font-weight: bold;">{row.get('oraciones_totales', 0)}</div>
-                                    <div>Oraciones totales</div>
+                                    <div style="font-size: 1.5rem; font-weight: bold;">{row.get('total_sentences', 0)}</div>
+                                    <div>Total sentences</div>
                                 </div>
                                 <div>
-                                    <div style="font-size: 1.5rem; font-weight: bold;">{row.get('oraciones_relevantes', 0)}</div>
-                                    <div>Oraciones relevantes</div>
+                                    <div style="font-size: 1.5rem; font-weight: bold;">{row.get('relevant_sentences', 0)}</div>
+                                    <div>Relevant sentences</div>
                                 </div>
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
                     
-                    if row['detalle_evidencia']:
+                    if row['evidence_detail']:
                         st.markdown(f"""
                         <div class="evidence-box">
-                            <b>🔍 Evidencia destacada:</b> {row['detalle_evidencia']}
+                            <b>🔍 Highlighted evidence:</b> {row['evidence_detail']}
                         </div>
                         """, unsafe_allow_html=True)
                     
                     col1, col2 = st.columns([1, 5])
                     with col1:
                         if row.get('url') and pd.notna(row['url']):
-                            st.link_button("🔗 Ver artículo", row['url'], use_container_width=True)
+                            st.link_button("🔗 View article", row['url'], use_container_width=True)
                     with col2:
                         if row.get('doi') and pd.notna(row['doi']):
                             doi_link = f"https://doi.org/{row['doi']}"
-                            st.link_button("📋 Ver DOI", doi_link, use_container_width=True)
+                            st.link_button("📋 View DOI", doi_link, use_container_width=True)
                     
                     st.markdown("</div>", unsafe_allow_html=True)
                     st.markdown("---")
             else:
-                st.info("ℹ️ No se encontraron artículos que corroboren fuertemente la hipótesis.")
+                st.info("ℹ️ No articles found that strongly support the hypothesis.")
             
-            st.markdown("## 💾 EXPORTAR RESULTADOS")
+            st.markdown("## 💾 EXPORT RESULTS")
             
             col1, col2, col3 = st.columns(3)
             
-            report_text = integrator.generate_report() if integrator else "No disponible"
+            report_text = integrator.generate_report() if integrator else "Not available"
             with col1:
                 st.download_button(
-                    "📝 Reporte TXT",
+                    "📝 TXT Report",
                     report_text,
-                    file_name=f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
@@ -2955,7 +2754,7 @@ def main():
                 st.download_button(
                     "📊 CSV",
                     csv,
-                    file_name=f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
@@ -2963,49 +2762,49 @@ def main():
             with col3:
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    results_df.to_excel(writer, sheet_name='Resultados', index=False)
+                    results_df.to_excel(writer, sheet_name='Results', index=False)
                     
                     summary = pd.DataFrame([stats])
-                    summary.to_excel(writer, sheet_name='Resumen', index=False)
+                    summary.to_excel(writer, sheet_name='Summary', index=False)
                     
-                    if not results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE'].empty:
-                        verdict_stats = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']['veredicto'].value_counts().reset_index()
-                        verdict_stats.columns = ['Veredicto', 'Cantidad']
-                        verdict_stats.to_excel(writer, sheet_name='Por Veredicto', index=False)
+                    if not results_df[results_df['verdict'] != 'TEXT NOT AVAILABLE'].empty:
+                        verdict_stats = results_df[results_df['verdict'] != 'TEXT NOT AVAILABLE']['verdict'].value_counts().reset_index()
+                        verdict_stats.columns = ['Verdict', 'Count']
+                        verdict_stats.to_excel(writer, sheet_name='By Verdict', index=False)
                     
                     if not strong_evidence_df.empty:
-                        strong_evidence_df.to_excel(writer, sheet_name='Evidencia Fuerte', index=False)
+                        strong_evidence_df.to_excel(writer, sheet_name='Strong Evidence', index=False)
                 
                 st.download_button(
                     "📥 Excel",
                     buffer.getvalue(),
-                    file_name=f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    file_name=f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
     
-    # Sección para enviar resultados por correo
+    # Section to send results by email
     if st.session_state.get('analysis_completed', False) and st.session_state.get('integrator') is not None:
         st.markdown("---")
-        st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
+        st.markdown("## 📧 SEND RESULTS BY EMAIL")
         st.markdown('<div class="email-box">', unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("📨 ENVIAR RESULTADOS A MI CORREO", type="primary", use_container_width=True):
-                with st.spinner("Enviando resultados por correo..."):
-                    if enviar_resultados_email(st.session_state['user_email'], st.session_state['integrator']):
-                        st.success(f"✅ Resultados enviados correctamente a {st.session_state['user_email']}")
+            if st.button("📨 SEND RESULTS TO MY EMAIL", type="primary", use_container_width=True):
+                with st.spinner("Sending results by email..."):
+                    if send_results_email(st.session_state['user_email'], st.session_state['integrator']):
+                        st.success(f"✅ Results sent successfully to {st.session_state['user_email']}")
                         st.balloons()
                     else:
-                        st.error("❌ No se pudo enviar el correo. Verifica la configuración.")
+                        st.error("❌ Could not send email. Check configuration.")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v7.2 | FORMATO MeSH CORRECTO • 4 BASES ESTABLES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Integrated Semantic Search and Verifier v8.0 | CORRECT MeSH FORMAT • 4 STABLE DATABASES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
