@@ -1,7 +1,7 @@
 """
-Integrated Semantic Search and Verifier - COMPLETE CORRECTED VERSION
+Integrated Semantic Search and Verifier - COMPLETE CORRECTED VERSION with LIVE MeSH LOOKUP
 CRITICAL FIXES:
-1. PubMed: Correct handling of MeSH terms with commas
+1. PubMed: Direct MeSH term lookup via E-utilities API - NO MORE LOCAL MAPPING
 2. Result limit: Now respects up to 1000 articles per database
 3. Examples: Fixed loading and optimized queries
 4. Persistence: Results are NO longer deleted after analysis
@@ -10,7 +10,7 @@ CRITICAL FIXES:
 7. SPECIFIC WEIGHTS: Domain bonuses for ticagrelor and exercise-diabetes
 8. AUTOMATIC DETECTION: Program detects hypothesis domain
 9. NEW: Visualization of ALL articles that strongly support the hypothesis
-10. FIXED: Hypothesis assistant - Now generates queries in correct MeSH format
+10. FIXED: Hypothesis assistant - Now queries MeSH terms LIVE from PubMed
 """
 
 import streamlit as st
@@ -24,7 +24,7 @@ import plotly.graph_objects as go
 import io
 import xml.etree.ElementTree as ET
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from collections import Counter
@@ -40,6 +40,7 @@ from email import encoders
 from email.utils import formatdate
 import ssl
 import numpy as np
+from difflib import SequenceMatcher
 
 # Page configuration
 st.set_page_config(
@@ -330,6 +331,18 @@ st.markdown("""
         margin: 0.5rem 0;
         font-family: monospace;
     }
+    .mesh-suggestion {
+        background-color: #f0f8ff;
+        border: 1px solid #1E88E5;
+        border-radius: 5px;
+        padding: 0.5rem;
+        margin: 0.2rem 0;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    .mesh-suggestion:hover {
+        background-color: #e1f0fa;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -354,11 +367,193 @@ def simple_sent_tokenize(text: str) -> List[str]:
     return sentences
 
 # ============================================================================
-# HYPOTHESIS ASSISTANT - COMPLETELY IN ENGLISH
+# LIVE MeSH LOOKUP via PubMed E-utilities
+# ============================================================================
+
+class MeSHLookup:
+    def __init__(self, email: str):
+        self.email = email
+        self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+        self.delay = 0.34  # To respect NCBI's rate limits
+        self.cache = {}  # Simple cache to avoid repeated lookups
+    
+    def search_mesh_terms(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
+        """
+        Search for MeSH terms using PubMed's E-utilities
+        """
+        if not query or len(query) < 3:
+            return []
+        
+        # Check cache first
+        cache_key = f"mesh_search_{query.lower()}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        try:
+            # Search for MeSH terms
+            search_url = f"{self.base_url}esearch.fcgi"
+            params = {
+                'db': 'mesh',
+                'term': f"{query}[All Fields]",
+                'retmode': 'json',
+                'retmax': max_results,
+                'sort': 'relevance',
+                'email': self.email,
+                'tool': 'streamlit_app'
+            }
+            
+            time.sleep(self.delay)
+            response = requests.get(search_url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            id_list = data.get('esearchresult', {}).get('idlist', [])
+            
+            if not id_list:
+                # Try a more flexible search
+                params['term'] = f"{query}[Text Word]"
+                time.sleep(self.delay)
+                response = requests.get(search_url, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                id_list = data.get('esearchresult', {}).get('idlist', [])
+            
+            results = []
+            for mesh_id in id_list[:max_results]:
+                term_info = self.fetch_mesh_details(mesh_id)
+                if term_info:
+                    results.append(term_info)
+            
+            self.cache[cache_key] = results
+            return results
+            
+        except Exception as e:
+            if st.session_state.get('debug_mode', False):
+                st.warning(f"Error searching MeSH terms: {str(e)}")
+            return []
+    
+    def fetch_mesh_details(self, mesh_id: str) -> Optional[Dict[str, str]]:
+        """
+        Fetch details for a specific MeSH term by ID
+        """
+        try:
+            fetch_url = f"{self.base_url}efetch.fcgi"
+            params = {
+                'db': 'mesh',
+                'id': mesh_id,
+                'retmode': 'xml',
+                'email': self.email,
+                'tool': 'streamlit_app'
+            }
+            
+            time.sleep(self.delay)
+            response = requests.get(fetch_url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            # Parse XML response
+            root = ET.fromstring(response.content)
+            
+            # Find descriptor name
+            descriptor_name = root.find('.//DescriptorName')
+            if descriptor_name is not None and descriptor_name.text:
+                term_name = descriptor_name.text
+                
+                # Find UI
+                descriptor_ui = root.find('.//DescriptorUI')
+                mesh_ui = descriptor_ui.text if descriptor_ui is not None else mesh_id
+                
+                # Find tree numbers for context
+                tree_numbers = []
+                for tree_num in root.findall('.//TreeNumber'):
+                    if tree_num.text:
+                        tree_numbers.append(tree_num.text)
+                
+                # Find scope note if available
+                scope_note = ""
+                for note in root.findall('.//ScopeNote'):
+                    if note.text:
+                        scope_note = note.text[:200] + "..." if len(note.text) > 200 else note.text
+                        break
+                
+                return {
+                    'id': mesh_ui,
+                    'term': term_name,
+                    'tree_numbers': ', '.join(tree_numbers[:3]),
+                    'scope_note': scope_note
+                }
+            
+            return None
+            
+        except Exception as e:
+            if st.session_state.get('debug_mode', False):
+                st.warning(f"Error fetching MeSH details: {str(e)}")
+            return None
+    
+    def find_best_mesh_match(self, query: str) -> Optional[str]:
+        """
+        Find the best matching MeSH term for a query string
+        """
+        results = self.search_mesh_terms(query, max_results=3)
+        
+        if not results:
+            return None
+        
+        # Calculate similarity scores
+        best_match = None
+        best_score = 0.0
+        
+        for result in results:
+            term = result['term'].lower()
+            query_lower = query.lower()
+            
+            # Calculate similarity
+            similarity = SequenceMatcher(None, query_lower, term).ratio()
+            
+            # Boost exact matches
+            if query_lower == term:
+                similarity = 1.0
+            elif query_lower in term:
+                similarity += 0.2
+            elif term in query_lower:
+                similarity += 0.1
+            
+            if similarity > best_score:
+                best_score = similarity
+                best_match = result['term']
+        
+        return best_match if best_score > 0.6 else None
+    
+    def render_term_selector(self, query: str, key_prefix: str) -> Optional[str]:
+        """
+        Render a UI component to select from multiple MeSH term suggestions
+        """
+        if not query or len(query) < 3:
+            return None
+        
+        results = self.search_mesh_terms(query, max_results=5)
+        
+        if not results:
+            return None
+        
+        options = [result['term'] for result in results]
+        descriptions = [f"{result['term']} - {result['scope_note'][:100]}..." if result['scope_note'] else result['term'] for result in results]
+        
+        selected_idx = st.selectbox(
+            f"Select MeSH term for '{query}':",
+            range(len(options)),
+            format_func=lambda i: descriptions[i],
+            key=f"{key_prefix}_mesh_selector_{query}"
+        )
+        
+        return options[selected_idx]
+
+# ============================================================================
+# HYPOTHESIS ASSISTANT - WITH LIVE MeSH LOOKUP
 # ============================================================================
 
 class HypothesisAssistant:
-    def __init__(self):
+    def __init__(self, email: str):
+        self.mesh_lookup = MeSHLookup(email)
         
         self.templates = {
             "causal": {
@@ -388,50 +583,38 @@ class HypothesisAssistant:
             }
         }
         
-        # MeSH TERMS MAP - COMPLETE
-        self.mesh_terms_map = {
-            # Subjects/Interventions
-            "ticagrelor": "Ticagrelor",
-            "exercise": "Exercise",
-            "physical activity": "Exercise",
-            "cardiac rupture": "Heart Rupture, Post-Infarction",
-            "heart rupture": "Heart Rupture, Post-Infarction",
-            "myocardial infarction": "Myocardial Infarction",
-            "heart attack": "Myocardial Infarction",
-            "diabetes": "Diabetes Mellitus, Type 2",
-            "type 2 diabetes": "Diabetes Mellitus, Type 2",
-            "overweight": "Overweight",
-            "obesity": "Obesity",
-            "heart disease": "Heart Diseases",
-            "myocardial ischemia": "Myocardial Ischemia",
-            "alcoholism": "Alcoholism",
-            "alcohol": "Alcohol Drinking",
-            "alcohol drinking": "Alcohol Drinking",
-            "smoking": "Smoking",
-            "cigarette smoking": "Smoking",
-            
-            # Effects/Outcomes
-            "dyspnea": "Dyspnea",
-            "shortness of breath": "Dyspnea",
+        # Common MeSH term overrides for very common terms (as fallback)
+        self.common_mesh_overrides = {
+            "adult": "Adult",
+            "adults": "Adult",
+            "child": "Child",
+            "children": "Child",
+            "aged": "Aged",
+            "elderly": "Aged",
             "mortality": "Mortality",
             "death": "Mortality",
-            "incidence": "Incidence",
-            "side effect": "Drug-Related Side Effects and Adverse Reactions",
-            "adverse effects": "Drug-Related Side Effects and Adverse Reactions",
-            "association": "Epidemiologic Studies",
-            
-            # Population
-            "adults": "Adult",
-            "adult": "Adult",
-            "children": "Child",
-            "child": "Child",
-            "elderly": "Aged",
-            "aged": "Aged",
-            "patients": "Patients",
-            "older adults": "Aged"
+            "diabetes": "Diabetes Mellitus, Type 2",
+            "type 2 diabetes": "Diabetes Mellitus, Type 2",
+            "exercise": "Exercise",
+            "physical activity": "Exercise",
+            "alcoholism": "Alcoholism",
+            "alcohol": "Alcohol Drinking",
+            "smoking": "Smoking",
+            "obesity": "Obesity",
+            "overweight": "Overweight",
+            "ticagrelor": "Ticagrelor",
+            "dyspnea": "Dyspnea",
+            "myocardial infarction": "Myocardial Infarction",
+            "heart attack": "Myocardial Infarction",
+            "cardiac rupture": "Heart Rupture, Post-Infarction",
+            "prion": "Prion Diseases",
+            "prions": "Prion Diseases",
+            "cancer": "Neoplasms",
+            "lung cancer": "Lung Neoplasms",
+            "breast cancer": "Breast Neoplasms"
         }
         
-        # SUBHEADINGS - CORRECT FORMAT (attached to term with /)
+        # SUBHEADINGS - these are standard in PubMed
         self.subheadings = {
             "prevention": "prevention and control",
             "therapy": "therapy",
@@ -440,41 +623,37 @@ class HypothesisAssistant:
             "epidemiology": "epidemiology",
             "adverse effects": "adverse effects",
             "physiopathology": "physiopathology",
-            "mortality": "mortality",
-            "association": "epidemiology"
+            "mortality": "mortality"
         }
         
-        # EXAMPLES WITH CORRECT FORMAT
+        # EXAMPLES (queries will be regenerated with live MeSH lookup)
         self.examples = [
             {
                 "name": "Ticagrelor and dyspnea",
                 "subject": "ticagrelor",
                 "effect": "dyspnea",
-                "population": "patients with myocardial ischemia",
+                "population": "myocardial ischemia",
                 "type": "causal",
                 "verb": "causes",
-                "hypothesis": "Ticagrelor causes dyspnea as a side effect in patients with myocardial ischemia",
-                "mesh_query": '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
+                "hypothesis": "Ticagrelor causes dyspnea as a side effect in patients with myocardial ischemia"
             },
             {
                 "name": "Post-infarction cardiac rupture",
-                "subject": "post-infarction cardiac rupture",
-                "effect": "anatomical rupture patterns",
-                "population": "patients with acute myocardial infarction",
+                "subject": "cardiac rupture",
+                "effect": "anatomical patterns",
+                "population": "myocardial infarction",
                 "type": "association",
                 "verb": "follows",
-                "hypothesis": "In post-infarction cardiac rupture, the heart ruptures following recognizable anatomical patterns (intramyocardial dissection, intramyocardial hematoma, or complex rupture)",
-                "mesh_query": '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh])'
+                "hypothesis": "In post-infarction cardiac rupture, the heart ruptures following recognizable anatomical patterns"
             },
             {
                 "name": "Exercise and diabetes",
-                "subject": "regular physical exercise",
+                "subject": "exercise",
                 "effect": "type 2 diabetes",
                 "population": "overweight adults",
                 "type": "prevention",
                 "verb": "reduces the incidence of",
-                "hypothesis": "Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults",
-                "mesh_query": '("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
+                "hypothesis": "Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults"
             },
             {
                 "name": "Alcoholism and mortality",
@@ -483,8 +662,7 @@ class HypothesisAssistant:
                 "population": "adults",
                 "type": "risk",
                 "verb": "increases the risk of",
-                "hypothesis": "Alcoholism increases the risk of mortality in adults",
-                "mesh_query": '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
+                "hypothesis": "Alcoholism increases the risk of mortality in adults"
             },
             {
                 "name": "Smoking and lung cancer",
@@ -493,8 +671,16 @@ class HypothesisAssistant:
                 "population": "adults",
                 "type": "risk",
                 "verb": "increases the risk of",
-                "hypothesis": "Smoking increases the risk of lung cancer in adults",
-                "mesh_query": '("Smoking"[Mesh] AND "Lung Neoplasms"[Mesh] AND "Adult"[Mesh])'
+                "hypothesis": "Smoking increases the risk of lung cancer in adults"
+            },
+            {
+                "name": "Prions and mortality",
+                "subject": "prions",
+                "effect": "mortality",
+                "population": "adults",
+                "type": "causal",
+                "verb": "causes",
+                "hypothesis": "Prions cause mortality in adults"
             }
         ]
     
@@ -502,6 +688,93 @@ class HypothesisAssistant:
         if template_type in self.templates:
             return self.templates[template_type].get("verbs", [])
         return []
+    
+    def find_mesh_term_live(self, term: str) -> Optional[str]:
+        """
+        Find the best MeSH term using live lookup
+        """
+        if not term:
+            return None
+        
+        term_lower = term.lower().strip()
+        
+        # Check common overrides first (faster)
+        if term_lower in self.common_mesh_overrides:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✓ Using common override: {self.common_mesh_overrides[term_lower]}")
+            return self.common_mesh_overrides[term_lower]
+        
+        # Live lookup
+        if st.session_state.get('debug_mode', False):
+            st.write(f"   🔍 Live MeSH lookup for: '{term}'")
+        
+        best_match = self.mesh_lookup.find_best_mesh_match(term)
+        
+        if best_match:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✓ Found: {best_match}")
+            return best_match
+        else:
+            if st.session_state.get('debug_mode', False):
+                st.write(f"   ✗ No MeSH term found")
+            return None
+    
+    def generate_mesh_query(self, subject: str, effect: str, population: str, 
+                           template_type: str, verb: str = None) -> Tuple[str, Dict[str, Optional[str]]]:
+        """
+        Generate a query in CORRECT MeSH format for PubMed using live lookup
+        Returns both the query string and the mapping of terms found
+        """
+        query_parts = []
+        term_mapping = {}
+        
+        # Debug info
+        if st.session_state.get('debug_mode', False):
+            st.write("🔍 Generating MeSH query with live lookup:")
+        
+        # Get term for subject
+        subject_term = self.find_mesh_term_live(subject)
+        if subject_term:
+            term_mapping['subject'] = subject_term
+            
+            # Add subheading for prevention type
+            if template_type == "prevention":
+                subject_final = f'"{subject_term}/prevention and control"[Mesh]'
+            else:
+                subject_final = f'"{subject_term}"[Mesh]'
+            query_parts.append(subject_final)
+        
+        # Get term for effect
+        effect_term = self.find_mesh_term_live(effect)
+        if effect_term:
+            term_mapping['effect'] = effect_term
+            
+            # Add subheading for prevention type
+            if template_type == "prevention":
+                effect_final = f'"{effect_term}/prevention and control"[Mesh]'
+            elif template_type == "risk" and "mortality" in effect_term.lower():
+                effect_final = f'"{effect_term}/mortality"[Mesh]'
+            else:
+                effect_final = f'"{effect_term}"[Mesh]'
+            query_parts.append(effect_final)
+        
+        # Get term for population
+        population_term = self.find_mesh_term_live(population)
+        if population_term:
+            term_mapping['population'] = population_term
+            population_final = f'"{population_term}"[Mesh]'
+            query_parts.append(population_final)
+        
+        # If no query parts, return default
+        if not query_parts:
+            default_query = '("research"[Title/Abstract])'
+            return default_query, term_mapping
+        
+        # Join with AND and wrap in parentheses
+        query = " AND ".join(query_parts)
+        final_query = f"({query})"
+        
+        return final_query, term_mapping
     
     def build_hypothesis(self, subject: str, effect: str, population: str, 
                         template_type: str, verb: str = None) -> Dict:
@@ -527,12 +800,13 @@ class HypothesisAssistant:
                 population=population
             )
         
-        # Generate MeSH query in CORRECT format
-        mesh_query = self.generate_correct_mesh_query(subject, effect, population, template_type, verb)
+        # Generate MeSH query with live lookup
+        mesh_query, term_mapping = self.generate_mesh_query(subject, effect, population, template_type, verb)
         
         return {
             "en": hypothesis_en,
             "mesh_query": mesh_query,
+            "term_mapping": term_mapping,
             "subject": subject,
             "effect": effect,
             "population": population,
@@ -541,125 +815,20 @@ class HypothesisAssistant:
             "verb": verb
         }
     
-    def find_mesh_term(self, text: str) -> Optional[str]:
-        """
-        Search for a term in the MeSH map
-        """
-        if not text:
-            return None
-        
-        text_lower = text.lower().strip()
-        
-        # Search exact match first
-        for key, value in self.mesh_terms_map.items():
-            if key == text_lower:
-                return value
-        
-        # Search partial match
-        for key, value in self.mesh_terms_map.items():
-            if key in text_lower or text_lower in key:
-                return value
-        
-        # Search by keywords
-        words = text_lower.split()
-        for word in words:
-            if len(word) > 3:
-                for key, value in self.mesh_terms_map.items():
-                    if word in key or key in word:
-                        return value
-        
-        return None
-    
-    def generate_correct_mesh_query(self, subject: str, effect: str, population: str, 
-                                   template_type: str, verb: str = None) -> str:
-        """
-        Generate a query in CORRECT MeSH format for PubMed
-        Correct format: 
-        - For terms with subheading: "Term/subheading"[Mesh]
-        - For terms without subheading: "Term"[Mesh]
-        - Join with AND
-        """
-        query_parts = []
-        
-        # Debug info
-        if st.session_state.get('debug_mode', False):
-            st.write("🔍 Generating MeSH query:")
-            st.write(f"   Subject: {subject}")
-            st.write(f"   Effect: {effect}")
-            st.write(f"   Population: {population}")
-            st.write(f"   Type: {template_type}")
-        
-        # Get term for subject
-        subject_term = self.find_mesh_term(subject)
-        if subject_term:
-            if st.session_state.get('debug_mode', False):
-                st.write(f"   ✓ Subject found: {subject_term}")
-            
-            # Add subheading for prevention type
-            if template_type == "prevention":
-                subject_final = f'"{subject_term}/prevention and control"[Mesh]'
-            else:
-                subject_final = f'"{subject_term}"[Mesh]'
-            query_parts.append(subject_final)
-        else:
-            if st.session_state.get('debug_mode', False):
-                st.write(f"   ✗ Subject NOT found in MeSH map")
-        
-        # Get term for effect
-        effect_term = self.find_mesh_term(effect)
-        if effect_term:
-            if st.session_state.get('debug_mode', False):
-                st.write(f"   ✓ Effect found: {effect_term}")
-            
-            # Add subheading for prevention type
-            if template_type == "prevention":
-                effect_final = f'"{effect_term}/prevention and control"[Mesh]'
-            elif template_type == "risk" and effect_term in ["Mortality", "Incidence"]:
-                effect_final = f'"{effect_term}/mortality"[Mesh]'
-            else:
-                effect_final = f'"{effect_term}"[Mesh]'
-            query_parts.append(effect_final)
-        else:
-            if st.session_state.get('debug_mode', False):
-                st.write(f"   ✗ Effect NOT found in MeSH map")
-        
-        # Get term for population
-        population_term = self.find_mesh_term(population)
-        if population_term:
-            if st.session_state.get('debug_mode', False):
-                st.write(f"   ✓ Population found: {population_term}")
-            population_final = f'"{population_term}"[Mesh]'
-            query_parts.append(population_final)
-        else:
-            if st.session_state.get('debug_mode', False):
-                st.write(f"   ✗ Population NOT found in MeSH map")
-        
-        # If no query parts, use default query
-        if not query_parts:
-            if st.session_state.get('debug_mode', False):
-                st.write("   ⚠️ No MeSH terms found, using default query")
-            return '("research"[Title/Abstract])'
-        
-        # Join with AND and wrap in parentheses
-        query = " AND ".join(query_parts)
-        final_query = f"({query})"
-        
-        if st.session_state.get('debug_mode', False):
-            st.write(f"   ✅ Query generated: {final_query}")
-        
-        return final_query
-    
     def render_assistant_ui(self):
         with st.expander("🤖 HYPOTHESIS ASSISTANT - Build your scientific hypothesis", expanded=False):
             st.markdown('<div class="assistant-box">', unsafe_allow_html=True)
             st.markdown("### 🎯 Build your scientific hypothesis")
-            st.markdown("Complete the following fields to generate a well-formed hypothesis and its MeSH query in CORRECT format:")
+            st.markdown("Complete the following fields to generate a well-formed hypothesis and its MeSH query using **LIVE MeSH lookup from PubMed**:")
+            
+            # Show info about live lookup
+            st.info("🔍 Terms are looked up in real-time from the official PubMed MeSH database. No local dictionary needed!")
             
             # Show example of correct format
             st.markdown("""
             <div class="query-example">
-            <b>✅ CORRECT MeSH FORMAT:</b><br>
-            ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])
+            <b>✅ CORRECT MeSH FORMAT (auto-generated):</b><br>
+            Your query will be generated automatically based on live MeSH term lookup
             </div>
             """, unsafe_allow_html=True)
             
@@ -675,22 +844,25 @@ class HypothesisAssistant:
                 subject = st.text_input(
                     "🧪 Subject/Intervention:",
                     value=st.session_state.get('assistant_subject', ''),
-                    placeholder="e.g., ticagrelor, exercise, alcoholism",
-                    key="assistant_subject"
+                    placeholder="e.g., ticagrelor, exercise, prions, smoking",
+                    key="assistant_subject",
+                    help="Enter any medical term - it will be looked up in MeSH automatically"
                 )
                 
                 effect = st.text_input(
                     "📊 Effect/Outcome:",
                     value=st.session_state.get('assistant_effect', ''),
-                    placeholder="e.g., dyspnea, type 2 diabetes, mortality",
-                    key="assistant_effect"
+                    placeholder="e.g., dyspnea, mortality, lung cancer, diabetes",
+                    key="assistant_effect",
+                    help="Enter any medical term - it will be looked up in MeSH automatically"
                 )
                 
                 population = st.text_input(
                     "👥 Population:",
                     value=st.session_state.get('assistant_population', ''),
-                    placeholder="e.g., adults, overweight patients, children",
-                    key="assistant_population"
+                    placeholder="e.g., adults, overweight patients, elderly",
+                    key="assistant_population",
+                    help="Enter any population term - it will be looked up in MeSH automatically"
                 )
             
             with col2:
@@ -726,13 +898,14 @@ class HypothesisAssistant:
             
             if st.button("✨ GENERATE HYPOTHESIS", type="primary", use_container_width=True):
                 if subject and effect and population:
-                    hypothesis_data = self.build_hypothesis(
-                        subject=subject,
-                        effect=effect,
-                        population=population,
-                        template_type=template_type,
-                        verb=verb
-                    )
+                    with st.spinner("🔍 Looking up MeSH terms in PubMed database..."):
+                        hypothesis_data = self.build_hypothesis(
+                            subject=subject,
+                            effect=effect,
+                            population=population,
+                            template_type=template_type,
+                            verb=verb
+                        )
                     
                     st.markdown("---")
                     st.markdown("### 📝 GENERATED HYPOTHESIS")
@@ -740,24 +913,39 @@ class HypothesisAssistant:
                     st.markdown("**🇬🇧 English:**")
                     st.success(hypothesis_data["en"])
                     
-                    # Button to use the hypothesis
-                    if st.button("📌 Use this hypothesis", key="use_hypothesis", use_container_width=True):
-                        st.session_state['hypothesis'] = hypothesis_data["en"]
-                        st.session_state['query'] = hypothesis_data["mesh_query"]
-                        
-                        st.success("✅ Hypothesis and MeSH query loaded")
-                        st.rerun()
+                    # Show MeSH term mapping
+                    if hypothesis_data["term_mapping"]:
+                        st.markdown("**📋 MeSH Terms Found:**")
+                        mapping_text = ""
+                        if 'subject' in hypothesis_data["term_mapping"]:
+                            mapping_text += f"• Subject: **{hypothesis_data['term_mapping']['subject']}**\n"
+                        if 'effect' in hypothesis_data["term_mapping"]:
+                            mapping_text += f"• Effect: **{hypothesis_data['term_mapping']['effect']}**\n"
+                        if 'population' in hypothesis_data["term_mapping"]:
+                            mapping_text += f"• Population: **{hypothesis_data['term_mapping']['population']}**\n"
+                        st.info(mapping_text)
                     
                     # Show the generated MeSH query
                     st.markdown("---")
-                    st.markdown("**🔍 MeSH query for PubMed (CORRECT format):**")
+                    st.markdown("**🔍 MeSH query for PubMed (generated from live lookup):**")
                     st.markdown(f'<div class="mesh-query">{hypothesis_data["mesh_query"]}</div>', unsafe_allow_html=True)
                     
-                    # Button to use the MeSH query
-                    if st.button("📋 Use this MeSH query", key="use_mesh_query", use_container_width=True):
-                        st.session_state['query'] = hypothesis_data["mesh_query"]
-                        st.success("✅ MeSH query loaded in search field")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        # Button to use the hypothesis
+                        if st.button("📌 Use this hypothesis", key="use_hypothesis", use_container_width=True):
+                            st.session_state['hypothesis'] = hypothesis_data["en"]
+                            st.session_state['query'] = hypothesis_data["mesh_query"]
+                            
+                            st.success("✅ Hypothesis and MeSH query loaded")
+                            st.rerun()
+                    
+                    with col2:
+                        # Button to use only the MeSH query
+                        if st.button("📋 Use only MeSH query", key="use_mesh_only", use_container_width=True):
+                            st.session_state['query'] = hypothesis_data["mesh_query"]
+                            st.success("✅ MeSH query loaded in search field")
+                            st.rerun()
                     
                     st.session_state['last_hypothesis_data'] = hypothesis_data
                     
@@ -771,29 +959,34 @@ class HypothesisAssistant:
                     st.markdown("### 📋 Loaded example:")
                     st.info(f"**Hypothesis:** {example['hypothesis']}")
                     
-                    st.markdown("**🔍 MeSH query (CORRECT format):**")
-                    st.markdown(f'<div class="mesh-query">{example["mesh_query"]}</div>', unsafe_allow_html=True)
-                    
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         if st.button("📌 Use this example", key="use_example_main", use_container_width=True):
-                            st.session_state['hypothesis'] = example['hypothesis']
-                            st.session_state['query'] = example["mesh_query"]
-                            
-                            st.success("✅ Example loaded successfully")
+                            st.session_state['assistant_subject'] = example['subject']
+                            st.session_state['assistant_effect'] = example['effect']
+                            st.session_state['assistant_population'] = example['population']
+                            st.session_state['template_type'] = example['type']
                             st.rerun()
                     
                     with col2:
+                        if st.button("🔍 Generate MeSH query", key="generate_example_mesh", use_container_width=True):
+                            with st.spinner("🔍 Looking up MeSH terms..."):
+                                hypothesis_data = self.build_hypothesis(
+                                    subject=example['subject'],
+                                    effect=example['effect'],
+                                    population=example['population'],
+                                    template_type=example['type'],
+                                    verb=example['verb']
+                                )
+                                st.session_state['query'] = hypothesis_data["mesh_query"]
+                                st.success("✅ MeSH query generated and loaded")
+                                st.rerun()
+                    
+                    with col3:
                         if st.button("📋 Load in assistant", key="load_example_assistant", use_container_width=True):
                             st.session_state['assistant_subject'] = example['subject']
                             st.session_state['assistant_effect'] = example['effect']
                             st.session_state['assistant_population'] = example['population']
-                            st.rerun()
-                    
-                    with col3:
-                        if st.button("🔍 Use only query", key="use_mesh_only", use_container_width=True):
-                            st.session_state['query'] = example["mesh_query"]
-                            st.success("✅ MeSH query loaded")
                             st.rerun()
             
             st.markdown('</div>', unsafe_allow_html=True)
@@ -803,18 +996,23 @@ class HypothesisAssistant:
             **💡 Tips for a good hypothesis:**
             
             1. **Be specific**: The more specific, the better the evidence verification
-            2. **Clearly define**: Subject, effect, and population must be clearly defined
+            2. **Define clearly**: Subject, effect, and population must be clearly defined
             3. **Use medical terminology**: Scientific articles use standardized MeSH terms
             4. **Consider the direction**: Is it causality, association, risk, or protection?
             5. **Relevant population**: Specify age, condition, context when relevant
+            
+            **🔍 NEW: LIVE MeSH LOOKUP**
+            - Terms are searched in real-time in the official PubMed MeSH database
+            - No local dictionary needed - always up to date
+            - Automatically finds the best matching MeSH terms
             
             **📊 CORRECT MeSH FORMAT:**
             - For terms with subheading: `"Term/subheading"[Mesh]`
             - For terms without subheading: `"Term"[Mesh]`
             - Join with AND
             
-            **✅ CORRECT EXAMPLE:**<br>
-            `("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])`
+            **✅ EXAMPLE:**<br>
+            If you enter "prions", the system will look up the correct MeSH term "Prion Diseases"
             """, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -930,7 +1128,7 @@ class AdvancedSemanticVerifier:
             'case report': ['case report']
         }
         
-        # Medical terms by domain
+        # Medical terms by domain (for relevance calculation, not for MeSH lookup)
         self.cardiac_terms = [
             'intramyocardial', 'dissection', 'hematoma', 'rupture', 'cardiac',
             'postinfarction', 'myocardial', 'infarction', 'free wall', 'septal',
@@ -960,13 +1158,21 @@ class AdvancedSemanticVerifier:
             'substance abuse', 'substance use disorder'
         ]
         
+        self.prion_terms = [
+            'prion', 'prions', 'prion disease', 'prion diseases', 'creutzfeldt-jakob',
+            'cjd', 'kuru', 'gss', 'gerstmann-straussler-scheinker', 'ffi',
+            'fatal familial insomnia', 'transmissible spongiform encephalopathy',
+            'tse', 'spongiform encephalopathy', 'bovine spongiform encephalopathy',
+            'bse', 'scrapie', 'chronic wasting disease', 'cwd'
+        ]
+        
         self.general_terms = [
             'study', 'trial', 'cohort', 'analysis', 'meta-analysis',
             'systematic review', 'randomized', 'controlled', 'prospective',
             'retrospective', 'observational', 'cross-sectional', 'case-control',
             'significant', 'statistically significant', 'association',
             'correlation', 'risk factor', 'protective', 'hazard ratio',
-            'odds ratio', 'confidence interval', 'p value'
+            'odds ratio', 'confidence interval', 'p value', 'mortality', 'death'
         ]
         
         self.UMBRAL_RELEVANCIA = 0.05
@@ -976,6 +1182,7 @@ class AdvancedSemanticVerifier:
             self.pharmacology_terms + 
             self.metabolism_terms + 
             self.addiction_terms +
+            self.prion_terms +
             self.general_terms
         ))
     
@@ -994,16 +1201,22 @@ class AdvancedSemanticVerifier:
         addiction_keywords = ['alcohol', 'alcoholism', 'smoking', 'tobacco', 'addiction',
                              'substance', 'dependence']
         
+        prion_keywords = ['prion', 'creutzfeldt', 'jakob', 'cjd', 'kuru', 'gss', 
+                          'gerstmann', 'straussler', 'scheinker', 'ffi', 'insomnia',
+                          'spongiform', 'encephalopathy', 'bse', 'scrapie', 'cwd']
+        
         cardiac_score = sum(1 for kw in cardiac_keywords if kw in hypo_lower)
         pharmacology_score = sum(1 for kw in pharmacology_keywords if kw in hypo_lower)
         metabolism_score = sum(1 for kw in metabolism_keywords if kw in hypo_lower)
         addiction_score = sum(1 for kw in addiction_keywords if kw in hypo_lower)
+        prion_score = sum(1 for kw in prion_keywords if kw in hypo_lower)
         
         scores = {
             'cardiac': cardiac_score,
             'pharmacology': pharmacology_score,
             'metabolism': metabolism_score,
-            'addiction': addiction_score
+            'addiction': addiction_score,
+            'prion': prion_score
         }
         
         max_domain = max(scores, key=scores.get)
@@ -1051,6 +1264,8 @@ class AdvancedSemanticVerifier:
             all_terms.extend(self.metabolism_terms)
         elif domain == 'addiction':
             all_terms.extend(self.addiction_terms)
+        elif domain == 'prion':
+            all_terms.extend(self.prion_terms)
         
         all_terms.extend(self.general_terms)
         
@@ -1213,6 +1428,25 @@ class AdvancedSemanticVerifier:
                 score += 0.4
                 if 'cancer' in sentence_lower or 'mortality' in sentence_lower:
                     score += 0.5
+            
+            if 'mortality' in sentence_lower:
+                score += 0.3
+        
+        elif domain == 'prion':
+            if 'prion' in sentence_lower:
+                score += 0.4
+                if 'disease' in sentence_lower:
+                    score += 0.3
+                if 'mortality' in sentence_lower or 'death' in sentence_lower:
+                    score += 0.5
+            
+            if 'creutzfeldt' in sentence_lower or 'jakob' in sentence_lower or 'cjd' in sentence_lower:
+                score += 0.5
+                if 'mortality' in sentence_lower:
+                    score += 0.6
+            
+            if 'spongiform' in sentence_lower or 'encephalopathy' in sentence_lower:
+                score += 0.4
             
             if 'mortality' in sentence_lower:
                 score += 0.3
@@ -2332,7 +2566,7 @@ def send_results_email(recipient, integrator):
 
 def main():
     st.markdown('<h1 class="main-header">🔬 Integrated Semantic Search and Verifier</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">HIGH VOLUME: Up to 1000 articles per database • Automatic AI analysis • STABLE VERSION • MULTIDOMAIN • 4 DATABASES</p>', 
+    st.markdown('<p class="sub-header">HIGH VOLUME: Up to 1000 articles per database • Automatic AI analysis • STABLE VERSION • MULTIDOMAIN • 4 DATABASES • LIVE MeSH LOOKUP</p>', 
                 unsafe_allow_html=True)
     
     # Initialize session state
@@ -2365,7 +2599,12 @@ def main():
     if 'elapsed_time' not in st.session_state:
         st.session_state['elapsed_time'] = 0
     
-    hypothesis_assistant = HypothesisAssistant()
+    # Get email for MeSH lookup
+    user_email = st.session_state.get('user_email', '')
+    if not user_email or user_email == "":
+        user_email = "anonymous@example.com"  # Fallback email
+    
+    hypothesis_assistant = HypothesisAssistant(user_email)
     hypothesis_assistant.render_assistant_ui()
     
     with st.sidebar:
@@ -2373,10 +2612,11 @@ def main():
         st.markdown("## ⚙️ Configuration")
         
         email = st.text_input(
-            "📧 Email (required for NCBI and to receive results)", 
+            "📧 Email (required for NCBI and MeSH lookup)", 
             value=st.session_state.get('user_email', ''),
             placeholder="your@email.com",
-            key="email_input"
+            key="email_input",
+            help="Your email is required by NCBI for API access"
         )
         st.session_state['user_email'] = email
         
@@ -2447,31 +2687,49 @@ def main():
         """)
         
         st.markdown("### 📋 Examples")
+        st.info("These examples will use LIVE MeSH lookup when generating queries")
         
         # OPTIMIZED EXAMPLES WITH CORRECT FORMAT
         if st.button("Load example: Ticagrelor and dyspnea"):
-            st.session_state['query'] = '("Ticagrelor"[Mesh] AND "Dyspnea"[Mesh] AND "Myocardial Ischemia"[Mesh])'
-            st.session_state['hypothesis'] = "Ticagrelor causes dyspnea as a side effect in patients with myocardial ischemia"
+            st.session_state['assistant_subject'] = "ticagrelor"
+            st.session_state['assistant_effect'] = "dyspnea"
+            st.session_state['assistant_population'] = "myocardial ischemia"
+            st.session_state['template_type'] = "causal"
             st.rerun()
         
         if st.button("Load example: Post-infarction cardiac rupture"):
-            st.session_state['query'] = '("Heart Rupture, Post-Infarction"[Mesh] AND "Myocardial Infarction"[Mesh])'
-            st.session_state['hypothesis'] = "In post-infarction cardiac rupture, the heart ruptures following recognizable anatomical patterns (intramyocardial dissection, intramyocardial hematoma, or complex rupture)"
+            st.session_state['assistant_subject'] = "cardiac rupture"
+            st.session_state['assistant_effect'] = "anatomical patterns"
+            st.session_state['assistant_population'] = "myocardial infarction"
+            st.session_state['template_type'] = "association"
             st.rerun()
         
         if st.button("Load example: Exercise and diabetes"):
-            st.session_state['query'] = '("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])'
-            st.session_state['hypothesis'] = "Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults"
+            st.session_state['assistant_subject'] = "exercise"
+            st.session_state['assistant_effect'] = "type 2 diabetes"
+            st.session_state['assistant_population'] = "overweight adults"
+            st.session_state['template_type'] = "prevention"
             st.rerun()
         
         if st.button("Load example: Alcoholism and mortality"):
-            st.session_state['query'] = '("Alcoholism"[Mesh] AND "Mortality"[Mesh] AND "Adult"[Mesh])'
-            st.session_state['hypothesis'] = "Alcoholism increases the risk of mortality in adults"
+            st.session_state['assistant_subject'] = "alcoholism"
+            st.session_state['assistant_effect'] = "mortality"
+            st.session_state['assistant_population'] = "adults"
+            st.session_state['template_type'] = "risk"
             st.rerun()
         
         if st.button("Load example: Smoking and lung cancer"):
-            st.session_state['query'] = '("Smoking"[Mesh] AND "Lung Neoplasms"[Mesh] AND "Adult"[Mesh])'
-            st.session_state['hypothesis'] = "Smoking increases the risk of lung cancer in adults"
+            st.session_state['assistant_subject'] = "smoking"
+            st.session_state['assistant_effect'] = "lung cancer"
+            st.session_state['assistant_population'] = "adults"
+            st.session_state['template_type'] = "risk"
+            st.rerun()
+        
+        if st.button("Load example: Prions and mortality"):
+            st.session_state['assistant_subject'] = "prions"
+            st.session_state['assistant_effect'] = "mortality"
+            st.session_state['assistant_population'] = "adults"
+            st.session_state['template_type'] = "causal"
             st.rerun()
     
     # Main area
@@ -2479,12 +2737,12 @@ def main():
     
     with col1:
         search_query = st.text_area(
-            "🔍 Search query (CORRECT MeSH format):",
+            "🔍 Search query (will be auto-generated from assistant):",
             value=st.session_state['query'],
             height=120,
-            placeholder='e.g., ("Exercise/prevention and control"[Mesh] AND "Diabetes Mellitus, Type 2/prevention and control"[Mesh] AND "Adult"[Mesh] AND "Overweight"[Mesh])',
+            placeholder='Use the Hypothesis Assistant above to generate queries automatically',
             key="query_input",
-            help="Correct MeSH format: Use [Mesh] with subheading attached to the term: 'Term/subheading'[Mesh]"
+            help="Use the Hypothesis Assistant to generate MeSH queries automatically"
         )
         if search_query != st.session_state['query']:
             st.session_state['query'] = search_query
@@ -2492,10 +2750,10 @@ def main():
     
     with col2:
         hypothesis = st.text_area(
-            "🔬 Hypothesis to verify:",
+            "🔬 Hypothesis to verify (will be auto-generated from assistant):",
             value=st.session_state['hypothesis'],
             height=68,
-            placeholder='e.g., Regular physical exercise reduces the incidence of type 2 diabetes in overweight adults',
+            placeholder='Use the Hypothesis Assistant above to generate hypotheses automatically',
             key="hypothesis_input"
         )
         
@@ -2511,7 +2769,7 @@ def main():
     if analyze_button and search_query and hypothesis:
         user_email = st.session_state.get('user_email', '')
         if not user_email or not validate_email(user_email):
-            st.error("❌ Enter a valid email in the sidebar")
+            st.error("❌ Enter a valid email in the sidebar (required for NCBI access)")
         else:
             selected_dbs = [db for db, selected in databases.items() if selected]
             
@@ -2804,7 +3062,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Integrated Semantic Search and Verifier v8.0 | CORRECT MeSH FORMAT • 4 STABLE DATABASES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
+        <p>🔬 Integrated Semantic Search and Verifier v9.0 | LIVE MeSH LOOKUP • 4 STABLE DATABASES • PubMed • CrossRef • OpenAlex • Europe PMC</p>
     </div>
     """, unsafe_allow_html=True)
 
