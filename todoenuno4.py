@@ -845,7 +845,7 @@ class HypothesisAssistant:
                     "🧪 Subject/Intervention:",
                     value=st.session_state.get('assistant_subject', ''),
                     placeholder="e.g., ticagrelor, exercise, prions, smoking",
-                    key="assistant_subject",
+                    key="assistant_subject_input",
                     help="Enter any medical term - it will be looked up in MeSH automatically"
                 )
                 
@@ -853,7 +853,7 @@ class HypothesisAssistant:
                     "📊 Effect/Outcome:",
                     value=st.session_state.get('assistant_effect', ''),
                     placeholder="e.g., dyspnea, mortality, lung cancer, diabetes",
-                    key="assistant_effect",
+                    key="assistant_effect_input",
                     help="Enter any medical term - it will be looked up in MeSH automatically"
                 )
                 
@@ -861,16 +861,24 @@ class HypothesisAssistant:
                     "👥 Population:",
                     value=st.session_state.get('assistant_population', ''),
                     placeholder="e.g., adults, overweight patients, elderly",
-                    key="assistant_population",
+                    key="assistant_population_input",
                     help="Enter any population term - it will be looked up in MeSH automatically"
                 )
+                
+                # Update session state with input values
+                if subject != st.session_state.get('assistant_subject', ''):
+                    st.session_state['assistant_subject'] = subject
+                if effect != st.session_state.get('assistant_effect', ''):
+                    st.session_state['assistant_effect'] = effect
+                if population != st.session_state.get('assistant_population', ''):
+                    st.session_state['assistant_population'] = population
             
             with col2:
                 template_type = st.selectbox(
                     "🔄 Relationship type:",
                     options=list(self.templates.keys()),
                     format_func=lambda x: f"{x} - {self.templates[x]['description']}",
-                    key="template_type"
+                    key="template_type_select"
                 )
                 
                 available_verbs = self.get_available_verbs(template_type)
@@ -2564,40 +2572,44 @@ def send_results_email(recipient, integrator):
 # MAIN STREAMLIT INTERFACE
 # ============================================================================
 
+def initialize_session_state():
+    """Initialize all session state variables safely"""
+    defaults = {
+        'query': "",
+        'hypothesis': "",
+        'user_email': "",
+        'integrator': None,
+        'debug_mode': False,
+        'assistant_subject': "",
+        'assistant_effect': "",
+        'assistant_population': "",
+        'analysis_completed': False,
+        'last_results_df': None,
+        'last_stats': None,
+        'elapsed_time': 0,
+        'template_type': "causal"
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+def safe_set_session_state(key, value):
+    """Safely set a session state value"""
+    try:
+        st.session_state[key] = value
+    except Exception as e:
+        # If we can't set directly, try to initialize first
+        if key not in st.session_state:
+            st.session_state[key] = value
+
 def main():
+    # Initialize session state first thing
+    initialize_session_state()
+    
     st.markdown('<h1 class="main-header">🔬 Integrated Semantic Search and Verifier</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">HIGH VOLUME: Up to 1000 articles per database • Automatic AI analysis • STABLE VERSION • MULTIDOMAIN • 4 DATABASES • LIVE MeSH LOOKUP</p>', 
                 unsafe_allow_html=True)
-    
-    # Initialize session state
-    if 'query' not in st.session_state:
-        st.session_state['query'] = ""
-    if 'hypothesis' not in st.session_state:
-        st.session_state['hypothesis'] = ""
-    if 'user_email' not in st.session_state:
-        st.session_state['user_email'] = ""
-    if 'integrator' not in st.session_state:
-        st.session_state['integrator'] = None
-    if 'debug_mode' not in st.session_state:
-        st.session_state['debug_mode'] = False
-    
-    # Variables for assistant
-    if 'assistant_subject' not in st.session_state:
-        st.session_state['assistant_subject'] = ""
-    if 'assistant_effect' not in st.session_state:
-        st.session_state['assistant_effect'] = ""
-    if 'assistant_population' not in st.session_state:
-        st.session_state['assistant_population'] = ""
-    
-    # Variables for persistence
-    if 'analysis_completed' not in st.session_state:
-        st.session_state['analysis_completed'] = False
-    if 'last_results_df' not in st.session_state:
-        st.session_state['last_results_df'] = None
-    if 'last_stats' not in st.session_state:
-        st.session_state['last_stats'] = None
-    if 'elapsed_time' not in st.session_state:
-        st.session_state['elapsed_time'] = 0
     
     # Get email for MeSH lookup
     user_email = st.session_state.get('user_email', '')
@@ -2618,14 +2630,14 @@ def main():
             key="email_input",
             help="Your email is required by NCBI for API access"
         )
-        st.session_state['user_email'] = email
+        safe_set_session_state('user_email', email)
         
         debug_mode = st.checkbox(
             "🔧 Debug mode",
             value=st.session_state.get('debug_mode', False),
             key="debug_checkbox"
         )
-        st.session_state['debug_mode'] = debug_mode
+        safe_set_session_state('debug_mode', debug_mode)
         
         if NLTK_READY:
             st.success("✅ NLTK configured correctly")
@@ -2689,47 +2701,47 @@ def main():
         st.markdown("### 📋 Examples")
         st.info("These examples will use LIVE MeSH lookup when generating queries")
         
-        # OPTIMIZED EXAMPLES WITH CORRECT FORMAT
+        # OPTIMIZED EXAMPLES WITH SAFE SESSION STATE UPDATES
         if st.button("Load example: Ticagrelor and dyspnea"):
-            st.session_state['assistant_subject'] = "ticagrelor"
-            st.session_state['assistant_effect'] = "dyspnea"
-            st.session_state['assistant_population'] = "myocardial ischemia"
-            st.session_state['template_type'] = "causal"
+            safe_set_session_state('assistant_subject', "ticagrelor")
+            safe_set_session_state('assistant_effect', "dyspnea")
+            safe_set_session_state('assistant_population', "myocardial ischemia")
+            safe_set_session_state('template_type', "causal")
             st.rerun()
         
         if st.button("Load example: Post-infarction cardiac rupture"):
-            st.session_state['assistant_subject'] = "cardiac rupture"
-            st.session_state['assistant_effect'] = "anatomical patterns"
-            st.session_state['assistant_population'] = "myocardial infarction"
-            st.session_state['template_type'] = "association"
+            safe_set_session_state('assistant_subject', "cardiac rupture")
+            safe_set_session_state('assistant_effect', "anatomical patterns")
+            safe_set_session_state('assistant_population', "myocardial infarction")
+            safe_set_session_state('template_type', "association")
             st.rerun()
         
         if st.button("Load example: Exercise and diabetes"):
-            st.session_state['assistant_subject'] = "exercise"
-            st.session_state['assistant_effect'] = "type 2 diabetes"
-            st.session_state['assistant_population'] = "overweight adults"
-            st.session_state['template_type'] = "prevention"
+            safe_set_session_state('assistant_subject', "exercise")
+            safe_set_session_state('assistant_effect', "type 2 diabetes")
+            safe_set_session_state('assistant_population', "overweight adults")
+            safe_set_session_state('template_type', "prevention")
             st.rerun()
         
         if st.button("Load example: Alcoholism and mortality"):
-            st.session_state['assistant_subject'] = "alcoholism"
-            st.session_state['assistant_effect'] = "mortality"
-            st.session_state['assistant_population'] = "adults"
-            st.session_state['template_type'] = "risk"
+            safe_set_session_state('assistant_subject', "alcoholism")
+            safe_set_session_state('assistant_effect', "mortality")
+            safe_set_session_state('assistant_population', "adults")
+            safe_set_session_state('template_type', "risk")
             st.rerun()
         
         if st.button("Load example: Smoking and lung cancer"):
-            st.session_state['assistant_subject'] = "smoking"
-            st.session_state['assistant_effect'] = "lung cancer"
-            st.session_state['assistant_population'] = "adults"
-            st.session_state['template_type'] = "risk"
+            safe_set_session_state('assistant_subject', "smoking")
+            safe_set_session_state('assistant_effect', "lung cancer")
+            safe_set_session_state('assistant_population', "adults")
+            safe_set_session_state('template_type', "risk")
             st.rerun()
         
         if st.button("Load example: Prions and mortality"):
-            st.session_state['assistant_subject'] = "prions"
-            st.session_state['assistant_effect'] = "mortality"
-            st.session_state['assistant_population'] = "adults"
-            st.session_state['template_type'] = "causal"
+            safe_set_session_state('assistant_subject', "prions")
+            safe_set_session_state('assistant_effect', "mortality")
+            safe_set_session_state('assistant_population', "adults")
+            safe_set_session_state('template_type', "causal")
             st.rerun()
     
     # Main area
@@ -2745,8 +2757,8 @@ def main():
             help="Use the Hypothesis Assistant to generate MeSH queries automatically"
         )
         if search_query != st.session_state['query']:
-            st.session_state['query'] = search_query
-            st.session_state['analysis_completed'] = False
+            safe_set_session_state('query', search_query)
+            safe_set_session_state('analysis_completed', False)
     
     with col2:
         hypothesis = st.text_area(
@@ -2758,8 +2770,8 @@ def main():
         )
         
         if hypothesis != st.session_state.get('hypothesis', ''):
-            st.session_state['hypothesis'] = hypothesis
-            st.session_state['analysis_completed'] = False
+            safe_set_session_state('hypothesis', hypothesis)
+            safe_set_session_state('analysis_completed', False)
     
     col1, col2, col3 = st.columns(3)
     with col2:
@@ -2812,11 +2824,11 @@ def main():
                     elapsed_time = time.time() - start_time
                 
                 if not results_df.empty:
-                    st.session_state['integrator'] = integrator
-                    st.session_state['last_results_df'] = results_df.copy()
-                    st.session_state['last_stats'] = integrator.stats.copy()
-                    st.session_state['analysis_completed'] = True
-                    st.session_state['elapsed_time'] = elapsed_time
+                    safe_set_session_state('integrator', integrator)
+                    safe_set_session_state('last_results_df', results_df.copy())
+                    safe_set_session_state('last_stats', integrator.stats.copy())
+                    safe_set_session_state('analysis_completed', True)
+                    safe_set_session_state('elapsed_time', elapsed_time)
                     
                     st.rerun()
                 else:
