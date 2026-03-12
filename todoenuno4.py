@@ -838,14 +838,14 @@ class HypothesisAssistant:
                 example_option = st.selectbox(
                     "📋 Load example:",
                     ["Custom"] + [e["name"] for e in self.examples],
-                    key="example_selector"
+                    key="example_selector_assistant"
                 )
                 
                 subject = st.text_input(
                     "🧪 Subject/Intervention:",
                     value=st.session_state.get('assistant_subject', ''),
                     placeholder="e.g., ticagrelor, exercise, prions, smoking",
-                    key="assistant_subject",
+                    key="assistant_subject_input",
                     help="Enter any medical term - it will be looked up in MeSH automatically"
                 )
                 
@@ -853,7 +853,7 @@ class HypothesisAssistant:
                     "📊 Effect/Outcome:",
                     value=st.session_state.get('assistant_effect', ''),
                     placeholder="e.g., dyspnea, mortality, lung cancer, diabetes",
-                    key="assistant_effect",
+                    key="assistant_effect_input",
                     help="Enter any medical term - it will be looked up in MeSH automatically"
                 )
                 
@@ -861,7 +861,7 @@ class HypothesisAssistant:
                     "👥 Population:",
                     value=st.session_state.get('assistant_population', ''),
                     placeholder="e.g., adults, overweight patients, elderly",
-                    key="assistant_population",
+                    key="assistant_population_input",
                     help="Enter any population term - it will be looked up in MeSH automatically"
                 )
             
@@ -870,7 +870,7 @@ class HypothesisAssistant:
                     "🔄 Relationship type:",
                     options=list(self.templates.keys()),
                     format_func=lambda x: f"{x} - {self.templates[x]['description']}",
-                    key="template_type"
+                    key="template_type_select"
                 )
                 
                 available_verbs = self.get_available_verbs(template_type)
@@ -2586,8 +2586,7 @@ def initialize_session_state():
         'last_results_df': None,
         'last_stats': None,
         'elapsed_time': 0,
-        'template_type': "causal",
-        'example_selector': "Custom"
+        'template_type': "causal"
     }
     
     for key, value in defaults.items():
@@ -2621,14 +2620,16 @@ def main():
             key="email_input",
             help="Your email is required by NCBI for API access"
         )
-        st.session_state['user_email'] = email
+        if email != st.session_state['user_email']:
+            st.session_state['user_email'] = email
         
         debug_mode = st.checkbox(
             "🔧 Debug mode",
             value=st.session_state.get('debug_mode', False),
             key="debug_checkbox"
         )
-        st.session_state['debug_mode'] = debug_mode
+        if debug_mode != st.session_state['debug_mode']:
+            st.session_state['debug_mode'] = debug_mode
         
         if NLTK_READY:
             st.success("✅ NLTK configured correctly")
@@ -2692,51 +2693,71 @@ def main():
         st.markdown("### 📋 Examples")
         st.info("These examples will use LIVE MeSH lookup when generating queries")
         
-        # OPTIMIZED EXAMPLES WITH DIRECT SESSION STATE UPDATES
+        # OPTIMIZED EXAMPLES WITH DIRECT SESSION STATE UPDATES - USANDO st.query_params EN LUGAR DE st.session_state DIRECTAMENTE
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Ticagrelor & dyspnea", use_container_width=True):
+            if st.button("Ticagrelor & dyspnea", key="btn_ticagrelor", use_container_width=True):
+                st.query_params["example"] = "ticagrelor"
+                st.rerun()
+            
+            if st.button("Cardiac rupture", key="btn_cardiac", use_container_width=True):
+                st.query_params["example"] = "cardiac"
+                st.rerun()
+            
+            if st.button("Exercise & diabetes", key="btn_exercise", use_container_width=True):
+                st.query_params["example"] = "exercise"
+                st.rerun()
+        
+        with col2:
+            if st.button("Alcoholism & mortality", key="btn_alcohol", use_container_width=True):
+                st.query_params["example"] = "alcohol"
+                st.rerun()
+            
+            if st.button("Smoking & lung cancer", key="btn_smoking", use_container_width=True):
+                st.query_params["example"] = "smoking"
+                st.rerun()
+            
+            if st.button("Prions & mortality", key="btn_prions", use_container_width=True):
+                st.query_params["example"] = "prions"
+                st.rerun()
+        
+        # Procesar los parámetros de query
+        if "example" in st.query_params:
+            example_value = st.query_params["example"]
+            
+            if example_value == "ticagrelor":
                 st.session_state['assistant_subject'] = "ticagrelor"
                 st.session_state['assistant_effect'] = "dyspnea"
                 st.session_state['assistant_population'] = "myocardial ischemia"
                 st.session_state['template_type'] = "causal"
-                st.rerun()
-            
-            if st.button("Cardiac rupture", use_container_width=True):
+            elif example_value == "cardiac":
                 st.session_state['assistant_subject'] = "cardiac rupture"
                 st.session_state['assistant_effect'] = "anatomical patterns"
                 st.session_state['assistant_population'] = "myocardial infarction"
                 st.session_state['template_type'] = "association"
-                st.rerun()
-            
-            if st.button("Exercise & diabetes", use_container_width=True):
+            elif example_value == "exercise":
                 st.session_state['assistant_subject'] = "exercise"
                 st.session_state['assistant_effect'] = "type 2 diabetes"
                 st.session_state['assistant_population'] = "overweight adults"
                 st.session_state['template_type'] = "prevention"
-                st.rerun()
-        
-        with col2:
-            if st.button("Alcoholism & mortality", use_container_width=True):
+            elif example_value == "alcohol":
                 st.session_state['assistant_subject'] = "alcoholism"
                 st.session_state['assistant_effect'] = "mortality"
                 st.session_state['assistant_population'] = "adults"
                 st.session_state['template_type'] = "risk"
-                st.rerun()
-            
-            if st.button("Smoking & lung cancer", use_container_width=True):
+            elif example_value == "smoking":
                 st.session_state['assistant_subject'] = "smoking"
                 st.session_state['assistant_effect'] = "lung cancer"
                 st.session_state['assistant_population'] = "adults"
                 st.session_state['template_type'] = "risk"
-                st.rerun()
-            
-            if st.button("Prions & mortality", use_container_width=True):
+            elif example_value == "prions":
                 st.session_state['assistant_subject'] = "prions"
                 st.session_state['assistant_effect'] = "mortality"
                 st.session_state['assistant_population'] = "adults"
                 st.session_state['template_type'] = "causal"
-                st.rerun()
+            
+            # Limpiar el parámetro para no procesarlo de nuevo
+            del st.query_params["example"]
         
         st.markdown("### 📝 Direct MeSH Query")
         st.info("You can also paste any PubMed MeSH query directly in the search field below")
@@ -3054,7 +3075,7 @@ def main():
     if st.session_state.get('analysis_completed', False) and st.session_state.get('integrator') is not None:
         st.markdown("---")
         st.markdown("## 📧 SEND RESULTS BY EMAIL")
-        st.markdown('<div class="email-box">, unsafe_allow_html=True')
+        st.markdown('<div class="email-box">', unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
