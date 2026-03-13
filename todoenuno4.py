@@ -1367,17 +1367,34 @@ class AdvancedSemanticVerifier:
 
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA
+# MOTOR DE BÚSQUEDA CIENTÍFICA (VERSIÓN CORREGIDA)
 # ============================================================================
 
 class ScientificSearchEngine:
     """
     Motor de búsqueda científica mejorado para grandes volúmenes de resultados
+    VERSIÓN CORREGIDA: Manejo inteligente de queries para diferentes bases de datos
     """
     
     def __init__(self, email: str):
         self.email = email
         self.delay = 0.3
+        
+        # Diccionario de términos médicos comunes para extracción inteligente
+        self.medical_terms = {
+            'drugs': ['ticagrelor', 'aspirin', 'clopidogrel', 'prasugrel', 'warfarin', 
+                     'heparin', 'statin', 'atorvastatin', 'metformin', 'insulin',
+                     'rivaroxaban', 'apixaban', 'dabigatran', 'enoxaparin'],
+            'conditions': ['myocardial', 'ischemia', 'infarction', 'angina', 'stroke',
+                          'diabetes', 'hypertension', 'dyspnea', 'arrhythmia', 'heart',
+                          'cardiac', 'coronary', 'artery', 'vascular', 'thrombosis',
+                          'embolism', 'fibrillation', 'failure', 'cardiomyopathy'],
+            'study_types': ['cohort', 'randomized', 'prospective', 'retrospective',
+                           'trial', 'study', 'analysis', 'review', 'meta-analysis',
+                           'systematic', 'controlled', 'observational', 'clinical'],
+            'populations': ['adult', 'pediatric', 'elderly', 'patient', 'population',
+                           'children', 'infant', 'neonatal', 'geriatric', 'human']
+        }
         
     def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
         """Formatea consultas complejas de PubMed incluyendo rango de años"""
@@ -1405,6 +1422,133 @@ class ScientificSearchEngine:
             query = f"({query}){year_filter}"
         
         return query
+    
+    def _extract_medical_terms(self, query: str) -> List[str]:
+        """
+        Extrae términos médicos específicos usando el diccionario
+        Funciona para cualquier query, simple o compleja
+        """
+        found_terms = []
+        query_lower = query.lower()
+        
+        # Buscar en todas las categorías
+        for category, terms in self.medical_terms.items():
+            for term in terms:
+                if term in query_lower:
+                    found_terms.append(term)
+        
+        return list(set(found_terms))  # Eliminar duplicados
+    
+    def _extract_core_terms(self, query: str, max_terms: int = 8) -> str:
+        """
+        Extrae términos núcleo de la query para búsqueda semántica
+        Funciona tanto para queries simples como complejas
+        """
+        # Si la query es corta, devolverla directamente (solo limpiar)
+        if len(query) < 100:
+            # Solo limpiar caracteres especiales básicos
+            clean = re.sub(r'[\[\]\(\)\{\}]', ' ', query)
+            clean = re.sub(r'\s+', ' ', clean).strip()
+            return clean
+        
+        important_terms = []
+        
+        # PASO 1: Buscar términos médicos específicos del diccionario
+        medical_terms_found = self._extract_medical_terms(query)
+        important_terms.extend(medical_terms_found)
+        
+        # PASO 2: Buscar términos entre comillas (frases exactas)
+        quoted_terms = re.findall(r'"([^"]+)"', query)
+        # Limpiar y añadir frases cortas (máximo 3 palabras)
+        for qt in quoted_terms:
+            words = qt.split()
+            if len(words) <= 3:  # Frases cortas son mejores
+                important_terms.append(qt.lower())
+            else:
+                # Si es muy larga, tomar las primeras palabras clave
+                important_terms.extend([w for w in words if len(w) > 3][:2])
+        
+        # PASO 3: Buscar términos con etiquetas MeSH
+        mesh_terms = re.findall(r'"([^"]+)"\s*\[[^\]]*Mesh[^\]]*\]', query, re.IGNORECASE)
+        important_terms.extend([t.lower() for t in mesh_terms])
+        
+        # PASO 4: Buscar términos específicos después de AND/OR
+        # pero excluyendo los operadores mismos
+        parts = re.split(r'\s+(?:AND|OR|NOT)\s+', query)
+        for part in parts:
+            # Limpiar el fragmento
+            clean_part = re.sub(r'[\[\]\(\)\{\}]', ' ', part)
+            # Extraer palabras significativas (largas)
+            words = re.findall(r'\b[a-z]{4,}\b', clean_part.lower())
+            important_terms.extend(words[:2])  # Solo las 2 primeras de cada fragmento
+        
+        # PASO 5: Eliminar duplicados y limitar número de términos
+        important_terms = list(set(important_terms))[:max_terms]
+        
+        # PASO 6: Si no se encontraron términos, usar fallback
+        if not important_terms:
+            # Extraer palabras de al menos 4 letras
+            words = re.findall(r'\b[a-zA-Z]{4,}\b', query)
+            # Filtrar palabras vacías comunes
+            stop_words = {'and', 'or', 'not', 'the', 'for', 'with', 'study', 'trial', 
+                         'patients', 'analysis', 'methods', 'results', 'conclusion'}
+            important_terms = [w.lower() for w in words if w.lower() not in stop_words][:max_terms]
+        
+        # Construir resultado
+        result = ' '.join(important_terms)
+        
+        # Asegurar que no esté vacío
+        if not result.strip():
+            # Fallback final: tomar primeras palabras
+            words = query.split()[:5]
+            result = ' '.join([w for w in words if len(w) > 2])
+        
+        return result
+    
+    def _prepare_for_europepmc(self, query: str) -> str:
+        """
+        Prepara la query específicamente para Europe PMC
+        Europe PMC soporta mejor sintaxis pero no MeSH
+        """
+        # Eliminar etiquetas MeSH pero mantener estructura lógica
+        clean = re.sub(r'\[[^\]]*\]', '', query)
+        
+        # Si la query limpia es razonablemente corta, usarla
+        if len(clean) < 300:
+            # Asegurar que no tenga paréntesis desbalanceados
+            if clean.count('(') == clean.count(')'):
+                return clean
+            else:
+                # Si están desbalanceados, simplificar
+                return self._extract_core_terms(query, max_terms=6)
+        
+        # Para queries muy largas, extraer términos clave
+        return self._extract_core_terms(query, max_terms=6)
+    
+    def _extract_keywords_only(self, query: str) -> str:
+        """
+        Extrae solo palabras clave, sin operadores booleanos
+        Para bases de datos muy simples
+        """
+        # Extraer palabras de al menos 4 letras
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', query)
+        
+        # Filtrar palabras vacías comunes
+        stop_words = {'and', 'or', 'not', 'the', 'for', 'with', 'study', 'trial', 
+                     'patients', 'analysis', 'methods', 'results', 'conclusion',
+                     'background', 'objective', 'design', 'setting', 'participants'}
+        
+        keywords = [w.lower() for w in words if w.lower() not in stop_words]
+        
+        # Eliminar duplicados y limitar
+        keywords = list(set(keywords))[:5]
+        
+        if not keywords:
+            # Fallback: tomar primeras palabras
+            words = query.split()[:3]
+            keywords = [w for w in words if len(w) > 2]
+        
+        return ' '.join(keywords)
     
     def fetch_pubmed_batch(self, ids_batch: list) -> list:
         """Obtiene detalles de un lote de IDs de PubMed"""
@@ -1523,10 +1667,12 @@ class ScientificSearchEngine:
         """Busca en CrossRef con soporte para hasta 1000 resultados"""
         results = []
         try:
-            # Ya no limpiamos la query aquí, recibimos una versión ya simplificada
+            # Usar términos extraídos para mejor rendimiento
+            search_query = self._extract_core_terms(query, max_terms=6)
+            
             url = "https://api.crossref.org/works"
             params = {
-                'query': query[:200],
+                'query': search_query,
                 'rows': min(100, max_results),
                 'sort': 'relevance',
                 'order': 'desc'
@@ -1574,10 +1720,12 @@ class ScientificSearchEngine:
         """Busca en OpenAlex con soporte para hasta 1000 resultados"""
         results = []
         try:
-            # Ya no limpiamos la query aquí, recibimos una versión ya simplificada
+            # OpenAlex funciona mejor con términos clave simples
+            search_query = self._extract_keywords_only(query)
+            
             url = "https://api.openalex.org/works"
             params = {
-                'search': query[:200],
+                'search': search_query,
                 'per-page': 50,
                 'sort': 'relevance_score:desc'
             }
@@ -1613,14 +1761,16 @@ class ScientificSearchEngine:
         """Busca en Europe PMC con soporte para hasta 1000 resultados"""
         results = []
         try:
-            # Ya no limpiamos la query aquí, recibimos una versión ya simplificada
+            # Europe PMC tiene mejor soporte para queries estructuradas
+            search_query = self._prepare_for_europepmc(query)
+            
             if year_range and year_range[0] and year_range[1]:
                 date_filter = f" AND (PUB_YEAR:{year_range[0]}-{year_range[1]})"
-                query = f"({query}){date_filter}"
+                search_query = f"({search_query}){date_filter}"
             
             url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
             params = {
-                'query': query[:500],
+                'query': search_query[:500],
                 'format': 'json',
                 'pageSize': min(100, max_results),
                 'resultType': 'core'
@@ -1651,12 +1801,101 @@ class ScientificSearchEngine:
         
         return results[:max_results]
     
+    def search_semantic_scholar(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
+        """Busca en Semantic Scholar (requiere API key)"""
+        results = []
+        try:
+            # Simplificar query para Semantic Scholar
+            search_query = self._extract_core_terms(query, max_terms=5)
+            
+            url = "https://api.semanticscholar.org/graph/v1/paper/search"
+            params = {
+                'query': search_query,
+                'limit': min(100, max_results),
+                'fields': 'title,authors,year,venue,doi,url,abstract'
+            }
+            
+            if year_range and year_range[0] and year_range[1]:
+                params['year'] = f"{year_range[0]}-{year_range[1]}"
+            
+            headers = {}
+            # Si tienes API key, descomenta la siguiente línea
+            # headers['x-api-key'] = 'TU_API_KEY'
+            
+            time.sleep(self.delay)
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                for item in data.get('data', []):
+                    results.append({
+                        'base_datos': 'Semantic Scholar',
+                        'titulo': item.get('title', 'Título no disponible'),
+                        'autores': ', '.join([a.get('name', '') for a in item.get('authors', [])[:5]]),
+                        'revista': item.get('venue', ''),
+                        'año': str(item.get('year', '')),
+                        'doi': item.get('doi', ''),
+                        'url': item.get('url', ''),
+                        'abstract': item.get('abstract', '')[:300] + '...' if item.get('abstract') else '',
+                        'tipo': 'Artículo'
+                    })
+            else:
+                st.warning(f"Semantic Scholar requiere API key o ha excedido límites")
+                
+        except Exception as e:
+            st.warning(f"Error en Semantic Scholar: {str(e)}")
+        
+        return results[:max_results]
+    
+    def search_doaj(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
+        """Busca en DOAJ (Directory of Open Access Journals)"""
+        results = []
+        try:
+            # DOAJ necesita query simple
+            search_query = self._extract_keywords_only(query)
+            
+            url = "https://doaj.org/api/v2/search/articles/" + urllib.parse.quote(search_query)
+            params = {
+                'pageSize': min(100, max_results),
+                'sort': 'title'
+            }
+            
+            time.sleep(self.delay)
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                for item in data.get('results', []):
+                    bibjson = item.get('bibjson', {})
+                    year = ''
+                    if bibjson.get('year'):
+                        year = str(bibjson.get('year'))
+                    
+                    results.append({
+                        'base_datos': 'DOAJ',
+                        'titulo': bibjson.get('title', 'Título no disponible'),
+                        'autores': ', '.join([a.get('name', '') for a in bibjson.get('author', [])[:5]]),
+                        'revista': bibjson.get('journal', {}).get('title', ''),
+                        'año': year,
+                        'doi': bibjson.get('doi', ''),
+                        'url': item.get('url', ''),
+                        'tipo': 'Artículo'
+                    })
+            else:
+                st.warning(f"DOAJ API returned {response.status_code}")
+                
+        except Exception as e:
+            st.warning(f"Error en DOAJ: {str(e)}")
+        
+        return results[:max_results]
+    
     def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
         """
         Busca en todas las bases de datos seleccionadas con alto volumen
-        PubMed usa la consulta original con sintaxis MeSH
-        Las otras bases usan una versión simplificada
+        VERSIÓN CORREGIDA: Cada base recibe la query optimizada para su API
         """
         
         if selected_dbs is None:
@@ -1664,50 +1903,69 @@ class ScientificSearchEngine:
         
         all_results = []
         
-        # Crear una copia para simplificar (NO modificar la original)
-        simple_query = query
+        # ====================================================================
+        # CREAR DIFERENTES VERSIONES DE LA QUERY PARA CADA BASE DE DATOS
+        # ====================================================================
         
-        # Crear una versión simplificada de la consulta para bases que no soportan MeSH
-        # Eliminar tags MeSH y Publication Type pero mantener términos clave
-        simple_query = re.sub(r'\[[^\]]*\]', '', simple_query)  # Elimina [Mesh], [PT], etc.
-        simple_query = re.sub(r'"[^"]*"', lambda m: m.group(0).replace('"', ''), simple_query)  # Quita comillas pero mantiene términos
-        simple_query = re.sub(r'\(|\)', ' ', simple_query)  # Reemplaza paréntesis por espacios
-        simple_query = re.sub(r'\s+', ' ', simple_query).strip()  # Normaliza espacios
+        # 1. PubMed: Usa la query original (con toda la sintaxis MeSH)
+        pubmed_query = query
         
-        # Si la consulta simplificada es muy larga, extraer solo términos clave
-        if len(simple_query) > 200:
-            # Buscar términos médicos clave
-            important_terms = re.findall(r'\b(ticagrelor|myocardial|ischemia|acute coronary|angina|infarction|cohort|prospective|trial|study|adults|adult|risk|factor|dyspnea|outcome|effect|treatment|therapy|patient|clinical|randomized|controlled)\b', 
-                                       simple_query, re.IGNORECASE)
-            if important_terms:
-                # Tomar términos únicos (máximo 6)
-                simple_query = ' '.join(list(set(important_terms))[:6])
-            else:
-                # Si no encuentra términos clave, tomar las primeras palabras
-                words = simple_query.split()[:10]
-                simple_query = ' '.join(words)
+        # 2. CrossRef y Semantic Scholar: Búsqueda semántica con términos clave
+        semantic_query = self._extract_core_terms(query, max_terms=8)
+        
+        # 3. Europe PMC: Versión semi-estructurada
+        europepmc_query = self._prepare_for_europepmc(query)
+        
+        # 4. OpenAlex: Términos clave simples
+        openalex_query = self._extract_keywords_only(query)
+        
+        # 5. DOAJ: Máxima simplificación
+        doaj_query = self._extract_keywords_only(query)
+        
+        # Opcional: Mostrar queries generadas (para debugging)
+        if st.session_state.get('debug_mode', False):
+            with st.expander("🔍 Queries generadas para cada base"):
+                st.json({
+                    "PubMed (original)": pubmed_query[:200] + "..." if len(pubmed_query) > 200 else pubmed_query,
+                    "Semantic (CrossRef)": semantic_query,
+                    "Europe PMC": europepmc_query,
+                    "OpenAlex/DOAJ": openalex_query,
+                    "Términos médicos encontrados": self._extract_medical_terms(query)
+                })
+        
+        # ====================================================================
+        # DICCIONARIO DE FUNCIONES DE BÚSQUEDA CON SUS QUERIES OPTIMIZADAS
+        # ====================================================================
         
         search_functions = {
-            'PubMed': self.search_pubmed_advanced,      # PubMed usa query original
-            'CrossRef': self.search_crossref,           # CrossRef usa simplificada
-            'OpenAlex': self.search_openalex,           # OpenAlex usa simplificada
-            'Europe PMC': self.search_europe_pmc        # Europe PMC usa simplificada
+            'PubMed': lambda: self.search_pubmed_advanced(pubmed_query, max_results_per_db, year_range),
+            'CrossRef': lambda: self.search_crossref(semantic_query, max_results_per_db, year_range),
+            'OpenAlex': lambda: self.search_openalex(openalex_query, max_results_per_db, year_range),
+            'Europe PMC': lambda: self.search_europe_pmc(europepmc_query, max_results_per_db, year_range),
+            'Semantic Scholar': lambda: self.search_semantic_scholar(semantic_query, max_results_per_db, year_range),
+            'DOAJ': lambda: self.search_doaj(doaj_query, max_results_per_db, year_range)
         }
+        
+        # ====================================================================
+        # EJECUTAR BÚSQUEDAS EN PARALELO (UNA POR UNA PARA CONTROL)
+        # ====================================================================
         
         for db in selected_dbs:
             if db in search_functions:
                 try:
                     with st.spinner(f"🔍 Buscando en {db}..."):
-                        # Para PubMed usar query original, para otras usar simplificada
-                        if db == 'PubMed':
-                            results = search_functions[db](query, max_results_per_db, year_range)
-                        else:
-                            results = search_functions[db](simple_query, max_results_per_db, year_range)
+                        results = search_functions[db]()
                         all_results.extend(results)
                         if results:
                             st.success(f"✅ {db}: {len(results)} resultados")
+                        else:
+                            st.info(f"ℹ️ {db}: 0 resultados")
                 except Exception as e:
-                    st.warning(f"Error en {db}: {str(e)}")
+                    st.warning(f"⚠️ Error en {db}: {str(e)}")
+        
+        # ====================================================================
+        # PROCESAR RESULTADOS
+        # ====================================================================
         
         if all_results:
             df = pd.DataFrame(all_results)
@@ -2316,6 +2574,8 @@ def main():
         st.session_state['user_email'] = ""
     if 'integrator' not in st.session_state:
         st.session_state['integrator'] = None
+    if 'debug_mode' not in st.session_state:
+        st.session_state['debug_mode'] = False
     
     # Inicializar asistente de hipótesis
     hypothesis_assistant = HypothesisAssistant()
@@ -2389,6 +2649,10 @@ def main():
             step=0.05,
             help="Mínimo de coincidencia con términos de la hipótesis"
         )
+        
+        st.markdown("### 🐛 Opciones de depuración")
+        debug_mode = st.checkbox("Mostrar queries generadas", value=False)
+        st.session_state['debug_mode'] = debug_mode
         
         st.markdown("### ⚠️ Advertencia")
         st.warning("""
