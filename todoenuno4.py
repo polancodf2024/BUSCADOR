@@ -1664,9 +1664,12 @@ class ScientificSearchEngine:
         
         all_results = []
         
+        # Crear una copia para simplificar (NO modificar la original)
+        simple_query = query
+        
         # Crear una versión simplificada de la consulta para bases que no soportan MeSH
         # Eliminar tags MeSH y Publication Type pero mantener términos clave
-        simple_query = re.sub(r'\[[^\]]*\]', '', query)  # Elimina [Mesh], [PT], etc.
+        simple_query = re.sub(r'\[[^\]]*\]', '', simple_query)  # Elimina [Mesh], [PT], etc.
         simple_query = re.sub(r'"[^"]*"', lambda m: m.group(0).replace('"', ''), simple_query)  # Quita comillas pero mantiene términos
         simple_query = re.sub(r'\(|\)', ' ', simple_query)  # Reemplaza paréntesis por espacios
         simple_query = re.sub(r'\s+', ' ', simple_query).strip()  # Normaliza espacios
