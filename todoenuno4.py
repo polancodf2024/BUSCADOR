@@ -1523,13 +1523,10 @@ class ScientificSearchEngine:
         """Busca en CrossRef con soporte para hasta 1000 resultados"""
         results = []
         try:
-            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
-            simple_query = re.sub(r'[\(\)]', '', simple_query)
-            simple_query = ' '.join(simple_query.split())
-            
+            # Ya no limpiamos la query aquí, recibimos una versión ya simplificada
             url = "https://api.crossref.org/works"
             params = {
-                'query': simple_query[:200],
+                'query': query[:200],
                 'rows': min(100, max_results),
                 'sort': 'relevance',
                 'order': 'desc'
@@ -1577,13 +1574,10 @@ class ScientificSearchEngine:
         """Busca en OpenAlex con soporte para hasta 1000 resultados"""
         results = []
         try:
-            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
-            simple_query = re.sub(r'[\(\)]', '', simple_query)
-            simple_query = ' '.join(simple_query.split())
-            
+            # Ya no limpiamos la query aquí, recibimos una versión ya simplificada
             url = "https://api.openalex.org/works"
             params = {
-                'search': simple_query[:200],
+                'search': query[:200],
                 'per-page': 50,
                 'sort': 'relevance_score:desc'
             }
@@ -1619,17 +1613,14 @@ class ScientificSearchEngine:
         """Busca en Europe PMC con soporte para hasta 1000 resultados"""
         results = []
         try:
-            simple_query = re.sub(r'"[^"]*"\[[^\]]*\]', '', query)
-            simple_query = re.sub(r'[\(\)]', '', simple_query)
-            simple_query = ' '.join(simple_query.split())
-            
+            # Ya no limpiamos la query aquí, recibimos una versión ya simplificada
             if year_range and year_range[0] and year_range[1]:
                 date_filter = f" AND (PUB_YEAR:{year_range[0]}-{year_range[1]})"
-                simple_query = f"({simple_query}){date_filter}"
+                query = f"({query}){date_filter}"
             
             url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
             params = {
-                'query': simple_query[:500],
+                'query': query[:500],
                 'format': 'json',
                 'pageSize': min(100, max_results),
                 'resultType': 'core'
@@ -1662,27 +1653,56 @@ class ScientificSearchEngine:
     
     def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
-        """Busca en todas las bases de datos seleccionadas con alto volumen"""
+        """
+        Busca en todas las bases de datos seleccionadas con alto volumen
+        PubMed usa la consulta original con sintaxis MeSH
+        Las otras bases usan una versión simplificada
+        """
         
         if selected_dbs is None:
             selected_dbs = ['PubMed', 'CrossRef', 'OpenAlex', 'Europe PMC']
         
         all_results = []
         
+        # Crear una versión simplificada de la consulta para bases que no soportan MeSH
+        # Eliminar tags MeSH y Publication Type pero mantener términos clave
+        simple_query = re.sub(r'\[[^\]]*\]', '', query)  # Elimina [Mesh], [PT], etc.
+        simple_query = re.sub(r'"[^"]*"', lambda m: m.group(0).replace('"', ''), simple_query)  # Quita comillas pero mantiene términos
+        simple_query = re.sub(r'\(|\)', ' ', simple_query)  # Reemplaza paréntesis por espacios
+        simple_query = re.sub(r'\s+', ' ', simple_query).strip()  # Normaliza espacios
+        
+        # Si la consulta simplificada es muy larga, extraer solo términos clave
+        if len(simple_query) > 200:
+            # Buscar términos médicos clave
+            important_terms = re.findall(r'\b(ticagrelor|myocardial|ischemia|acute coronary|angina|infarction|cohort|prospective|trial|study|adults|adult|risk|factor|dyspnea|outcome|effect|treatment|therapy|patient|clinical|randomized|controlled)\b', 
+                                       simple_query, re.IGNORECASE)
+            if important_terms:
+                # Tomar términos únicos (máximo 6)
+                simple_query = ' '.join(list(set(important_terms))[:6])
+            else:
+                # Si no encuentra términos clave, tomar las primeras palabras
+                words = simple_query.split()[:10]
+                simple_query = ' '.join(words)
+        
         search_functions = {
-            'PubMed': self.search_pubmed_advanced,
-            'CrossRef': self.search_crossref,
-            'OpenAlex': self.search_openalex,
-            'Europe PMC': self.search_europe_pmc
+            'PubMed': self.search_pubmed_advanced,      # PubMed usa query original
+            'CrossRef': self.search_crossref,           # CrossRef usa simplificada
+            'OpenAlex': self.search_openalex,           # OpenAlex usa simplificada
+            'Europe PMC': self.search_europe_pmc        # Europe PMC usa simplificada
         }
         
         for db in selected_dbs:
             if db in search_functions:
                 try:
                     with st.spinner(f"🔍 Buscando en {db}..."):
-                        results = search_functions[db](query, max_results_per_db, year_range)
+                        # Para PubMed usar query original, para otras usar simplificada
+                        if db == 'PubMed':
+                            results = search_functions[db](query, max_results_per_db, year_range)
+                        else:
+                            results = search_functions[db](simple_query, max_results_per_db, year_range)
                         all_results.extend(results)
-                        st.success(f"✅ {db}: {len(results)} resultados")
+                        if results:
+                            st.success(f"✅ {db}: {len(results)} resultados")
                 except Exception as e:
                     st.warning(f"Error en {db}: {str(e)}")
         
@@ -2408,7 +2428,7 @@ def main():
         hypothesis_es = st.text_area(
             "🔬 Conjetura a verificar (español):",
             value=st.session_state.get('hypothesis', ''),
-            height=68,  # CORREGIDO: mínimo 68 píxeles
+            height=68,
             placeholder='Ej: El fármaco X causa efecto Y en pacientes con Z',
             help="Escribe tu hipótesis en español",
             key="hypothesis_input"
@@ -2734,7 +2754,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.1 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.2 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado | PubMed conserva sintaxis MeSH</p>
     </div>
     """, unsafe_allow_html=True)
 
