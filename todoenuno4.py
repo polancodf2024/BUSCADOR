@@ -363,6 +363,45 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
+    .strong-correlation {
+        background: linear-gradient(135deg, #1E88E5, #0d47a1);
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+        font-weight: bold;
+        display: inline-block;
+        margin-left: 0.5rem;
+    }
+    .reference-card {
+        background-color: #e8f0fe;
+        border-left: 5px solid #1E88E5;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        font-size: 0.9rem;
+    }
+    .reference-title {
+        font-weight: bold;
+        color: #0d47a1;
+    }
+    .reference-authors {
+        color: #424242;
+        font-style: italic;
+    }
+    .reference-journal {
+        color: #1E88E5;
+    }
+    .correlation-badge {
+        background-color: #4CAF50;
+        color: white;
+        padding: 0.2rem 0.5rem;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: bold;
+        display: inline-block;
+        margin-left: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1794,7 +1833,8 @@ class IntegratedScientificVerifier:
             'with_text': 0,
             'corroboran': 0,
             'contradicen': 0,
-            'inconclusos': 0
+            'inconclusos': 0,
+            'strong_correlation': 0
         }
     
     def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
@@ -1882,6 +1922,8 @@ class IntegratedScientificVerifier:
                     self.stats['analyzed'] += 1
                     if 'CORROBORA' in verdict['verdict_text']:
                         self.stats['corroboran'] += 1
+                        if verdict['confidence'] > 0.7 or verdict['score'] > 0.6:
+                            self.stats['strong_correlation'] += 1
                     elif 'CONTRADICE' in verdict['verdict_text']:
                         self.stats['contradicen'] += 1
                     else:
@@ -1907,6 +1949,27 @@ class IntegratedScientificVerifier:
         self.results = pd.DataFrame(results_list)
         return self.results
     
+    def get_strong_correlation_articles(self) -> pd.DataFrame:
+        """
+        Retorna los artículos que tienen una correlación fuerte con la hipótesis
+        """
+        if self.results.empty:
+            return pd.DataFrame()
+        
+        # Filtrar artículos con veredicto de corroboración fuerte
+        # o con alta confianza (>0.7) o puntuación alta (>0.6)
+        strong_df = self.results[
+            (self.results['veredicto'].str.contains('FUERTEMENTE', na=False)) |
+            (self.results['confianza'] > 0.7) |
+            (self.results['puntuacion'] > 0.6)
+        ].copy()
+        
+        # Ordenar por confianza descendente
+        if not strong_df.empty:
+            strong_df = strong_df.sort_values('confianza', ascending=False)
+        
+        return strong_df
+    
     def generate_report(self) -> str:
         """Genera un reporte textual de los resultados"""
         if self.results.empty:
@@ -1923,10 +1986,32 @@ class IntegratedScientificVerifier:
         report.append("")
         report.append("RESULTADOS GLOBALES:")
         report.append(f"✅ Corroboran: {self.stats['corroboran']}")
+        report.append(f"   ├─ Correlación fuerte: {self.stats['strong_correlation']}")
         report.append(f"❌ Contradicen: {self.stats['contradicen']}")
         report.append(f"⚠️ Inconclusos: {self.stats['inconclusos']}")
         report.append("")
-        report.append("DETALLE POR ARTÍCULO:")
+        
+        # Artículos con correlación fuerte
+        strong_df = self.get_strong_correlation_articles()
+        if not strong_df.empty:
+            report.append("="*80)
+            report.append("📈 ARTÍCULOS CON CORRELACIÓN FUERTE CON LA HIPÓTESIS")
+            report.append("="*80)
+            
+            for idx, row in strong_df.iterrows():
+                report.append(f"\n📄 {row['titulo']}")
+                report.append(f"   Autores: {row['autores']}")
+                report.append(f"   Revista: {row['revista']} | Año: {row['año']}")
+                report.append(f"   Base: {row['base_datos']} | DOI: {row['doi']}")
+                report.append(f"   Veredicto: {row['veredicto']} (Confianza: {row['confianza']:.1%})")
+                report.append(f"   Evidencia: {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra")
+                if row['detalle_evidencia']:
+                    report.append(f"   Evidencia: {row['detalle_evidencia']}")
+                report.append(f"   URL: {row['url']}")
+        
+        report.append("")
+        report.append("="*80)
+        report.append("DETALLE COMPLETO POR ARTÍCULO:")
         report.append("-"*80)
         
         for idx, row in self.results.iterrows():
@@ -1949,6 +2034,8 @@ class IntegratedScientificVerifier:
         if self.results.empty:
             return "<p>No hay resultados para generar reporte.</p>"
         
+        strong_df = self.get_strong_correlation_articles()
+        
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -1959,6 +2046,11 @@ class IntegratedScientificVerifier:
                 h1 {{ color: #1E88E5; }}
                 h2 {{ color: #333; border-bottom: 2px solid #1E88E5; padding-bottom: 5px; }}
                 .stats {{ background-color: #f5f5f5; padding: 15px; border-radius: 5px; }}
+                .strong-correlation {{ background-color: #e8f0fe; padding: 15px; border-radius: 5px; margin: 20px 0; }}
+                .reference {{ background-color: #e8f0fe; border-left: 5px solid #1E88E5; padding: 10px; margin: 10px 0; border-radius: 5px; }}
+                .reference-title {{ font-weight: bold; color: #0d47a1; }}
+                .reference-authors {{ color: #424242; font-style: italic; }}
+                .reference-journal {{ color: #1E88E5; }}
                 .verdict-assert {{ color: #4CAF50; font-weight: bold; }}
                 .verdict-reject {{ color: #f44336; font-weight: bold; }}
                 .verdict-inconclusive {{ color: #ff9800; font-weight: bold; }}
@@ -1978,10 +2070,35 @@ class IntegratedScientificVerifier:
                 <p><strong>Artículos con texto disponible:</strong> {self.stats['with_text']}</p>
                 <p><strong>Artículos analizados:</strong> {self.stats['analyzed']}</p>
                 <p><strong>✅ Corroboran:</strong> {self.stats['corroboran']}</p>
+                <p><strong>   └─ Correlación fuerte:</strong> {self.stats['strong_correlation']}</p>
                 <p><strong>❌ Contradicen:</strong> {self.stats['contradicen']}</p>
                 <p><strong>⚠️ Inconclusos:</strong> {self.stats['inconclusos']}</p>
             </div>
+        """
+        
+        if not strong_df.empty:
+            html += f"""
+            <h2>📈 Artículos con Correlación Fuerte</h2>
+            <div class="strong-correlation">
+                <p><strong>Se encontraron {len(strong_df)} artículos con correlación fuerte a la hipótesis:</strong></p>
+            """
             
+            for idx, row in strong_df.iterrows():
+                html += f"""
+                <div class="reference">
+                    <p class="reference-title">📄 {row['titulo']}</p>
+                    <p class="reference-authors">👥 {row['autores']}</p>
+                    <p class="reference-journal">📚 {row['revista']} ({row['año']}) | {row['base_datos']}</p>
+                    <p>🔗 DOI: <a href="https://doi.org/{row['doi']}" target="_blank">{row['doi']}</a></p>
+                    <p>⚖️ Veredicto: <span class="verdict-assert">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})</p>
+                    <p>📊 Evidencia: {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra</p>
+                    <p>🔬 URL: <a href="{row['url']}" target="_blank">Ver artículo</a></p>
+                </div>
+                """
+            
+            html += "</div>"
+        
+        html += f"""
             <h2>📋 Detalle de Artículos</h2>
             <table>
                 <tr>
@@ -2088,12 +2205,19 @@ def enviar_resultados_email(destinatario, integrator):
         integrator.results.to_excel(writer, sheet_name='Resultados', index=False)
         summary = pd.DataFrame([integrator.stats])
         summary.to_excel(writer, sheet_name='Resumen', index=False)
+        
+        # Añadir hoja de correlación fuerte
+        strong_df = integrator.get_strong_correlation_articles()
+        if not strong_df.empty:
+            strong_df.to_excel(writer, sheet_name='Correlacion_Fuerte', index=False)
+    
     archivos.append({
         'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         'contenido': excel_buffer.getvalue()
     })
     
     # Asunto y mensaje
+    strong_count = integrator.stats.get('strong_correlation', 0)
     asunto = f"🔬 Reporte de Verificación Semántica - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     
     mensaje_html = f"""
@@ -2108,6 +2232,7 @@ def enviar_resultados_email(destinatario, integrator):
             <li><strong>Total artículos:</strong> {integrator.stats['total_articles']}</li>
             <li><strong>Artículos analizados:</strong> {integrator.stats['analyzed']}</li>
             <li><strong>✅ Corroboran:</strong> {integrator.stats['corroboran']}</li>
+            <li><strong>   └─ Correlación fuerte:</strong> {strong_count}</li>
             <li><strong>❌ Contradicen:</strong> {integrator.stats['contradicen']}</li>
             <li><strong>⚠️ Inconclusos:</strong> {integrator.stats['inconclusos']}</li>
         </ul>
@@ -2129,6 +2254,7 @@ def enviar_resultados_email(destinatario, integrator):
     - Total artículos: {integrator.stats['total_articles']}
     - Artículos analizados: {integrator.stats['analyzed']}
     - ✅ Corroboran: {integrator.stats['corroboran']}
+    -    └─ Correlación fuerte: {strong_count}
     - ❌ Contradicen: {integrator.stats['contradicen']}
     - ⚠️ Inconclusos: {integrator.stats['inconclusos']}
     
@@ -2366,7 +2492,7 @@ def main():
                 # ESTADÍSTICAS GLOBALES
                 st.markdown("## 📊 RESULTADOS GLOBALES")
                 
-                col1, col2, col3, col4, col5 = st.columns(5)
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
                     st.metric("Artículos encontrados", integrator.stats['total_articles'])
                 with col2:
@@ -2374,8 +2500,10 @@ def main():
                 with col3:
                     st.metric("✅ Corroboran", integrator.stats['corroboran'])
                 with col4:
-                    st.metric("❌ Contradicen", integrator.stats['contradicen'])
+                    st.metric("🔴 Correl. fuerte", integrator.stats['strong_correlation'])
                 with col5:
+                    st.metric("❌ Contradicen", integrator.stats['contradicen'])
+                with col6:
                     st.metric("⚠️ Inconclusos", integrator.stats['inconclusos'])
                 
                 # GRÁFICOS
@@ -2413,6 +2541,41 @@ def main():
                             color_discrete_sequence=['#4CAF50', '#f44336', '#ff9800']
                         )
                         st.plotly_chart(fig, use_container_width=True)
+                
+                # SECCIÓN: ARTÍCULOS CON CORRELACIÓN FUERTE
+                st.markdown("## 📈 ARTÍCULOS CON CORRELACIÓN FUERTE CON LA HIPÓTESIS")
+                st.markdown("Estos artículos presentan la evidencia más sólida a favor de tu hipótesis:")
+                
+                strong_df = integrator.get_strong_correlation_articles()
+                
+                if not strong_df.empty:
+                    for idx, row in strong_df.iterrows():
+                        badge_class = get_badge_class(row['base_datos'])
+                        
+                        st.markdown(f"""
+                        <div class="reference-card">
+                            <span class="{badge_class}">{row['base_datos']}</span>
+                            <span class="correlation-badge">Correlación fuerte</span>
+                            <div class="reference-title">{row['titulo']}</div>
+                            <div class="reference-authors">{row['autores']}</div>
+                            <div class="reference-journal">{row['revista']} ({row['año']})</div>
+                            <div><b>DOI:</b> {row.get('doi', 'No disponible')}</div>
+                            <div><b>Veredicto:</b> <span class="verdict-assert">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})</div>
+                            <div><b>Evidencia:</b> {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra</div>
+                        """, unsafe_allow_html=True)
+                        
+                        col1, col2, col3 = st.columns([1, 1, 4])
+                        with col1:
+                            if row.get('url') and pd.notna(row['url']):
+                                st.link_button("🔗 Ver artículo", row['url'])
+                        with col2:
+                            if row.get('doi') and pd.notna(row['doi']):
+                                doi_link = f"https://doi.org/{row['doi']}"
+                                st.link_button("📋 DOI", doi_link)
+                        
+                        st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.info("No se encontraron artículos con correlación fuerte. Revisa los artículos que corroboran para más detalles.")
                 
                 # TABLA DE RESULTADOS
                 st.markdown("## 📋 ARTÍCULOS ANALIZADOS")
@@ -2531,6 +2694,11 @@ def main():
                             verdict_stats = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']['veredicto'].value_counts().reset_index()
                             verdict_stats.columns = ['Veredicto', 'Cantidad']
                             verdict_stats.to_excel(writer, sheet_name='Por Veredicto', index=False)
+                        
+                        # Añadir hoja de correlación fuerte
+                        strong_df = integrator.get_strong_correlation_articles()
+                        if not strong_df.empty:
+                            strong_df.to_excel(writer, sheet_name='Correlacion_Fuerte', index=False)
                     
                     st.download_button(
                         "📥 Excel",
@@ -2549,9 +2717,11 @@ def main():
         st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
         st.markdown('<div class="email-box">', unsafe_allow_html=True)
         
+        strong_count = st.session_state.integrator.stats.get('strong_correlation', 0)
+        
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("📨 ENVIAR RESULTADOS A MI CORREO", type="primary", use_container_width=True):
+            if st.button(f"📨 ENVIAR RESULTADOS A MI CORREO ({strong_count} correlaciones fuertes)", type="primary", use_container_width=True):
                 with st.spinner("Enviando resultados por correo..."):
                     if enviar_resultados_email(st.session_state['user_email'], st.session_state['integrator']):
                         st.success(f"✅ Resultados enviados correctamente a {st.session_state['user_email']}")
@@ -2564,7 +2734,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.0 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.1 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado</p>
     </div>
     """, unsafe_allow_html=True)
 
