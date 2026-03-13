@@ -18,7 +18,7 @@ import io
 import xml.etree.ElementTree as ET
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
-import os
+import os  # AÑADIDO: importar os
 import pathlib
 from typing import List, Dict, Tuple, Optional
 import zipfile
@@ -40,7 +40,6 @@ import ssl
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import paramiko  # Añadido para conexión SFTP
 
 # Configuración de la página
 st.set_page_config(
@@ -110,6 +109,7 @@ def load_algebra_from_remote():
         st.error("Configuración remota incompleta. Verifica los secrets.")
         return None
     
+    remote_path = None  # CORREGIDO: Definir variable antes del try
     try:
         # Conectar por SFTP
         ssh = paramiko.SSHClient()
@@ -2420,8 +2420,9 @@ def main():
         st.session_state['query'] = search_query
         
         # Mostrar origen de la búsqueda si se cargó desde archivo
-        if search_query and 'Cargada desde archivo' not in st.session_state:
-            if search_query == st.session_state.get('query', ''):
+        if search_query and search_query != "":
+            if 'Cargada desde archivo' not in st.session_state:
+                st.session_state['Cargada desde archivo'] = True
                 st.info("📂 Búsqueda cargada desde archivo remoto")
     
     with col2:
