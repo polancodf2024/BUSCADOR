@@ -39,6 +39,7 @@ import ssl
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import paramiko  # Añadido para conexión SFTP
 
 # Configuración de la página
 st.set_page_config(
@@ -49,7 +50,7 @@ st.set_page_config(
 )
 
 # ============================================================================
-# CONFIGURACIÓN DE CORREO
+# CONFIGURACIÓN DE CORREO Y ARCHIVO REMOTO
 # ============================================================================
 
 class EmailConfig:
@@ -59,7 +60,16 @@ class EmailConfig:
         self.SMTP_PORT = st.secrets.get("smtp_port", 587)
         self.EMAIL_USER = st.secrets.get("email_user", "")
         self.EMAIL_PASSWORD = st.secrets.get("email_password", "")
+        self.NOTIFICATION_EMAIL = st.secrets.get("notification_email", "")
         self.MAX_FILE_SIZE_MB = 10
+        
+        # Configuración remota para archivo de álgebra
+        self.REMOTE_HOST = st.secrets.get("remote_host", "")
+        self.REMOTE_USER = st.secrets.get("remote_user", "")
+        self.REMOTE_PASSWORD = st.secrets.get("remote_password", "")
+        self.REMOTE_PORT = st.secrets.get("remote_port", 22)
+        self.REMOTE_DIR = st.secrets.get("remote_dir", "")
+        self.ALGEBRA_FILE = st.secrets.get("algebra_file", "")
         
         # Verificar si tenemos configuración de correo
         self.available = all([
@@ -67,6 +77,15 @@ class EmailConfig:
             self.SMTP_PORT,
             self.EMAIL_USER,
             self.EMAIL_PASSWORD
+        ])
+        
+        # Verificar si tenemos configuración remota completa
+        self.remote_available = all([
+            self.REMOTE_HOST,
+            self.REMOTE_USER,
+            self.REMOTE_PASSWORD,
+            self.REMOTE_DIR,
+            self.ALGEBRA_FILE
         ])
 
 EMAIL_CONFIG = EmailConfig()
@@ -79,6 +98,60 @@ def validate_email(email):
         return False
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
+
+def load_algebra_from_remote():
+    """
+    Carga la consulta de álgebra desde el archivo remoto usando SFTP
+    Returns:
+        str: Contenido del archivo o None si hay error
+    """
+    if not EMAIL_CONFIG.remote_available:
+        st.error("Configuración remota incompleta. Verifica los secrets.")
+        return None
+    
+    try:
+        # Conectar por SFTP
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        ssh.connect(
+            hostname=EMAIL_CONFIG.REMOTE_HOST,
+            port=EMAIL_CONFIG.REMOTE_PORT,
+            username=EMAIL_CONFIG.REMOTE_USER,
+            password=EMAIL_CONFIG.REMOTE_PASSWORD,
+            timeout=30
+        )
+        
+        # Abrir SFTP
+        sftp = ssh.open_sftp()
+        remote_path = os.path.join(EMAIL_CONFIG.REMOTE_DIR, EMAIL_CONFIG.ALGEBRA_FILE)
+        
+        # Leer archivo
+        with sftp.file(remote_path, 'r') as remote_file:
+            content = remote_file.read().decode('utf-8').strip()
+        
+        sftp.close()
+        ssh.close()
+        
+        if content:
+            st.success(f"✅ Archivo cargado exitosamente desde {remote_path}")
+            return content
+        else:
+            st.warning("⚠️ El archivo está vacío")
+            return None
+            
+    except paramiko.AuthenticationException:
+        st.error("❌ Error de autenticación SFTP. Verifica usuario/contraseña.")
+        return None
+    except paramiko.SSHException as e:
+        st.error(f"❌ Error de conexión SSH: {str(e)}")
+        return None
+    except FileNotFoundError:
+        st.error(f"❌ Archivo no encontrado en ruta remota: {remote_path}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error inesperado al cargar archivo: {str(e)}")
+        return None
 
 def enviar_correo(destinatario, asunto, mensaje_html=None, mensaje_texto=None, archivos=None):
     """
@@ -363,44 +436,20 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
-    .strong-correlation {
-        background: linear-gradient(135deg, #1E88E5, #0d47a1);
-        color: white;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-        font-weight: bold;
-        display: inline-block;
-        margin-left: 0.5rem;
-    }
-    .reference-card {
-        background-color: #e8f0fe;
-        border-left: 5px solid #1E88E5;
-        border-radius: 8px;
+    .remote-file-box {
+        background-color: #e8f5e9;
+        border-left: 5px solid #2e7d32;
         padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+        font-size: 0.95rem;
+    }
+    .file-info {
+        background-color: #e3f2fd;
+        border-radius: 5px;
+        padding: 0.5rem;
         margin: 0.5rem 0;
-        font-size: 0.9rem;
-    }
-    .reference-title {
-        font-weight: bold;
-        color: #0d47a1;
-    }
-    .reference-authors {
-        color: #424242;
-        font-style: italic;
-    }
-    .reference-journal {
-        color: #1E88E5;
-    }
-    .correlation-badge {
-        background-color: #4CAF50;
-        color: white;
-        padding: 0.2rem 0.5rem;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        font-weight: bold;
-        display: inline-block;
-        margin-left: 0.5rem;
+        font-family: monospace;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -665,7 +714,7 @@ class HypothesisAssistant:
             with col1:
                 # Selección de ejemplo o entrada manual
                 example_option = st.selectbox(
-                    "📋 Cargar ejemplo:",
+                    "📋 Cargar ejemplo de hipótesis:",
                     ["Personalizado"] + [e["name"] for e in self.examples],
                     key="example_selector"
                 )
@@ -773,15 +822,13 @@ class HypothesisAssistant:
                 example = next((e for e in self.examples if e["name"] == example_option), None)
                 if example:
                     st.markdown("---")
-                    st.markdown("### 📋 Ejemplo cargado:")
+                    st.markdown("### 📋 Ejemplo de hipótesis cargado:")
                     st.info(f"**Hipótesis:** {example['hypothesis']}")
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("📌 Usar este ejemplo", key="use_example"):
+                        if st.button("📌 Usar esta hipótesis", key="use_example"):
                             st.session_state['hypothesis'] = example['hypothesis']
-                            st.session_state['query'] = f'("{example["sujeto"]}" AND "{example["efecto"]}")'
-                            # También guardar traducción aproximada
                             translator = TranslationManager()
                             st.session_state['hypothesis_en'] = translator.translate_to_english(example['hypothesis'])
                             st.rerun()
@@ -1367,34 +1414,17 @@ class AdvancedSemanticVerifier:
 
 
 # ============================================================================
-# MOTOR DE BÚSQUEDA CIENTÍFICA (VERSIÓN CORREGIDA)
+# MOTOR DE BÚSQUEDA CIENTÍFICA
 # ============================================================================
 
 class ScientificSearchEngine:
     """
     Motor de búsqueda científica mejorado para grandes volúmenes de resultados
-    VERSIÓN CORREGIDA: Manejo inteligente de queries para diferentes bases de datos
     """
     
     def __init__(self, email: str):
         self.email = email
         self.delay = 0.3
-        
-        # Diccionario de términos médicos comunes para extracción inteligente
-        self.medical_terms = {
-            'drugs': ['ticagrelor', 'aspirin', 'clopidogrel', 'prasugrel', 'warfarin', 
-                     'heparin', 'statin', 'atorvastatin', 'metformin', 'insulin',
-                     'rivaroxaban', 'apixaban', 'dabigatran', 'enoxaparin'],
-            'conditions': ['myocardial', 'ischemia', 'infarction', 'angina', 'stroke',
-                          'diabetes', 'hypertension', 'dyspnea', 'arrhythmia', 'heart',
-                          'cardiac', 'coronary', 'artery', 'vascular', 'thrombosis',
-                          'embolism', 'fibrillation', 'failure', 'cardiomyopathy'],
-            'study_types': ['cohort', 'randomized', 'prospective', 'retrospective',
-                           'trial', 'study', 'analysis', 'review', 'meta-analysis',
-                           'systematic', 'controlled', 'observational', 'clinical'],
-            'populations': ['adult', 'pediatric', 'elderly', 'patient', 'population',
-                           'children', 'infant', 'neonatal', 'geriatric', 'human']
-        }
         
     def format_pubmed_query(self, query: str, year_range: tuple = None) -> str:
         """Formatea consultas complejas de PubMed incluyendo rango de años"""
@@ -1422,133 +1452,6 @@ class ScientificSearchEngine:
             query = f"({query}){year_filter}"
         
         return query
-    
-    def _extract_medical_terms(self, query: str) -> List[str]:
-        """
-        Extrae términos médicos específicos usando el diccionario
-        Funciona para cualquier query, simple o compleja
-        """
-        found_terms = []
-        query_lower = query.lower()
-        
-        # Buscar en todas las categorías
-        for category, terms in self.medical_terms.items():
-            for term in terms:
-                if term in query_lower:
-                    found_terms.append(term)
-        
-        return list(set(found_terms))  # Eliminar duplicados
-    
-    def _extract_core_terms(self, query: str, max_terms: int = 8) -> str:
-        """
-        Extrae términos núcleo de la query para búsqueda semántica
-        Funciona tanto para queries simples como complejas
-        """
-        # Si la query es corta, devolverla directamente (solo limpiar)
-        if len(query) < 100:
-            # Solo limpiar caracteres especiales básicos
-            clean = re.sub(r'[\[\]\(\)\{\}]', ' ', query)
-            clean = re.sub(r'\s+', ' ', clean).strip()
-            return clean
-        
-        important_terms = []
-        
-        # PASO 1: Buscar términos médicos específicos del diccionario
-        medical_terms_found = self._extract_medical_terms(query)
-        important_terms.extend(medical_terms_found)
-        
-        # PASO 2: Buscar términos entre comillas (frases exactas)
-        quoted_terms = re.findall(r'"([^"]+)"', query)
-        # Limpiar y añadir frases cortas (máximo 3 palabras)
-        for qt in quoted_terms:
-            words = qt.split()
-            if len(words) <= 3:  # Frases cortas son mejores
-                important_terms.append(qt.lower())
-            else:
-                # Si es muy larga, tomar las primeras palabras clave
-                important_terms.extend([w for w in words if len(w) > 3][:2])
-        
-        # PASO 3: Buscar términos con etiquetas MeSH
-        mesh_terms = re.findall(r'"([^"]+)"\s*\[[^\]]*Mesh[^\]]*\]', query, re.IGNORECASE)
-        important_terms.extend([t.lower() for t in mesh_terms])
-        
-        # PASO 4: Buscar términos específicos después de AND/OR
-        # pero excluyendo los operadores mismos
-        parts = re.split(r'\s+(?:AND|OR|NOT)\s+', query)
-        for part in parts:
-            # Limpiar el fragmento
-            clean_part = re.sub(r'[\[\]\(\)\{\}]', ' ', part)
-            # Extraer palabras significativas (largas)
-            words = re.findall(r'\b[a-z]{4,}\b', clean_part.lower())
-            important_terms.extend(words[:2])  # Solo las 2 primeras de cada fragmento
-        
-        # PASO 5: Eliminar duplicados y limitar número de términos
-        important_terms = list(set(important_terms))[:max_terms]
-        
-        # PASO 6: Si no se encontraron términos, usar fallback
-        if not important_terms:
-            # Extraer palabras de al menos 4 letras
-            words = re.findall(r'\b[a-zA-Z]{4,}\b', query)
-            # Filtrar palabras vacías comunes
-            stop_words = {'and', 'or', 'not', 'the', 'for', 'with', 'study', 'trial', 
-                         'patients', 'analysis', 'methods', 'results', 'conclusion'}
-            important_terms = [w.lower() for w in words if w.lower() not in stop_words][:max_terms]
-        
-        # Construir resultado
-        result = ' '.join(important_terms)
-        
-        # Asegurar que no esté vacío
-        if not result.strip():
-            # Fallback final: tomar primeras palabras
-            words = query.split()[:5]
-            result = ' '.join([w for w in words if len(w) > 2])
-        
-        return result
-    
-    def _prepare_for_europepmc(self, query: str) -> str:
-        """
-        Prepara la query específicamente para Europe PMC
-        Europe PMC soporta mejor sintaxis pero no MeSH
-        """
-        # Eliminar etiquetas MeSH pero mantener estructura lógica
-        clean = re.sub(r'\[[^\]]*\]', '', query)
-        
-        # Si la query limpia es razonablemente corta, usarla
-        if len(clean) < 300:
-            # Asegurar que no tenga paréntesis desbalanceados
-            if clean.count('(') == clean.count(')'):
-                return clean
-            else:
-                # Si están desbalanceados, simplificar
-                return self._extract_core_terms(query, max_terms=6)
-        
-        # Para queries muy largas, extraer términos clave
-        return self._extract_core_terms(query, max_terms=6)
-    
-    def _extract_keywords_only(self, query: str) -> str:
-        """
-        Extrae solo palabras clave, sin operadores booleanos
-        Para bases de datos muy simples
-        """
-        # Extraer palabras de al menos 4 letras
-        words = re.findall(r'\b[a-zA-Z]{4,}\b', query)
-        
-        # Filtrar palabras vacías comunes
-        stop_words = {'and', 'or', 'not', 'the', 'for', 'with', 'study', 'trial', 
-                     'patients', 'analysis', 'methods', 'results', 'conclusion',
-                     'background', 'objective', 'design', 'setting', 'participants'}
-        
-        keywords = [w.lower() for w in words if w.lower() not in stop_words]
-        
-        # Eliminar duplicados y limitar
-        keywords = list(set(keywords))[:5]
-        
-        if not keywords:
-            # Fallback: tomar primeras palabras
-            words = query.split()[:3]
-            keywords = [w for w in words if len(w) > 2]
-        
-        return ' '.join(keywords)
     
     def fetch_pubmed_batch(self, ids_batch: list) -> list:
         """Obtiene detalles de un lote de IDs de PubMed"""
@@ -1667,12 +1570,12 @@ class ScientificSearchEngine:
         """Busca en CrossRef con soporte para hasta 1000 resultados"""
         results = []
         try:
-            # Usar términos extraídos para mejor rendimiento
-            search_query = self._extract_core_terms(query, max_terms=6)
+            # Extraer términos principales para CrossRef
+            core_terms = self._extract_core_terms(query, max_terms=6)
             
             url = "https://api.crossref.org/works"
             params = {
-                'query': search_query,
+                'query': core_terms,
                 'rows': min(100, max_results),
                 'sort': 'relevance',
                 'order': 'desc'
@@ -1721,11 +1624,11 @@ class ScientificSearchEngine:
         results = []
         try:
             # OpenAlex funciona mejor con términos clave simples
-            search_query = self._extract_keywords_only(query)
+            keywords = self._extract_keywords_only(query)
             
             url = "https://api.openalex.org/works"
             params = {
-                'search': search_query,
+                'search': keywords,
                 'per-page': 50,
                 'sort': 'relevance_score:desc'
             }
@@ -1761,16 +1664,16 @@ class ScientificSearchEngine:
         """Busca en Europe PMC con soporte para hasta 1000 resultados"""
         results = []
         try:
-            # Europe PMC tiene mejor soporte para queries estructuradas
-            search_query = self._prepare_for_europepmc(query)
+            # Preparar query para Europe PMC
+            pmc_query = self._prepare_for_europepmc(query)
             
             if year_range and year_range[0] and year_range[1]:
                 date_filter = f" AND (PUB_YEAR:{year_range[0]}-{year_range[1]})"
-                search_query = f"({search_query}){date_filter}"
+                pmc_query = f"({pmc_query}){date_filter}"
             
             url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
             params = {
-                'query': search_query[:500],
+                'query': pmc_query[:500],
                 'format': 'json',
                 'pageSize': min(100, max_results),
                 'resultType': 'core'
@@ -1801,171 +1704,85 @@ class ScientificSearchEngine:
         
         return results[:max_results]
     
-    def search_semantic_scholar(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en Semantic Scholar (requiere API key)"""
-        results = []
-        try:
-            # Simplificar query para Semantic Scholar
-            search_query = self._extract_core_terms(query, max_terms=5)
-            
-            url = "https://api.semanticscholar.org/graph/v1/paper/search"
-            params = {
-                'query': search_query,
-                'limit': min(100, max_results),
-                'fields': 'title,authors,year,venue,doi,url,abstract'
-            }
-            
-            if year_range and year_range[0] and year_range[1]:
-                params['year'] = f"{year_range[0]}-{year_range[1]}"
-            
-            headers = {}
-            # Si tienes API key, descomenta la siguiente línea
-            # headers['x-api-key'] = 'TU_API_KEY'
-            
-            time.sleep(self.delay)
-            response = requests.get(url, params=params, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                for item in data.get('data', []):
-                    results.append({
-                        'base_datos': 'Semantic Scholar',
-                        'titulo': item.get('title', 'Título no disponible'),
-                        'autores': ', '.join([a.get('name', '') for a in item.get('authors', [])[:5]]),
-                        'revista': item.get('venue', ''),
-                        'año': str(item.get('year', '')),
-                        'doi': item.get('doi', ''),
-                        'url': item.get('url', ''),
-                        'abstract': item.get('abstract', '')[:300] + '...' if item.get('abstract') else '',
-                        'tipo': 'Artículo'
-                    })
-            else:
-                st.warning(f"Semantic Scholar requiere API key o ha excedido límites")
-                
-        except Exception as e:
-            st.warning(f"Error en Semantic Scholar: {str(e)}")
+    def _extract_core_terms(self, query: str, max_terms: int = 6) -> str:
+        """Extrae términos núcleo de la query para búsqueda semántica"""
+        # Si la query es corta, devolverla directamente
+        if len(query) < 100:
+            clean = re.sub(r'[\[\]\(\)\{\}]', ' ', query)
+            return ' '.join(clean.split())
         
-        return results[:max_results]
+        # Extraer términos médicos clave
+        medical_terms = []
+        
+        # Buscar términos entre comillas
+        quoted = re.findall(r'"([^"]+)"', query)
+        for q in quoted:
+            words = q.split()
+            if len(words) <= 3:
+                medical_terms.append(q)
+            else:
+                medical_terms.extend(words[:2])
+        
+        # Buscar términos específicos de la query original
+        specific = re.findall(r'\b(ticagrelor|aspirin|clopidogrel|myocardial|ischemia|infarction|angina|coronary|heart|dyspnea|cohort|trial|study|adult|patient)\b', 
+                            query, re.IGNORECASE)
+        medical_terms.extend(specific)
+        
+        # Eliminar duplicados y limitar
+        medical_terms = list(set(medical_terms))[:max_terms]
+        
+        if medical_terms:
+            return ' '.join(medical_terms)
+        
+        # Fallback: palabras significativas
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', query)[:max_terms]
+        return ' '.join(words)
     
-    def search_doaj(self, query: str, max_results: int = 1000, year_range: tuple = None) -> list:
-        """Busca en DOAJ (Directory of Open Access Journals)"""
-        results = []
-        try:
-            # DOAJ necesita query simple
-            search_query = self._extract_keywords_only(query)
-            
-            url = "https://doaj.org/api/v2/search/articles/" + urllib.parse.quote(search_query)
-            params = {
-                'pageSize': min(100, max_results),
-                'sort': 'title'
-            }
-            
-            time.sleep(self.delay)
-            response = requests.get(url, params=params, timeout=30)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                for item in data.get('results', []):
-                    bibjson = item.get('bibjson', {})
-                    year = ''
-                    if bibjson.get('year'):
-                        year = str(bibjson.get('year'))
-                    
-                    results.append({
-                        'base_datos': 'DOAJ',
-                        'titulo': bibjson.get('title', 'Título no disponible'),
-                        'autores': ', '.join([a.get('name', '') for a in bibjson.get('author', [])[:5]]),
-                        'revista': bibjson.get('journal', {}).get('title', ''),
-                        'año': year,
-                        'doi': bibjson.get('doi', ''),
-                        'url': item.get('url', ''),
-                        'tipo': 'Artículo'
-                    })
-            else:
-                st.warning(f"DOAJ API returned {response.status_code}")
-                
-        except Exception as e:
-            st.warning(f"Error en DOAJ: {str(e)}")
+    def _extract_keywords_only(self, query: str) -> str:
+        """Extrae solo palabras clave, sin operadores booleanos"""
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', query)
+        stop_words = {'and', 'or', 'not', 'the', 'for', 'with', 'study', 'trial', 
+                     'patients', 'analysis', 'methods'}
+        keywords = [w for w in words if w.lower() not in stop_words]
+        return ' '.join(list(set(keywords))[:5])
+    
+    def _prepare_for_europepmc(self, query: str) -> str:
+        """Prepara query para Europe PMC"""
+        # Eliminar etiquetas MeSH
+        clean = re.sub(r'\[[^\]]*\]', '', query)
         
-        return results[:max_results]
+        # Si es muy larga, simplificar
+        if len(clean) > 200:
+            return self._extract_core_terms(query, max_terms=5)
+        
+        return clean
     
     def search_all(self, query: str, max_results_per_db: int = 1000, selected_dbs: list = None, 
                    year_range: tuple = None) -> pd.DataFrame:
-        """
-        Busca en todas las bases de datos seleccionadas con alto volumen
-        VERSIÓN CORREGIDA: Cada base recibe la query optimizada para su API
-        """
+        """Busca en todas las bases de datos seleccionadas con alto volumen"""
         
         if selected_dbs is None:
             selected_dbs = ['PubMed', 'CrossRef', 'OpenAlex', 'Europe PMC']
         
         all_results = []
         
-        # ====================================================================
-        # CREAR DIFERENTES VERSIONES DE LA QUERY PARA CADA BASE DE DATOS
-        # ====================================================================
-        
-        # 1. PubMed: Usa la query original (con toda la sintaxis MeSH)
-        pubmed_query = query
-        
-        # 2. CrossRef y Semantic Scholar: Búsqueda semántica con términos clave
-        semantic_query = self._extract_core_terms(query, max_terms=8)
-        
-        # 3. Europe PMC: Versión semi-estructurada
-        europepmc_query = self._prepare_for_europepmc(query)
-        
-        # 4. OpenAlex: Términos clave simples
-        openalex_query = self._extract_keywords_only(query)
-        
-        # 5. DOAJ: Máxima simplificación
-        doaj_query = self._extract_keywords_only(query)
-        
-        # Opcional: Mostrar queries generadas (para debugging)
-        if st.session_state.get('debug_mode', False):
-            with st.expander("🔍 Queries generadas para cada base"):
-                st.json({
-                    "PubMed (original)": pubmed_query[:200] + "..." if len(pubmed_query) > 200 else pubmed_query,
-                    "Semantic (CrossRef)": semantic_query,
-                    "Europe PMC": europepmc_query,
-                    "OpenAlex/DOAJ": openalex_query,
-                    "Términos médicos encontrados": self._extract_medical_terms(query)
-                })
-        
-        # ====================================================================
-        # DICCIONARIO DE FUNCIONES DE BÚSQUEDA CON SUS QUERIES OPTIMIZADAS
-        # ====================================================================
-        
         search_functions = {
-            'PubMed': lambda: self.search_pubmed_advanced(pubmed_query, max_results_per_db, year_range),
-            'CrossRef': lambda: self.search_crossref(semantic_query, max_results_per_db, year_range),
-            'OpenAlex': lambda: self.search_openalex(openalex_query, max_results_per_db, year_range),
-            'Europe PMC': lambda: self.search_europe_pmc(europepmc_query, max_results_per_db, year_range),
-            'Semantic Scholar': lambda: self.search_semantic_scholar(semantic_query, max_results_per_db, year_range),
-            'DOAJ': lambda: self.search_doaj(doaj_query, max_results_per_db, year_range)
+            'PubMed': self.search_pubmed_advanced,
+            'CrossRef': self.search_crossref,
+            'OpenAlex': self.search_openalex,
+            'Europe PMC': self.search_europe_pmc
         }
-        
-        # ====================================================================
-        # EJECUTAR BÚSQUEDAS EN PARALELO (UNA POR UNA PARA CONTROL)
-        # ====================================================================
         
         for db in selected_dbs:
             if db in search_functions:
                 try:
                     with st.spinner(f"🔍 Buscando en {db}..."):
-                        results = search_functions[db]()
+                        results = search_functions[db](query, max_results_per_db, year_range)
                         all_results.extend(results)
                         if results:
                             st.success(f"✅ {db}: {len(results)} resultados")
-                        else:
-                            st.info(f"ℹ️ {db}: 0 resultados")
                 except Exception as e:
-                    st.warning(f"⚠️ Error en {db}: {str(e)}")
-        
-        # ====================================================================
-        # PROCESAR RESULTADOS
-        # ====================================================================
+                    st.warning(f"Error en {db}: {str(e)}")
         
         if all_results:
             df = pd.DataFrame(all_results)
@@ -2114,8 +1931,7 @@ class IntegratedScientificVerifier:
             'with_text': 0,
             'corroboran': 0,
             'contradicen': 0,
-            'inconclusos': 0,
-            'strong_correlation': 0
+            'inconclusos': 0
         }
     
     def run_analysis(self, query: str, hypothesis: str, max_results_per_db: int = 1000, 
@@ -2203,8 +2019,6 @@ class IntegratedScientificVerifier:
                     self.stats['analyzed'] += 1
                     if 'CORROBORA' in verdict['verdict_text']:
                         self.stats['corroboran'] += 1
-                        if verdict['confidence'] > 0.7 or verdict['score'] > 0.6:
-                            self.stats['strong_correlation'] += 1
                     elif 'CONTRADICE' in verdict['verdict_text']:
                         self.stats['contradicen'] += 1
                     else:
@@ -2230,27 +2044,6 @@ class IntegratedScientificVerifier:
         self.results = pd.DataFrame(results_list)
         return self.results
     
-    def get_strong_correlation_articles(self) -> pd.DataFrame:
-        """
-        Retorna los artículos que tienen una correlación fuerte con la hipótesis
-        """
-        if self.results.empty:
-            return pd.DataFrame()
-        
-        # Filtrar artículos con veredicto de corroboración fuerte
-        # o con alta confianza (>0.7) o puntuación alta (>0.6)
-        strong_df = self.results[
-            (self.results['veredicto'].str.contains('FUERTEMENTE', na=False)) |
-            (self.results['confianza'] > 0.7) |
-            (self.results['puntuacion'] > 0.6)
-        ].copy()
-        
-        # Ordenar por confianza descendente
-        if not strong_df.empty:
-            strong_df = strong_df.sort_values('confianza', ascending=False)
-        
-        return strong_df
-    
     def generate_report(self) -> str:
         """Genera un reporte textual de los resultados"""
         if self.results.empty:
@@ -2267,32 +2060,10 @@ class IntegratedScientificVerifier:
         report.append("")
         report.append("RESULTADOS GLOBALES:")
         report.append(f"✅ Corroboran: {self.stats['corroboran']}")
-        report.append(f"   ├─ Correlación fuerte: {self.stats['strong_correlation']}")
         report.append(f"❌ Contradicen: {self.stats['contradicen']}")
         report.append(f"⚠️ Inconclusos: {self.stats['inconclusos']}")
         report.append("")
-        
-        # Artículos con correlación fuerte
-        strong_df = self.get_strong_correlation_articles()
-        if not strong_df.empty:
-            report.append("="*80)
-            report.append("📈 ARTÍCULOS CON CORRELACIÓN FUERTE CON LA HIPÓTESIS")
-            report.append("="*80)
-            
-            for idx, row in strong_df.iterrows():
-                report.append(f"\n📄 {row['titulo']}")
-                report.append(f"   Autores: {row['autores']}")
-                report.append(f"   Revista: {row['revista']} | Año: {row['año']}")
-                report.append(f"   Base: {row['base_datos']} | DOI: {row['doi']}")
-                report.append(f"   Veredicto: {row['veredicto']} (Confianza: {row['confianza']:.1%})")
-                report.append(f"   Evidencia: {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra")
-                if row['detalle_evidencia']:
-                    report.append(f"   Evidencia: {row['detalle_evidencia']}")
-                report.append(f"   URL: {row['url']}")
-        
-        report.append("")
-        report.append("="*80)
-        report.append("DETALLE COMPLETO POR ARTÍCULO:")
+        report.append("DETALLE POR ARTÍCULO:")
         report.append("-"*80)
         
         for idx, row in self.results.iterrows():
@@ -2315,8 +2086,6 @@ class IntegratedScientificVerifier:
         if self.results.empty:
             return "<p>No hay resultados para generar reporte.</p>"
         
-        strong_df = self.get_strong_correlation_articles()
-        
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -2327,11 +2096,6 @@ class IntegratedScientificVerifier:
                 h1 {{ color: #1E88E5; }}
                 h2 {{ color: #333; border-bottom: 2px solid #1E88E5; padding-bottom: 5px; }}
                 .stats {{ background-color: #f5f5f5; padding: 15px; border-radius: 5px; }}
-                .strong-correlation {{ background-color: #e8f0fe; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-                .reference {{ background-color: #e8f0fe; border-left: 5px solid #1E88E5; padding: 10px; margin: 10px 0; border-radius: 5px; }}
-                .reference-title {{ font-weight: bold; color: #0d47a1; }}
-                .reference-authors {{ color: #424242; font-style: italic; }}
-                .reference-journal {{ color: #1E88E5; }}
                 .verdict-assert {{ color: #4CAF50; font-weight: bold; }}
                 .verdict-reject {{ color: #f44336; font-weight: bold; }}
                 .verdict-inconclusive {{ color: #ff9800; font-weight: bold; }}
@@ -2351,35 +2115,10 @@ class IntegratedScientificVerifier:
                 <p><strong>Artículos con texto disponible:</strong> {self.stats['with_text']}</p>
                 <p><strong>Artículos analizados:</strong> {self.stats['analyzed']}</p>
                 <p><strong>✅ Corroboran:</strong> {self.stats['corroboran']}</p>
-                <p><strong>   └─ Correlación fuerte:</strong> {self.stats['strong_correlation']}</p>
                 <p><strong>❌ Contradicen:</strong> {self.stats['contradicen']}</p>
                 <p><strong>⚠️ Inconclusos:</strong> {self.stats['inconclusos']}</p>
             </div>
-        """
-        
-        if not strong_df.empty:
-            html += f"""
-            <h2>📈 Artículos con Correlación Fuerte</h2>
-            <div class="strong-correlation">
-                <p><strong>Se encontraron {len(strong_df)} artículos con correlación fuerte a la hipótesis:</strong></p>
-            """
             
-            for idx, row in strong_df.iterrows():
-                html += f"""
-                <div class="reference">
-                    <p class="reference-title">📄 {row['titulo']}</p>
-                    <p class="reference-authors">👥 {row['autores']}</p>
-                    <p class="reference-journal">📚 {row['revista']} ({row['año']}) | {row['base_datos']}</p>
-                    <p>🔗 DOI: <a href="https://doi.org/{row['doi']}" target="_blank">{row['doi']}</a></p>
-                    <p>⚖️ Veredicto: <span class="verdict-assert">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})</p>
-                    <p>📊 Evidencia: {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra</p>
-                    <p>🔬 URL: <a href="{row['url']}" target="_blank">Ver artículo</a></p>
-                </div>
-                """
-            
-            html += "</div>"
-        
-        html += f"""
             <h2>📋 Detalle de Artículos</h2>
             <table>
                 <tr>
@@ -2486,19 +2225,12 @@ def enviar_resultados_email(destinatario, integrator):
         integrator.results.to_excel(writer, sheet_name='Resultados', index=False)
         summary = pd.DataFrame([integrator.stats])
         summary.to_excel(writer, sheet_name='Resumen', index=False)
-        
-        # Añadir hoja de correlación fuerte
-        strong_df = integrator.get_strong_correlation_articles()
-        if not strong_df.empty:
-            strong_df.to_excel(writer, sheet_name='Correlacion_Fuerte', index=False)
-    
     archivos.append({
         'nombre': f"resultados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         'contenido': excel_buffer.getvalue()
     })
     
     # Asunto y mensaje
-    strong_count = integrator.stats.get('strong_correlation', 0)
     asunto = f"🔬 Reporte de Verificación Semántica - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     
     mensaje_html = f"""
@@ -2513,7 +2245,6 @@ def enviar_resultados_email(destinatario, integrator):
             <li><strong>Total artículos:</strong> {integrator.stats['total_articles']}</li>
             <li><strong>Artículos analizados:</strong> {integrator.stats['analyzed']}</li>
             <li><strong>✅ Corroboran:</strong> {integrator.stats['corroboran']}</li>
-            <li><strong>   └─ Correlación fuerte:</strong> {strong_count}</li>
             <li><strong>❌ Contradicen:</strong> {integrator.stats['contradicen']}</li>
             <li><strong>⚠️ Inconclusos:</strong> {integrator.stats['inconclusos']}</li>
         </ul>
@@ -2535,7 +2266,6 @@ def enviar_resultados_email(destinatario, integrator):
     - Total artículos: {integrator.stats['total_articles']}
     - Artículos analizados: {integrator.stats['analyzed']}
     - ✅ Corroboran: {integrator.stats['corroboran']}
-    -    └─ Correlación fuerte: {strong_count}
     - ❌ Contradicen: {integrator.stats['contradicen']}
     - ⚠️ Inconclusos: {integrator.stats['inconclusos']}
     
@@ -2571,11 +2301,9 @@ def main():
     if 'hypothesis_en' not in st.session_state:
         st.session_state['hypothesis_en'] = ""
     if 'user_email' not in st.session_state:
-        st.session_state['user_email'] = ""
+        st.session_state['user_email'] = EMAIL_CONFIG.NOTIFICATION_EMAIL if EMAIL_CONFIG.NOTIFICATION_EMAIL else ""
     if 'integrator' not in st.session_state:
         st.session_state['integrator'] = None
-    if 'debug_mode' not in st.session_state:
-        st.session_state['debug_mode'] = False
     
     # Inicializar asistente de hipótesis
     hypothesis_assistant = HypothesisAssistant()
@@ -2588,8 +2316,26 @@ def main():
         st.image("https://img.icons8.com/fluency/96/000000/artificial-intelligence.png", width=80)
         st.markdown("## ⚙️ Configuración")
         
+        # Mostrar estado de archivo remoto
+        if EMAIL_CONFIG.remote_available:
+            st.markdown('<div class="remote-file-box">', unsafe_allow_html=True)
+            st.markdown("### 📁 Archivo Remoto")
+            st.markdown(f"**Host:** {EMAIL_CONFIG.REMOTE_HOST}")
+            st.markdown(f"**Archivo:** {EMAIL_CONFIG.ALGEBRA_FILE}")
+            
+            if st.button("📂 Cargar búsqueda desde archivo remoto", type="secondary", use_container_width=True):
+                with st.spinner("Conectando al servidor remoto..."):
+                    algebra_query = load_algebra_from_remote()
+                    if algebra_query:
+                        st.session_state['query'] = algebra_query
+                        st.success("✅ Búsqueda cargada exitosamente")
+                        st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
         email = st.text_input(
-            "📧 Email (requerido para NCBI y para recibir resultados)", 
+            "📧 Email para notificaciones", 
             value=st.session_state.get('user_email', ''),
             placeholder="tu@email.com",
             help="Este email se usará para NCBI y para enviarte los resultados"
@@ -2650,10 +2396,6 @@ def main():
             help="Mínimo de coincidencia con términos de la hipótesis"
         )
         
-        st.markdown("### 🐛 Opciones de depuración")
-        debug_mode = st.checkbox("Mostrar queries generadas", value=False)
-        st.session_state['debug_mode'] = debug_mode
-        
         st.markdown("### ⚠️ Advertencia")
         st.warning("""
         **Tiempo de procesamiento:**
@@ -2661,35 +2403,25 @@ def main():
         - 100 artículos: ~5-7 minutos
         - 200 artículos: ~10-15 minutos
         """)
-        
-        st.markdown("### 📋 Ejemplos")
-        if st.button("Cargar ejemplo: Ticagrelor y disnea"):
-            st.session_state['query'] = '((("Ticagrelor"[Mesh]) OR (ticagrelor)) AND ((((((((("Myocardial Ischemia"[Mesh]) OR ("Acute Coronary Syndrome"[Mesh])) OR ("Angina Pectoris"[Mesh])) OR ("Coronary Disease"[Mesh])) OR ("Coronary Artery Disease"[Mesh])) OR ("Kounis Syndrome"[Mesh])) OR ("Myocardial Infarction"[Mesh])) OR ("Myocardial Reperfusion Injury"[Mesh])) OR (((((((((MYOCARDIAL ISCHEMIA) OR (ACUTE CORONARY SYNDROME)) OR (ANGINA PECTORIS)) OR (CORONARY DISEASE)) OR (CORONARY ARTERY DISEASE)) OR (kounis syndrome)) OR (myocardial infarction)) OR (myocardial reperfusion injury)) OR (ischemic heart disease)))) AND ((((((cohort studies) OR (prospective studies)) OR ("prospective clinical trial")) OR ("clinical records")) OR (randomized clinical trial)) OR ((("Clinical Study" [Publication Type] OR "Observational Study" [Publication Type]) OR "Retrospective Studies"[Mesh]) OR "Randomized Controlled Trial" [Publication Type]))) AND (adults or adult)'
-            st.session_state['hypothesis'] = "El ticagrelor causa disnea como efecto secundario en pacientes con cardiopatía isquémica"
-            translator = TranslationManager()
-            st.session_state['hypothesis_en'] = translator.translate_to_english(st.session_state['hypothesis'])
-            st.rerun()
-        
-        if st.button("Cargar ejemplo: COVID-19"):
-            st.session_state['query'] = '("COVID-19"[Mesh] AND "Myocardial Injury"[Mesh])'
-            st.session_state['hypothesis'] = "La infección por COVID-19 causa daño miocárdico"
-            translator = TranslationManager()
-            st.session_state['hypothesis_en'] = translator.translate_to_english(st.session_state['hypothesis'])
-            st.rerun()
     
     # Área principal
     col1, col2 = st.columns([2, 1])
     
     with col1:
         search_query = st.text_area(
-            "🔍 Consulta de búsqueda:",
+            "🔍 Consulta de búsqueda (álgebra booleana):",
             value=st.session_state.get('query', ''),
             height=120,
             placeholder='Ej: (("Ticagrelor"[Mesh]) AND ("Myocardial Ischemia"[Mesh]) AND ("dyspnea"))',
-            help="Puedes usar términos MeSH o palabras clave",
+            help="Puedes usar términos MeSH, operadores booleanos y paréntesis",
             key="search_query_input"
         )
         st.session_state['query'] = search_query
+        
+        # Mostrar origen de la búsqueda si se cargó desde archivo
+        if search_query and 'Cargada desde archivo' not in st.session_state:
+            if search_query == st.session_state.get('query', ''):
+                st.info("📂 Búsqueda cargada desde archivo remoto")
     
     with col2:
         hypothesis_es = st.text_area(
@@ -2748,7 +2480,6 @@ def main():
             
             def update_progress(message, value):
                 status_text.text(message)
-                # Asegurar que value esté entre 0 y 1
                 value = max(0.0, min(1.0, value))
                 progress_bar.progress(value)
                 elapsed = time.time() - start_time
@@ -2779,7 +2510,7 @@ def main():
                 # ESTADÍSTICAS GLOBALES
                 st.markdown("## 📊 RESULTADOS GLOBALES")
                 
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     st.metric("Artículos encontrados", integrator.stats['total_articles'])
                 with col2:
@@ -2787,10 +2518,8 @@ def main():
                 with col3:
                     st.metric("✅ Corroboran", integrator.stats['corroboran'])
                 with col4:
-                    st.metric("🔴 Correl. fuerte", integrator.stats['strong_correlation'])
-                with col5:
                     st.metric("❌ Contradicen", integrator.stats['contradicen'])
-                with col6:
+                with col5:
                     st.metric("⚠️ Inconclusos", integrator.stats['inconclusos'])
                 
                 # GRÁFICOS
@@ -2828,41 +2557,6 @@ def main():
                             color_discrete_sequence=['#4CAF50', '#f44336', '#ff9800']
                         )
                         st.plotly_chart(fig, use_container_width=True)
-                
-                # SECCIÓN: ARTÍCULOS CON CORRELACIÓN FUERTE
-                st.markdown("## 📈 ARTÍCULOS CON CORRELACIÓN FUERTE CON LA HIPÓTESIS")
-                st.markdown("Estos artículos presentan la evidencia más sólida a favor de tu hipótesis:")
-                
-                strong_df = integrator.get_strong_correlation_articles()
-                
-                if not strong_df.empty:
-                    for idx, row in strong_df.iterrows():
-                        badge_class = get_badge_class(row['base_datos'])
-                        
-                        st.markdown(f"""
-                        <div class="reference-card">
-                            <span class="{badge_class}">{row['base_datos']}</span>
-                            <span class="correlation-badge">Correlación fuerte</span>
-                            <div class="reference-title">{row['titulo']}</div>
-                            <div class="reference-authors">{row['autores']}</div>
-                            <div class="reference-journal">{row['revista']} ({row['año']})</div>
-                            <div><b>DOI:</b> {row.get('doi', 'No disponible')}</div>
-                            <div><b>Veredicto:</b> <span class="verdict-assert">{row['veredicto']}</span> (Confianza: {row['confianza']:.1%})</div>
-                            <div><b>Evidencia:</b> {row['evidencia_a_favor']} a favor, {row['evidencia_en_contra']} en contra</div>
-                        """, unsafe_allow_html=True)
-                        
-                        col1, col2, col3 = st.columns([1, 1, 4])
-                        with col1:
-                            if row.get('url') and pd.notna(row['url']):
-                                st.link_button("🔗 Ver artículo", row['url'])
-                        with col2:
-                            if row.get('doi') and pd.notna(row['doi']):
-                                doi_link = f"https://doi.org/{row['doi']}"
-                                st.link_button("📋 DOI", doi_link)
-                        
-                        st.markdown("</div>", unsafe_allow_html=True)
-                else:
-                    st.info("No se encontraron artículos con correlación fuerte. Revisa los artículos que corroboran para más detalles.")
                 
                 # TABLA DE RESULTADOS
                 st.markdown("## 📋 ARTÍCULOS ANALIZADOS")
@@ -2981,11 +2675,6 @@ def main():
                             verdict_stats = results_df[results_df['veredicto'] != 'TEXTO NO DISPONIBLE']['veredicto'].value_counts().reset_index()
                             verdict_stats.columns = ['Veredicto', 'Cantidad']
                             verdict_stats.to_excel(writer, sheet_name='Por Veredicto', index=False)
-                        
-                        # Añadir hoja de correlación fuerte
-                        strong_df = integrator.get_strong_correlation_articles()
-                        if not strong_df.empty:
-                            strong_df.to_excel(writer, sheet_name='Correlacion_Fuerte', index=False)
                     
                     st.download_button(
                         "📥 Excel",
@@ -3004,11 +2693,9 @@ def main():
         st.markdown("## 📧 ENVIAR RESULTADOS POR CORREO")
         st.markdown('<div class="email-box">', unsafe_allow_html=True)
         
-        strong_count = st.session_state.integrator.stats.get('strong_correlation', 0)
-        
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button(f"📨 ENVIAR RESULTADOS A MI CORREO ({strong_count} correlaciones fuertes)", type="primary", use_container_width=True):
+            if st.button("📨 ENVIAR RESULTADOS A MI CORREO", type="primary", use_container_width=True):
                 with st.spinner("Enviando resultados por correo..."):
                     if enviar_resultados_email(st.session_state['user_email'], st.session_state['integrator']):
                         st.success(f"✅ Resultados enviados correctamente a {st.session_state['user_email']}")
@@ -3021,7 +2708,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p>🔬 Buscador y Verificador Semántico Integrado v3.2 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado | PubMed conserva sintaxis MeSH</p>
+        <p>🔬 Buscador y Verificador Semántico Integrado v3.1 | ALTO VOLUMEN: Hasta 1000 artículos por base | Análisis AI avanzado | Carga de búsqueda desde archivo remoto</p>
     </div>
     """, unsafe_allow_html=True)
 
