@@ -1509,7 +1509,7 @@ def main():
             if IN_STREAMLIT_CLOUD:
                 st.info("ℹ️ spaCy: no disponible en cloud (usando BioBERT)")
             else:
-                st.info("ℹ️ spaCy: pip install spacy")
+                st.success("✅ spaCy disponible")
     with col_c:
         if IN_STREAMLIT_CLOUD:
             st.success("✅ Modo Cloud activo")
