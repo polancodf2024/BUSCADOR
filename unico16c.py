@@ -530,8 +530,8 @@ def extract_article_info(doc_sum):
     
     return article
 
-def search_pubmed(query, retmax=1000):
-    """Search articles in PubMed - NOW SUPPORTS UP TO 1000"""
+def search_pubmed(query, retmax=100000):
+    """Search articles in PubMed - NOW SUPPORTS UP TO 100,000"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
     search_url = f"{base_url}esearch.fcgi"
@@ -556,12 +556,12 @@ def search_pubmed(query, retmax=1000):
         st.error(f"Search error: {e}")
         return [], 0
 
-def fetch_articles_details(id_list, max_articles=1000):
-    """Fetch article details and analyze them - SUPPORTS UP TO 1000"""
+def fetch_articles_details(id_list):
+    """Fetch article details and analyze them - PROCESSES ALL ARTICLES FOUND"""
     if not id_list:
         return []
     
-    total_to_process = min(len(id_list), max_articles)
+    total_to_process = len(id_list)
     batch_size = 50
     num_batches = math.ceil(total_to_process / batch_size)
     
@@ -576,7 +576,7 @@ def fetch_articles_details(id_list, max_articles=1000):
         end_idx = min((batch_num + 1) * batch_size, total_to_process)
         batch_ids = id_list[start_idx:end_idx]
         
-        status_text.text(f"📦 Processing batch {batch_num + 1} of {num_batches}...")
+        status_text.text(f"📦 Processing batch {batch_num + 1} of {num_batches} ({len(batch_ids)} articles)...")
         
         summary_params = {
             "db": "pubmed",
@@ -1605,7 +1605,7 @@ def main():
     else:
         st.warning("⚠️ Advanced embeddings unavailable - Using TF-IDF based methods")
     
-    st.info("⚡ Enhanced version: Up to 1000 articles | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -1619,7 +1619,7 @@ def main():
     - 📚 **Introduction/Discussion separation**: Section-specific paragraphs
     - ⚙️ **Configurable relevance threshold**: Adjust filtering sensitivity
     - 🔄 **Exclusive article assignment**: No article appears in multiple flavors
-    - 📈 **Up to 1000 articles**: Broader literature coverage
+    - 📈 **All articles found**: No artificial limit, processes complete search results
     - 🌐 **English output**: All content generated in English
     """)
     
@@ -1633,7 +1633,7 @@ def main():
     with col_b:
         st.info("📄 Output: DOCX with summaries")
     with col_c:
-        st.success("📈 Max: 1000 articles")
+        st.success("📈 Max: All articles found")
     
     st.markdown("---")
     st.markdown("### 📝 Configuration")
@@ -1649,14 +1649,12 @@ def main():
         )
     
     with col2:
-        max_articles = st.slider(
-            "📚 Max articles to process:",
-            min_value=50,
-            max_value=1000,
-            value=500,
-            step=50,
-            help="Higher number = more processing time (~2-5 minutes per 100 articles)"
-        )
+        st.info("""
+        **Article limit:**
+        - All articles found in PubMed will be processed
+        - No maximum limit set
+        - Processing time depends on result size
+        """)
     
     st.markdown("### ⚙️ Relevance filtering")
     col_rel1, col_rel2 = st.columns(2)
@@ -1705,14 +1703,14 @@ def main():
             start_time = time.time()
             
             with st.spinner("🔍 Searching articles in PubMed..."):
-                id_list, total_count = search_pubmed(query.strip(), retmax=max_articles)
+                id_list, total_count = search_pubmed(query.strip(), retmax=100000)
                 
                 if not id_list:
                     st.error("❌ No articles found")
                     st.stop()
                 
-                st.info(f"📊 Found {total_count} articles. Processing {len(id_list)}...")
-                articles = fetch_articles_details(id_list, max_articles=max_articles)
+                st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles...")
+                articles = fetch_articles_details(id_list)
             
             if not articles:
                 st.error("❌ Could not process any articles")
@@ -1772,7 +1770,7 @@ def main():
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Articles processed", st.session_state.total_processed)
+            st.metric("Articles found", st.session_state.total_processed)
         with col2:
             st.metric("Relevant articles", st.session_state.total_articles)
         with col3:
@@ -1796,7 +1794,7 @@ def main():
             **How to adjust results:**
             - If you get **too few articles** (<15), **reduce the relevance threshold** (e.g., 0.25-0.30)
             - If you get **too many articles** (>200), **increase the threshold** (e.g., 0.45-0.50)
-            - If processing is **too slow**, reduce the maximum number of articles
+            - If processing is **too slow**, consider narrowing your search query
             
             **Document Structure:**
             1. **FLAVORS FOR INTRODUCTION**: Extended paragraphs (5+ lines) with embedded citations
@@ -1808,6 +1806,7 @@ def main():
             - **Exclusive assignment**: Each article appears in only one flavor
             - **Robust fallback**: BioBERT → SBERT → TF-IDF automatic fallback chain
             - **English output**: All content generated in English for international use
+            - **All articles processed**: No artificial limit on number of articles
             
             These elements allow quick identification of each flavor's value proposition.
             """)
@@ -1818,7 +1817,7 @@ def main():
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
             🧠 PubMed AI Analyzer - Advanced Flavor Generator v12.0<br>
             BioBERT → SBERT → TF-IDF Fallback | Exclusive Assignment | Aspect + Difference per Flavor<br>
-            Up to 1000 articles | 3-4 large flavors with ~15 references each | English output
+            All articles processed | 3-4 large flavors with ~15 references each | English output
         </div>
         """,
         unsafe_allow_html=True
