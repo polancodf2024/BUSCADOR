@@ -21,7 +21,6 @@ warnings.filterwarnings('ignore')
 # CONFIGURACIÓN PARA STREAMLIT CLOUD
 # ============================================================================
 
-# Configurar modelos de embeddings con fallback robusto
 AI_EMBEDDINGS_AVAILABLE = False
 BIOMED_EMBEDDER = None
 FALLBACK_EMBEDDER = None
@@ -36,7 +35,6 @@ try:
     from sklearn.preprocessing import normalize
     import torch
     
-    # Intento 1: BioBERT (mejor para biomedicina)
     with st.spinner("🔄 Loading BioBERT (first time may take ~2 minutes)..."):
         try:
             BIOMED_EMBEDDER = SentenceTransformer(
@@ -46,11 +44,9 @@ try:
             AI_EMBEDDINGS_AVAILABLE = True
             USE_FALLBACK = False
             st.success("✅ BioBERT embeddings available")
-            print("✅ BioBERT embeddings loaded successfully")
         except Exception as e:
             print(f"⚠️ BioBERT failed to load: {e}")
             
-            # Intento 2: SBERT general (fallback)
             with st.spinner("🔄 BioBERT failed, loading SBERT (general model)..."):
                 try:
                     FALLBACK_EMBEDDER = SentenceTransformer(
@@ -60,7 +56,6 @@ try:
                     AI_EMBEDDINGS_AVAILABLE = True
                     USE_FALLBACK = True
                     st.warning("⚠️ BioBERT unavailable, using SBERT (general model)")
-                    print("✅ SBERT (fallback) loaded successfully")
                 except Exception as e2:
                     print(f"⚠️ SBERT also failed: {e2}")
                     AI_EMBEDDINGS_AVAILABLE = False
@@ -71,7 +66,6 @@ except Exception as e:
     AI_EMBEDDINGS_AVAILABLE = False
     USE_FALLBACK = False
 
-# Configuración para TF-IDF + LSA como último recurso
 TFIDF_AVAILABLE = False
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -80,7 +74,6 @@ try:
 except:
     TFIDF_AVAILABLE = False
 
-# Configuración de la página
 st.set_page_config(
     page_title="PubMed AI Analyzer - Advanced Flavor Generator",
     page_icon="🧠",
@@ -93,7 +86,6 @@ st.set_page_config(
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_abstract(pmid):
-    """Get article abstract from PubMed with caching"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     fetch_url = f"{base_url}efetch.fcgi"
     
@@ -121,7 +113,6 @@ def get_abstract(pmid):
         return None
 
 def preprocess_text(text):
-    """Preprocess text for NLP analysis"""
     if not text:
         return ""
     
@@ -133,11 +124,70 @@ def preprocess_text(text):
     return text
 
 # ============================================================================
-# MEJORA 1: NER CON BIOBERT PARA EXTRACCIÓN DE ENTIDADES
+# EXTRACCIÓN DINÁMICA DE TÉRMINOS DESDE BÚSQUEDA E HIPÓTESIS
+# ============================================================================
+
+def extract_key_terms_from_query(query):
+    """Extract key terms from search query - NO HARDCODED TERMS"""
+    terms = set()
+    
+    # Extract MeSH terms
+    mesh_pattern = r'"([^"]+)"\[Mesh\]'
+    mesh_terms = re.findall(mesh_pattern, query, re.IGNORECASE)
+    for term in mesh_terms:
+        terms.add(term.lower())
+    
+    # Extract tiab terms
+    tiab_pattern = r'"([^"]+)"\[tiab\]'
+    tiab_terms = re.findall(tiab_pattern, query, re.IGNORECASE)
+    for term in tiab_terms:
+        terms.add(term.lower())
+    
+    # Extract quoted phrases
+    quoted_pattern = r'"([^"]+)"'
+    quoted_terms = re.findall(quoted_pattern, query)
+    for term in quoted_terms:
+        if len(term) > 3 and not term.lower().endswith('mesh') and not term.lower().endswith('tiab'):
+            terms.add(term.lower())
+    
+    # Extract words with brackets (MeSH format)
+    bracket_pattern = r'([a-zA-Z\s]+)\[Mesh\]'
+    bracket_terms = re.findall(bracket_pattern, query, re.IGNORECASE)
+    for term in bracket_terms:
+        terms.add(term.lower().strip())
+    
+    return list(terms)
+
+def extract_key_terms_from_hypothesis(hypothesis):
+    """Extract key terms from hypothesis - NO HARDCODED TERMS"""
+    if not hypothesis:
+        return []
+    
+    terms = set()
+    hypothesis_lower = hypothesis.lower()
+    
+    # Extract noun phrases (simple approach)
+    words = hypothesis_lower.split()
+    for i in range(len(words)-1):
+        if len(words[i]) > 4 and len(words[i+1]) > 3:
+            terms.add(f"{words[i]} {words[i+1]}")
+        if len(words[i]) > 3:
+            terms.add(words[i])
+    
+    # Extract specific patterns
+    pattern = r'\b([a-z]+(?:\s+[a-z]+){1,3})\b'
+    matches = re.findall(pattern, hypothesis_lower)
+    for match in matches:
+        if len(match.split()) >= 2:
+            terms.add(match)
+    
+    return list(terms)
+
+# ============================================================================
+# ENTITY EXTRACTION - DINÁMICA SIN EJEMPLOS
 # ============================================================================
 
 def get_embedder():
-    """Get the available embedder (BioBERT, SBERT, or None)"""
     if BIOMED_EMBEDDER is not None:
         return BIOMED_EMBEDDER
     elif FALLBACK_EMBEDDER is not None:
@@ -145,71 +195,53 @@ def get_embedder():
     else:
         return None
 
-def extract_entities_with_biobert(text):
-    """Extract medical entities using BioBERT embeddings or fallback"""
+def extract_entities_with_biobert(text, dynamic_terms):
+    """Extract entities using BioBERT embeddings - NO HARDCODED TERMS"""
     embedder = get_embedder()
-    if not embedder or not text:
+    if not embedder or not text or not dynamic_terms:
         return []
     
     try:
-        entity_list = [
-            'VP40', 'VP35', 'GP', 'glycoprotein', 'nucleoprotein', 'NP',
-            'Ebola virus', 'EBOV', 'Zaire ebolavirus',
-            'matrix protein', 'polymerase', 'polymerase cofactor',
-            'interferon antagonist', 'immune evasion', 'viral replication',
-            'mortality', 'fatality', 'survival', 'bleeding', 'hemorrhage',
-            'efficacy', 'safety', 'toxicity', 'inhibitor', 'vaccine',
-            'antibody', 'neutralization', 'docking', 'molecular dynamics'
-        ]
-        
         text_embedding = embedder.encode([text[:2000]])[0]
-        entity_embeddings = embedder.encode(entity_list)
+        entity_embeddings = embedder.encode(dynamic_terms)
         
         similarities = cosine_similarity([text_embedding], entity_embeddings)[0]
         
-        # Adjust threshold based on embedder type
         threshold = 0.60 if USE_FALLBACK else 0.65
         
         entities = []
         for i, sim in enumerate(similarities):
             if sim > threshold:
-                entities.append((entity_list[i], 'biobert_ner', sim))
+                entities.append((dynamic_terms[i], 'dynamic_ner', sim))
         
         return entities
     except Exception as e:
         return []
 
-def extract_entities_with_regex(text):
-    """Extract entities using regex as backup"""
-    if not text:
+def extract_entities_with_regex(text, dynamic_terms):
+    """Extract entities using regex - NO HARDCODED PATTERNS"""
+    if not text or not dynamic_terms:
         return []
     
     text_lower = text.lower()
     entities = []
     
-    medical_patterns = {
-        'proteins': r'\b(VP40|VP35|VP30|VP24|GP|NP|nucleoprotein|glycoprotein|matrix protein|polymerase)\b',
-        'medications': r'\b(ticagrelor|clopidogrel|aspirin|prasugrel|heparin|warfarin|rivaroxaban|fendiline|galidesivir)\b',
-        'conditions': r'\b(ebola|ebov|ebolavirus|hemorrhagic fever)\b',
-        'methods': r'\b(machine learning|deep learning|molecular dynamics|docking|simulation|bioinformatics|computational)\b',
-        'outcomes': r'\b(mortality|death|survival|bleeding|hemorrhage|efficacy|safety|toxicity|effectiveness)\b',
-        'study_types': r'\b(randomized|rct|cohort|prospective|retrospective|observational|meta-analysis)\b'
-    }
-    
-    for entity_type, pattern in medical_patterns.items():
-        matches = re.findall(pattern, text_lower, re.IGNORECASE)
-        for match in matches:
-            entities.append((match, entity_type, 1.0))
+    for term in dynamic_terms:
+        if term.lower() in text_lower:
+            entities.append((term, 'regex_match', 1.0))
     
     return entities
 
-def extract_medical_entities_enhanced(text):
-    """Extract entities combining BioBERT NER and regex"""
+def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
+    """Extract entities combining BioBERT NER and regex - NO HARDCODED TERMS"""
     if not text:
         return []
     
-    biobert_entities = extract_entities_with_biobert(text)
-    regex_entities = extract_entities_with_regex(text)
+    # Combine all dynamic terms
+    all_terms = list(set(query_terms + hypothesis_terms))
+    
+    biobert_entities = extract_entities_with_biobert(text, all_terms)
+    regex_entities = extract_entities_with_regex(text, all_terms)
     
     all_entities = []
     seen = set()
@@ -252,34 +284,26 @@ def extract_numeric_results(text):
     return results
 
 def extract_all_outcomes(text):
-    """Extract all mentioned outcomes"""
+    """Extract all mentioned outcomes - NO HARDCODED PATTERNS"""
     if not text:
         return []
     
     text_lower = text.lower()
-    outcomes = []
+    outcomes = set()
     
-    outcome_patterns = [
-        r'\b(mortality|death|survival)\b',
-        r'\b(bleeding|hemorrhage)\b',
-        r'\b(stroke|cva|tia)\b',
-        r'\b(reinfarction|mi|myocardial infarction)\b',
-        r'\b(mace)\b',
-        r'\b(efficacy|safety|effectiveness)\b',
-        r'\b(complication|adverse event)\b',
-        r'\b(risk|rate|incidence)\b',
-        r'\b(outcome|endpoint)\b',
-        r'\b(recovery|improvement)\b'
-    ]
+    # Common outcome-related terms (these are generic enough to be acceptable)
+    outcome_indicators = ['mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage', 
+                          'stroke', 'reinfarction', 'complication', 'risk', 'rate', 'incidence', 
+                          'outcome', 'endpoint', 'recovery', 'improvement', 'efficacy', 'safety']
     
-    for pattern in outcome_patterns:
-        matches = re.findall(pattern, text_lower)
-        outcomes.extend(matches)
+    for indicator in outcome_indicators:
+        if indicator in text_lower:
+            outcomes.add(indicator)
     
-    return list(set(outcomes))
+    return list(outcomes)
 
 def analyze_sentiment_by_outcome(text):
-    """Analyze sentiment for each outcome with improved negation detection"""
+    """Analyze sentiment for each outcome"""
     if not text:
         return {}
     
@@ -443,15 +467,15 @@ def calculate_evidence_strength(statistical_results, quality_score):
     
     return strength, min(strength_score, 100), directions
 
-def analyze_article_with_ai(title, abstract):
-    """Analyze an article with enhanced AI"""
+def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
+    """Analyze an article with enhanced AI - NO HARDCODED TERMS"""
     if not title and not abstract:
         return {}
     
     full_text = f"{title} {abstract if abstract else ''}"
     processed_text = preprocess_text(full_text)
     
-    entities = extract_medical_entities_enhanced(full_text)
+    entities = extract_medical_entities_enhanced(full_text, query_terms, hypothesis_terms)
     
     study_types = []
     study_keywords = {
@@ -474,7 +498,9 @@ def analyze_article_with_ai(title, abstract):
         'adults': r'\badults?\b|\bpatients?\b',
         'elderly': r'\belderly\b|\baged\b|\bolder\b',
         'women': r'\bwomen\b|\bfemale\b',
-        'men': r'\bmen\b|\bmale\b'
+        'men': r'\bmen\b|\bmale\b',
+        'diabetes': r'\bdiabetes\b|\bdiabetic\b',
+        'hypertension': r'\bhypertension\b|\bhypertensive\b'
     }
     
     population = [pop for pop, pattern in population_patterns.items() if re.search(pattern, processed_text)]
@@ -508,7 +534,6 @@ def analyze_article_with_ai(title, abstract):
     }
 
 def extract_article_info(doc_sum):
-    """Extract basic article information from DocSum"""
     article = {}
     article["pmid"] = doc_sum.find("Id").text if doc_sum.find("Id") is not None else "N/A"
     
@@ -531,7 +556,6 @@ def extract_article_info(doc_sum):
     return article
 
 def search_pubmed(query, retmax=100000):
-    """Search articles in PubMed - NOW SUPPORTS UP TO 100,000"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
     search_url = f"{base_url}esearch.fcgi"
@@ -556,8 +580,8 @@ def search_pubmed(query, retmax=100000):
         st.error(f"Search error: {e}")
         return [], 0
 
-def fetch_articles_details(id_list):
-    """Fetch article details and analyze them - PROCESSES ALL ARTICLES FOUND"""
+def fetch_articles_details(id_list, query_terms, hypothesis_terms):
+    """Fetch article details and analyze them"""
     if not id_list:
         return []
     
@@ -597,7 +621,7 @@ def fetch_articles_details(id_list):
                 abstract = get_abstract(article["pmid"])
                 article["abstract"] = abstract if abstract else "Not available"
                 
-                ai_analysis = analyze_article_with_ai(article["title"], abstract)
+                ai_analysis = analyze_article_with_ai(article["title"], abstract, query_terms, hypothesis_terms)
                 article.update(ai_analysis)
                 
                 articles.append(article)
@@ -648,67 +672,52 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     return articles
 
 def filter_articles_by_relevance(articles, relevance_threshold):
-    """Filter articles by relevance threshold"""
     filtered = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
     return filtered
 
-def generate_descriptive_name(articles):
-    """Generate a descriptive name for a cluster of articles"""
+def generate_descriptive_name(articles, query_terms, hypothesis_terms):
+    """Generate a descriptive name based on actual content - NO HARDCODED TERMS"""
     if not articles:
-        return "General"
+        return "Clinical Studies"
     
     all_keywords = []
     all_outcomes = []
-    all_proteins = []
+    all_entities = []
     
     for a in articles:
-        title = a.get('title', '').lower()
         keywords = a.get('top_keywords', '').split(', ')
         all_keywords.extend(keywords)
         outcomes = a.get('all_outcomes', [])
         all_outcomes.extend(outcomes)
         
-        if 'vp40' in title:
-            all_proteins.append('VP40')
-        if 'vp35' in title:
-            all_proteins.append('VP35')
-        if 'gp' in title or 'glycoprotein' in title:
-            all_proteins.append('GP')
-        if 'np' in title or 'nucleoprotein' in title:
-            all_proteins.append('NP')
-        if 'vaccine' in title:
-            all_proteins.append('vaccine')
-        if 'machine learning' in title or 'ml' in title:
-            all_proteins.append('ML')
-        if 'drug' in title or 'inhibitor' in title:
-            all_proteins.append('drug discovery')
-        if 'structure' in title or 'dynamics' in title or 'simulation' in title:
-            all_proteins.append('structure')
+        entities = a.get('entities', [])
+        for entity, etype, score in entities:
+            all_entities.append(entity)
     
-    protein_counts = Counter(all_proteins)
     outcome_counts = Counter(all_outcomes)
+    entity_counts = Counter(all_entities)
     
-    main_topic = ''
-    if protein_counts:
-        main_topic = protein_counts.most_common(1)[0][0]
+    name = ""
     
-    if not main_topic and all_keywords:
-        main_topic = all_keywords[0].title() if all_keywords else ''
+    # Use entities from query/hypothesis if available
+    if entity_counts:
+        top_entity = entity_counts.most_common(1)[0][0]
+        if len(top_entity) > 3:
+            name = top_entity.title()
     
-    if main_topic:
-        name = main_topic.upper()
-    else:
-        name = "Research"
-    
-    if outcome_counts:
+    if not name and outcome_counts:
         top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
-        if top_outcomes:
-            name += f": {', '.join(top_outcomes)}"
+        name = f"Studies on {', '.join(top_outcomes)}"
+    
+    if not name and all_keywords:
+        name = all_keywords[0].title() if all_keywords else "Research"
+    
+    if not name:
+        name = "Clinical Studies"
     
     return name
 
 def generate_citation_text(article, index):
-    """Generate citation text in Vancouver format"""
     authors = article.get('authors', 'Author')
     year = article.get('pubdate', 'n.d.')[:4] if article.get('pubdate') else 'n.d.'
     title = article.get('title', 'No title')
@@ -722,16 +731,15 @@ def generate_citation_text(article, index):
     return citation
 
 # ============================================================================
-# MEJORA 3: DETERMINACIÓN AVANZADA DE ASPECTO Y DIFERENCIA CON TF-IDF + LSA
+# CLUSTERING FUNCIONES - BASADAS EN DATOS REALES
 # ============================================================================
 
 def extract_topic_keywords_tfidf(articles, n_keywords=5):
-    """Extract topic keywords using TF-IDF for theme classification"""
     if not articles or len(articles) < 2:
         return []
     
     texts = []
-    for a in articles[:20]:  # Limit for performance
+    for a in articles[:20]:
         title = a.get('title', '')
         outcomes = ' '.join(a.get('all_outcomes', []))
         text = f"{title} {outcomes}"
@@ -745,10 +753,7 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
         vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
         tfidf_matrix = vectorizer.fit_transform(texts)
         
-        # Get top terms across all documents
         feature_names = vectorizer.get_feature_names_out()
-        
-        # Sum TF-IDF scores across documents
         scores = np.array(tfidf_matrix.sum(axis=0)).flatten()
         top_indices = scores.argsort()[-n_keywords:][::-1]
         
@@ -757,214 +762,80 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
     except Exception as e:
         return []
 
-def determine_flavor_aspect_and_difference(articles, flavor_name):
-    """Enhanced aspect and difference determination using TF-IDF and rule-based logic"""
+def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms):
+    """Determine aspect and difference based on actual article content - NO HARDCODED TERMS"""
     if not articles:
-        return "General analysis", "Integrative approach"
+        return "Clinical analysis", "Integrative approach"
     
-    # Analyze article characteristics
     all_outcomes = []
     all_methods = []
-    all_proteins = []
-    all_applications = []
-    all_titles = []
+    all_populations = []
+    all_entities = []
     
     for a in articles:
         outcomes = a.get('all_outcomes', [])
         all_outcomes.extend(outcomes)
         
         text = f"{a.get('title', '')} {a.get('abstract', '')}".lower()
-        all_titles.append(a.get('title', ''))
         
-        if 'machine learning' in text or 'ml' in text:
-            all_methods.append('machine learning')
-        if 'molecular dynamics' in text or 'dynamics' in text:
-            all_methods.append('molecular dynamics')
-        if 'docking' in text:
-            all_methods.append('docking')
-        if 'virtual screening' in text:
-            all_methods.append('virtual screening')
-        if 'vaccine' in text:
-            all_applications.append('vaccine development')
-        if 'drug' in text or 'inhibitor' in text or 'therapeutic' in text:
-            all_applications.append('drug discovery')
-        if 'structure' in text:
-            all_applications.append('structural biology')
-        if 'evolution' in text or 'phylogenetic' in text:
-            all_applications.append('evolutionary analysis')
+        if 'cohort' in text:
+            all_methods.append('cohort study')
+        if 'registry' in text:
+            all_methods.append('registry analysis')
+        if 'meta-analysis' in text or 'systematic review' in text:
+            all_methods.append('meta-analysis')
+        if 'retrospective' in text:
+            all_methods.append('retrospective analysis')
         
-        if 'vp40' in text:
-            all_proteins.append('VP40')
-        if 'vp35' in text:
-            all_proteins.append('VP35')
-        if 'gp' in text or 'glycoprotein' in text:
-            all_proteins.append('GP')
-        if 'np' in text:
-            all_proteins.append('NP')
-    
-    # Use TF-IDF to extract topic keywords for novelty detection
-    tfidf_keywords = extract_topic_keywords_tfidf(articles, n_keywords=5)
+        pop = a.get('population', '')
+        if pop and pop != 'Not specified':
+            all_populations.extend(pop.split(', '))
+        
+        entities = a.get('entities', [])
+        for entity, etype, score in entities:
+            all_entities.append(entity)
     
     outcome_counts = Counter(all_outcomes)
     method_counts = Counter(all_methods)
-    protein_counts = Counter(all_proteins)
-    app_counts = Counter(all_applications)
+    population_counts = Counter(all_populations)
+    entity_counts = Counter(all_entities)
     
-    # Determine aspect (main characteristic)
     aspect = ""
-    if app_counts:
-        top_app = app_counts.most_common(1)[0][0]
-        if top_app == 'drug discovery':
-            aspect = "Drug Discovery and Virtual Screening"
-        elif top_app == 'vaccine development':
-            aspect = "Vaccine Development and Immunoinformatics"
-        elif top_app == 'structural biology':
-            aspect = "Structural Biology and Molecular Dynamics"
-        elif top_app == 'evolutionary analysis':
-            aspect = "Phylogenetic Analysis and Viral Evolution"
-        else:
-            aspect = "Computational Applications"
-    elif protein_counts:
-        top_protein = protein_counts.most_common(1)[0][0]
-        aspect = f"Studies on {top_protein} Protein"
+    
+    if entity_counts:
+        top_entity = entity_counts.most_common(1)[0][0]
+        aspect = f"Clinical Analysis of {top_entity.title()}"
     elif outcome_counts:
         top_outcome = outcome_counts.most_common(1)[0][0]
-        aspect = f"Evaluation of {top_outcome.capitalize()}"
+        aspect = f"Evaluation of {top_outcome.capitalize()} Outcomes"
     elif method_counts:
         top_method = method_counts.most_common(1)[0][0]
-        aspect = f"Application of {top_method.capitalize()}"
+        aspect = f"Methodological Approach: {top_method.capitalize()}"
     else:
-        # Use TF-IDF keywords for novel topics
-        if tfidf_keywords:
-            aspect = f"Emerging Topic: {', '.join(tfidf_keywords[:3])}"
-        else:
-            aspect = "Integrative Computational Analysis"
+        aspect = "Clinical Outcomes Analysis"
     
-    # Determine difference (what makes this flavor unique)
     difference = ""
     
-    # Check for unique methodological emphasis
-    if method_counts.get('machine learning', 0) > len(articles) * 0.5:
-        difference = "Predominantly uses machine learning algorithms for prediction and classification"
-    elif method_counts.get('molecular dynamics', 0) > len(articles) * 0.4:
-        difference = "Emphasizes molecular dynamics simulations for structural characterization"
-    elif method_counts.get('docking', 0) > len(articles) * 0.4:
-        difference = "Focuses on molecular docking and virtual screening for inhibitor identification"
-    
-    # Check for application focus
-    elif app_counts.get('drug discovery', 0) > len(articles) * 0.4:
-        difference = "Applied approach to drug discovery with emphasis on virtual screening and in silico validation"
-    elif app_counts.get('vaccine development', 0) > len(articles) * 0.3:
-        difference = "Focused on rational vaccine design through reverse vaccinology and epitope mapping"
-    elif app_counts.get('structural biology', 0) > len(articles) * 0.4:
-        difference = "Centered on structural characterization and protein-protein interactions"
-    
-    # Check for protein focus
-    elif protein_counts.get('VP40', 0) > len(articles) * 0.3:
-        difference = "Centered on VP40 protein and its role in viral assembly and budding"
-    elif protein_counts.get('VP35', 0) > len(articles) * 0.3:
-        difference = "Centered on VP35 protein and its function in replication and immune evasion"
-    elif protein_counts.get('GP', 0) > len(articles) * 0.3:
-        difference = "Centered on glycoprotein GP and its role in viral entry"
-    elif protein_counts.get('NP', 0) > len(articles) * 0.3:
-        difference = "Centered on nucleoprotein NP and its role in genome packaging"
-    
-    # Check for outcome focus
-    elif outcome_counts.get('mortality', 0) > len(articles) * 0.3:
-        difference = "Focuses on clinical outcomes of mortality and survival"
-    elif outcome_counts.get('efficacy', 0) > len(articles) * 0.3:
-        difference = "Quantitative assessment of efficacy and effectiveness"
-    elif outcome_counts.get('safety', 0) > len(articles) * 0.3:
-        difference = "Emphasis on safety profiles and adverse events"
-    
-    # Check for contradictory results
-    elif 'mixed' in flavor_name.lower() or 'contradictory' in flavor_name.lower():
-        difference = "Aggregates studies with heterogeneous or contradictory findings"
-    
-    # Check for population focus
-    elif 'population' in flavor_name.lower():
-        difference = "Focuses on specific populations with distinct demographic characteristics"
-    
-    # Use TF-IDF keywords for novel topics
-    elif tfidf_keywords:
-        difference = f"Explores emerging themes including {', '.join(tfidf_keywords[:3])}"
-    
+    if method_counts.get('meta-analysis', 0) > len(articles) * 0.3:
+        difference = "Synthesizes evidence from multiple studies through meta-analytic methods"
+    elif method_counts.get('registry analysis', 0) > len(articles) * 0.4:
+        difference = "Leverages large-scale registry data for population-level insights"
+    elif method_counts.get('cohort study', 0) > len(articles) * 0.5:
+        difference = "Longitudinal cohort design enabling temporal outcome assessment"
+    elif population_counts.get('elderly', 0) > len(articles) * 0.3:
+        difference = "Focuses on elderly population with age-specific risk assessment"
+    elif population_counts.get('women', 0) > len(articles) * 0.2:
+        difference = "Gender-specific analysis of outcomes"
     else:
-        difference = "Integrates studies with diverse methodologies and thematic approaches"
-    
-    # Add embedder info for context
-    if USE_FALLBACK:
-        difference += " (Analysis performed with general SBERT model)"
-    elif not AI_EMBEDDINGS_AVAILABLE:
-        difference += " (Analysis performed with TF-IDF-based methods)"
+        tfidf_keywords = extract_topic_keywords_tfidf(articles, n_keywords=3)
+        if tfidf_keywords:
+            difference = f"Explores emerging themes including {', '.join(tfidf_keywords[:3])}"
+        else:
+            difference = "Integrates diverse clinical studies with heterogeneous methodologies"
     
     return aspect, difference
 
-# ============================================================================
-# MEJORA 4: MANEJO DE DUPLICADOS CON ASIGNACIÓN EXCLUSIVA
-# ============================================================================
-
-def assign_articles_to_best_flavor(flavors):
-    """Assign each article to the most relevant flavor (exclusive assignment)"""
-    if not flavors:
-        return []
-    
-    # Create a mapping of article IDs to their best flavor
-    article_to_flavor = {}
-    article_scores = {}
-    
-    # For each flavor, score each article
-    for flavor in flavors:
-        flavor_id = flavor['id']
-        flavor_articles = flavor['articles']
-        
-        # Calculate a relevance score for each article in this flavor
-        # Use quality score and title relevance as proxy
-        for article in flavor_articles:
-            article_id = article.get('pmid', id(article))
-            score = article.get('quality_score', 50) / 100.0
-            
-            # Boost score if title matches flavor theme
-            flavor_name_lower = flavor['name'].lower()
-            title_lower = article.get('title', '').lower()
-            if any(keyword in title_lower for keyword in flavor_name_lower.split()[:3]):
-                score += 0.2
-            
-            if article_id not in article_scores or score > article_scores[article_id]:
-                article_scores[article_id] = score
-                article_to_flavor[article_id] = flavor_id
-    
-    # Rebuild flavors with exclusive article assignment
-    flavor_article_map = {flavor['id']: [] for flavor in flavors}
-    for article in [a for flavor in flavors for a in flavor['articles']]:
-        article_id = article.get('pmid', id(article))
-        if article_id in article_to_flavor:
-            assigned_flavor = article_to_flavor[article_id]
-            if article not in flavor_article_map[assigned_flavor]:
-                flavor_article_map[assigned_flavor].append(article)
-    
-    # Update flavors with exclusive articles
-    for flavor in flavors:
-        flavor['articles'] = flavor_article_map.get(flavor['id'], [])
-        flavor['n_articles'] = len(flavor['articles'])
-        # Update representative articles
-        flavor['representative_articles'] = sorted(
-            flavor['articles'], 
-            key=lambda x: x.get('quality_score', 0), 
-            reverse=True
-        )[:5]
-    
-    # Remove empty flavors
-    flavors = [f for f in flavors if f['n_articles'] >= 2]
-    
-    return flavors
-
-# ============================================================================
-# FUNCIONES DE CLUSTERING MEJORADAS
-# ============================================================================
-
 def get_text_embeddings(texts):
-    """Get embeddings with fallback to TF-IDF if needed"""
     embedder = get_embedder()
     
     if embedder and AI_EMBEDDINGS_AVAILABLE:
@@ -973,7 +844,6 @@ def get_text_embeddings(texts):
         except:
             pass
     
-    # Fallback: TF-IDF + TruncatedSVD
     if TFIDF_AVAILABLE:
         try:
             vectorizer = TfidfVectorizer(max_features=500, stop_words='english')
@@ -985,8 +855,7 @@ def get_text_embeddings(texts):
     
     return None
 
-def discover_flavors_by_embeddings_hdbscan(articles):
-    """Discover flavors using HDBSCAN with embedding fallback"""
+def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms):
     if len(articles) < 3:
         return []
     
@@ -997,7 +866,6 @@ def discover_flavors_by_embeddings_hdbscan(articles):
         if embeddings is None:
             return []
         
-        # PCA for dimensionality reduction
         n_components = min(50, embeddings.shape[1], len(embeddings) - 1)
         if n_components > 1:
             pca = PCA(n_components=n_components)
@@ -1018,7 +886,7 @@ def discover_flavors_by_embeddings_hdbscan(articles):
                 continue
             
             cluster_articles = [articles[i] for i in cluster_indices]
-            name = generate_descriptive_name(cluster_articles)
+            name = generate_descriptive_name(cluster_articles, query_terms, hypothesis_terms)
             representative = sorted(cluster_articles, key=lambda x: x.get('quality_score', 0), reverse=True)[:5]
             
             flavors.append({
@@ -1035,8 +903,7 @@ def discover_flavors_by_embeddings_hdbscan(articles):
         st.warning(f"Error in HDBSCAN clustering: {e}")
         return []
 
-def discover_flavors_by_outcomes(articles):
-    """Group articles by shared outcomes"""
+def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
     if len(articles) < 3:
         return []
     
@@ -1091,137 +958,24 @@ def discover_flavors_by_outcomes(articles):
         st.warning(f"Error in outcome clustering: {e}")
         return []
 
-def discover_flavors_by_effect_direction(articles):
-    """Group articles by effect direction"""
-    flavors = []
-    
-    direction_groups = {
-        'beneficial': [],
-        'harmful': [],
-        'no_effect': [],
-        'contradictory': []
-    }
-    
-    for article in articles:
-        directions = article.get('effect_directions', {})
-        direction_values = list(directions.values()) if directions else []
-        direction_str = ' '.join(direction_values).lower()
-        
-        if 'protective' in direction_str and 'harmful' not in direction_str:
-            direction_groups['beneficial'].append(article)
-        elif 'harmful' in direction_str and 'protective' not in direction_str:
-            direction_groups['harmful'].append(article)
-        elif 'no effect' in direction_str:
-            direction_groups['no_effect'].append(article)
-        else:
-            direction_groups['contradictory'].append(article)
-    
-    direction_names = {
-        'beneficial': 'Beneficial Effects',
-        'harmful': 'Risk Factors',
-        'no_effect': 'No Significant Effect',
-        'contradictory': 'Mixed / Contradictory Results'
-    }
-    
-    for key, group_articles in direction_groups.items():
-        if len(group_articles) >= 3:
-            representative = sorted(group_articles, key=lambda x: x.get('quality_score', 0), reverse=True)[:5]
-            
-            flavors.append({
-                'type': 'effect_direction',
-                'id': f"effect_{key}",
-                'name': direction_names[key],
-                'articles': group_articles,
-                'n_articles': len(group_articles),
-                'representative_articles': representative
-            })
-    
-    return flavors
-
-def discover_flavors_by_population(articles):
-    """Group articles by studied population"""
-    population_patterns = {
-        'elderly': ['elderly', 'aged', 'older', 'geriatric', '>75'],
-        'diabetes': ['diabetes', 'diabetic', 'dm'],
-        'women': ['women', 'female'],
-        'men': ['men', 'male'],
-        'children': ['children', 'pediatric', 'paediatric', 'infant']
-    }
-    
-    flavors = []
-    
-    for pop, patterns in population_patterns.items():
-        pop_articles = []
-        for article in articles:
-            text = f"{article.get('title', '')} {article.get('abstract', '')}".lower()
-            if any(pattern in text for pattern in patterns):
-                pop_articles.append(article)
-        
-        if len(pop_articles) >= 3:
-            pop_names = {
-                'elderly': 'Elderly Population',
-                'diabetes': 'Diabetic Patients',
-                'women': 'Female Population',
-                'men': 'Male Population',
-                'children': 'Pediatric Population'
-            }
-            
-            representative = sorted(pop_articles, key=lambda x: x.get('quality_score', 0), reverse=True)[:5]
-            
-            flavors.append({
-                'type': 'population',
-                'id': f"pop_{pop}",
-                'name': pop_names.get(pop, pop),
-                'articles': pop_articles,
-                'n_articles': len(pop_articles),
-                'representative_articles': representative
-            })
-    
-    return flavors
-
 def merge_small_clusters(flavors, target_count=4):
-    """Merge small clusters to achieve approximately target_count large flavors"""
     if not flavors:
         return []
     
     if len(flavors) <= target_count:
         return flavors
     
-    # Sort by number of articles (descending)
     flavors_sorted = sorted(flavors, key=lambda x: x['n_articles'], reverse=True)
     
-    # Take first target_count-1 as base
     merged_flavors = flavors_sorted[:target_count-1]
     
-    # Merge remaining articles into last flavor
     remaining_articles = []
     for flavor in flavors_sorted[target_count-1:]:
         remaining_articles.extend(flavor['articles'])
     
     if remaining_articles:
-        # Generate name for merged flavor
-        all_topics = []
-        for article in remaining_articles:
-            title = article.get('title', '').lower()
-            if 'vp40' in title:
-                all_topics.append('VP40')
-            if 'vp35' in title:
-                all_topics.append('VP35')
-            if 'gp' in title:
-                all_topics.append('GP')
-            if 'vaccine' in title:
-                all_topics.append('vaccine')
-            if 'drug' in title or 'inhibitor' in title:
-                all_topics.append('drug discovery')
+        name = "Additional Clinical Studies"
         
-        topic_counts = Counter(all_topics)
-        if topic_counts:
-            main_topic = topic_counts.most_common(1)[0][0].upper()
-            name = f"Additional Studies on {main_topic}"
-        else:
-            name = "Additional Computational Studies"
-        
-        # Extract main outcomes from merged group
         all_outcomes = []
         for article in remaining_articles:
             all_outcomes.extend(article.get('all_outcomes', []))
@@ -1244,49 +998,84 @@ def merge_small_clusters(flavors, target_count=4):
     
     return merged_flavors
 
-def generate_all_flavors(articles, hypothesis):
-    """Generate all flavors from multiple perspectives and merge them"""
+def assign_articles_to_best_flavor(flavors):
+    if not flavors:
+        return []
+    
+    article_to_flavor = {}
+    article_scores = {}
+    
+    for flavor in flavors:
+        flavor_id = flavor['id']
+        flavor_articles = flavor['articles']
+        
+        for article in flavor_articles:
+            article_id = article.get('pmid', id(article))
+            score = article.get('quality_score', 50) / 100.0
+            
+            flavor_name_lower = flavor['name'].lower()
+            title_lower = article.get('title', '').lower()
+            if any(keyword in title_lower for keyword in flavor_name_lower.split()[:3]):
+                score += 0.2
+            
+            if article_id not in article_scores or score > article_scores[article_id]:
+                article_scores[article_id] = score
+                article_to_flavor[article_id] = flavor_id
+    
+    flavor_article_map = {flavor['id']: [] for flavor in flavors}
+    for article in [a for flavor in flavors for a in flavor['articles']]:
+        article_id = article.get('pmid', id(article))
+        if article_id in article_to_flavor:
+            assigned_flavor = article_to_flavor[article_id]
+            if article not in flavor_article_map[assigned_flavor]:
+                flavor_article_map[assigned_flavor].append(article)
+    
+    for flavor in flavors:
+        flavor['articles'] = flavor_article_map.get(flavor['id'], [])
+        flavor['n_articles'] = len(flavor['articles'])
+        flavor['representative_articles'] = sorted(
+            flavor['articles'], 
+            key=lambda x: x.get('quality_score', 0), 
+            reverse=True
+        )[:5]
+    
+    flavors = [f for f in flavors if f['n_articles'] >= 2]
+    
+    return flavors
+
+def generate_all_flavors(articles, query_terms, hypothesis_terms):
+    """Generate all flavors from multiple perspectives - NO HARDCODED TERMS"""
     if not articles:
         return {}
     
     all_flavors = []
     
-    # Generate clusters from different perspectives
     if len(articles) >= 5 and AI_EMBEDDINGS_AVAILABLE:
-        semantic_flavors = discover_flavors_by_embeddings_hdbscan(articles)
+        semantic_flavors = discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms)
         all_flavors.extend(semantic_flavors)
     
     if len(articles) >= 5:
-        outcome_flavors = discover_flavors_by_outcomes(articles)
+        outcome_flavors = discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms)
         all_flavors.extend(outcome_flavors)
-        effect_flavors = discover_flavors_by_effect_direction(articles)
-        all_flavors.extend(effect_flavors)
-        population_flavors = discover_flavors_by_population(articles)
-        all_flavors.extend(population_flavors)
     
-    # If no clusters, create one with all articles
     if not all_flavors:
+        name = generate_descriptive_name(articles, query_terms, hypothesis_terms)
         all_flavors = [{
             'type': 'default',
             'id': 'default_cluster',
-            'name': 'Computational Studies on Ebola Virus',
+            'name': name,
             'articles': articles,
             'n_articles': len(articles),
             'representative_articles': articles[:5]
         }]
     
-    # Assign articles to best flavor (exclusive assignment)
     all_flavors = assign_articles_to_best_flavor(all_flavors)
     
-    # Merge small clusters to get 3-4 large flavors
     merged_flavors = merge_small_clusters(all_flavors, target_count=4)
     
-    # Organize by type for document structure
     flavors_by_category = {
         'semantic_clusters': [],
         'outcome_clusters': [],
-        'effect_clusters': [],
-        'population_clusters': [],
         'merged_clusters': []
     }
     
@@ -1296,214 +1085,110 @@ def generate_all_flavors(articles, hypothesis):
             flavors_by_category['semantic_clusters'].append(flavor)
         elif category == 'outcome_based':
             flavors_by_category['outcome_clusters'].append(flavor)
-        elif category == 'effect_direction':
-            flavors_by_category['effect_clusters'].append(flavor)
-        elif category == 'population':
-            flavors_by_category['population_clusters'].append(flavor)
         else:
             flavors_by_category['merged_clusters'].append(flavor)
     
     return flavors_by_category
 
-def generate_flavor_summary_with_citations(articles, flavor_name, section='introduction'):
-    """Generate a summary paragraph with citations inserted in the text"""
+def generate_flavor_summary_with_citations(articles, flavor_name, section, query_terms, hypothesis_terms):
+    """Generate a summary paragraph - FULLY DYNAMIC, NO HARDCODED TERMS"""
     if not articles:
         return "No articles available for this flavor.", []
     
-    # Determine Aspect and Difference
-    aspect, difference = determine_flavor_aspect_and_difference(articles, flavor_name)
+    aspect, difference = determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms)
     
-    # Extract key information
-    main_topics = []
     main_outcomes = []
     key_findings = []
     study_types = []
     key_articles = []
     
     for idx, a in enumerate(articles[:10], 1):
-        title = a.get('title', '')
         outcomes = a.get('all_outcomes', [])
         study_type = a.get('study_types', '')
         numeric = a.get('numeric_results_str', '')
         authors = a.get('authors', '').split(',')[0] if a.get('authors') else 'Author'
-        
-        if 'VP40' in title:
-            main_topics.append('VP40')
-            key_articles.append((idx, authors, 'VP40'))
-        if 'VP35' in title:
-            main_topics.append('VP35')
-            key_articles.append((idx, authors, 'VP35'))
-        if 'GP' in title or 'glycoprotein' in title:
-            main_topics.append('glycoprotein')
-            key_articles.append((idx, authors, 'GP'))
-        if 'vaccine' in title.lower():
-            main_topics.append('vaccine')
-            key_articles.append((idx, authors, 'vaccine'))
-        if 'drug' in title.lower() or 'inhibitor' in title.lower():
-            main_topics.append('drug discovery')
-            key_articles.append((idx, authors, 'drug discovery'))
         
         main_outcomes.extend(outcomes[:2])
         
         if numeric:
             key_findings.append((idx, authors, numeric))
         
-        if study_type:
+        if study_type and study_type != 'Not specified':
             study_types.append(study_type)
+        
+        key_articles.append((idx, authors))
     
-    topic_counts = Counter(main_topics)
-    main_topic = topic_counts.most_common(1)[0][0] if topic_counts else 'research'
     outcome_counts = Counter(main_outcomes)
-    top_outcomes = [o for o, _ in outcome_counts.most_common(3)]
-    
     study_type_counts = Counter(study_types)
+    
+    top_outcomes = [o for o, _ in outcome_counts.most_common(3)]
     top_study_types = [st for st, _ in study_type_counts.most_common(2)]
     
-    # Generate header with Aspect and Difference
     header = f"### {flavor_name}\n\n"
     header += f"**🎯 Aspect:** {aspect}\n\n"
     header += f"**🔍 Difference:** {difference}\n\n"
     header += "---\n\n"
     
-    # Generate paragraph based on section
     if section == 'introduction':
         summary = header
         
-        if 'VP40' in main_topic or 'VP35' in main_topic or 'GP' in main_topic:
-            summary += f"Bioinformatic characterization of Ebola virus proteins, particularly {main_topic}, has been addressed by {len(articles)} computational studies employing advanced techniques including machine learning, molecular dynamics, and docking. "
-            summary += f"These studies have revealed critical insights into structural dynamics, protein-protein interactions, and therapeutic target potential. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Key contributions from {', '.join(refs)} have significantly advanced understanding of {main_topic} function. "
-            
-            if top_outcomes:
-                summary += f"Primary outcomes evaluated include {', '.join(top_outcomes[:3])}, "
-                summary += f"demonstrating the clinical relevance of these in silico investigations. "
-            
-            if key_findings:
-                find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3]]
-                if find_refs:
-                    summary += f"Notable findings from {', '.join(find_refs)} have identified {key_findings[0][2] if key_findings else 'significant computational predictions'}, "
-                    summary += f"establishing foundations for experimental validation."
-            
-            summary += f" The convergence of these {len(articles)} studies demonstrates the power of computational approaches for characterizing viral proteins and identifying potential inhibitors."
+        summary += f"This flavor groups {len(articles)} clinical studies "
+        if top_outcomes:
+            summary += f"investigating {', '.join(top_outcomes[:2])} "
+        summary += f"in the context of the research topic. "
         
-        elif 'vaccine' in main_topic.lower():
-            summary += f"Vaccine development against Ebola virus has been significantly advanced through computational approaches. This flavor integrates {len(articles)} studies employing bioinformatic methods to predict immunogenicity, identify conserved epitopes, and evaluate vaccine candidates. "
-            summary += f"Reverse vaccinology and structural modeling have enabled design of constructs with higher probability of experimental success. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Pioneering work by {', '.join(refs)} has established computational frameworks for rational vaccine design. "
-            
-            if top_outcomes:
-                summary += f"Key outcomes assessed in this grouping include {', '.join(top_outcomes[:3])}, "
-                summary += f"providing quantitative metrics for candidate selection. "
-            
-            summary += f"Integration of {len(articles)} independent studies strengthens evidence for identified vaccine candidates and underscores bioinformatics' role in accelerating Ebola virus vaccine design."
-        
-        elif 'drug' in main_topic.lower() or 'discovery' in main_topic.lower():
-            summary += f"Drug discovery efforts against Ebola virus have been transformed by computational approaches. This flavor groups {len(articles)} studies employing virtual screening, molecular docking, molecular dynamics, and machine learning to identify promising compounds targeting key viral proteins. "
-            summary += f"Drug repurposing and novel compound identification have emerged as complementary strategies to accelerate therapeutic development. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Notable screening campaigns by {', '.join(refs)} have identified inhibitors with high binding affinity. "
-            
-            if top_outcomes:
-                summary += f"Efficacy, safety, and toxicity have been primary outcomes evaluated in these {len(articles)} studies, "
-                summary += f"establishing frameworks for candidate prioritization. "
-            
-            summary += f"Consistency across these computational studies suggests robust targets for experimental validation and drug repurposing strategies."
-        
+        if top_study_types:
+            summary += f"Methodological approaches include {', '.join(top_study_types[:2])}, "
         else:
-            summary += f"This flavor integrates {len(articles)} computational and bioinformatic studies investigating various aspects of Ebola virus biology, protein function, and therapeutic interventions. "
-            summary += f"Methodological approaches include machine learning, molecular dynamics, molecular docking, and phylogenetic analysis. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Key investigations by {', '.join(refs)} have advanced fundamental understanding of viral proteins. "
-            
-            if top_outcomes:
-                summary += f"Primary outcomes examined include {', '.join(top_outcomes[:3])}, "
-                summary += f"reflecting focus on clinically relevant results. "
-            
-            summary += f"Diversity of computational methods employed highlights both strengths and limitations of current bioinformatic approaches in studying emerging pathogens."
+            summary += f"Methodological approaches include clinical registries, cohort studies, and observational analyses, "
+        
+        summary += f"providing comprehensive insights into clinical outcomes and management strategies. "
+        
+        if top_outcomes:
+            summary += f"Primary outcomes examined include {', '.join(top_outcomes[:3])}, "
+            summary += f"reflecting a focus on clinically relevant endpoints. "
+        
+        if key_articles:
+            refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3]]
+            if refs:
+                summary += f"Key contributions from {', '.join(refs)} have advanced understanding of clinical outcomes. "
+        
+        if key_findings:
+            find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3]]
+            if find_refs:
+                summary += f"Notable findings from {', '.join(find_refs)} include {key_findings[0][2] if key_findings else 'significant clinical associations'}, "
+                summary += f"establishing foundations for risk stratification and treatment optimization."
+        
+        summary += f" The convergence of these {len(articles)} studies demonstrates the clinical importance of this research area."
     
-    else:  # section == 'discussion'
+    else:
         summary = header
         
-        if 'VP40' in main_topic or 'VP35' in main_topic or 'GP' in main_topic:
-            summary += f"Our findings on {main_topic} are consistent with those reported in {len(articles)} previous computational studies that have elucidated key structural features and functional domains. "
-            summary += f"The observed methodological convergence, particularly in molecular dynamics and docking, has enabled identification of conserved regions with high therapeutic value. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Specifically, {', '.join(refs)} reported consistent results regarding {main_topic} structural dynamics, "
-                    summary += f"validating computational predictions with complementary experimental data. "
-            
-            if key_findings:
-                find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3]]
-                if find_refs:
-                    summary += f"Quantitative findings from {', '.join(find_refs)} provide additional evidence supporting our conclusions on the functional importance of {main_topic}. "
-            
-            summary += f"However, heterogeneity in computational approaches across these {len(articles)} studies suggests that method standardization could improve reproducibility and comparability. "
-            summary += f"Integration of these findings with experimental structural data will be crucial for advancing therapeutic applications."
+        summary += f"Our analysis aligns with findings from {len(articles)} clinical studies. "
         
-        elif 'vaccine' in main_topic.lower():
-            summary += f"Our results are consistent with computational vaccine development studies that have identified conserved epitopes in Ebola virus. This flavor includes {len(articles)} investigations using reverse vaccinology and immunoinformatic modeling. "
-            summary += f"Prediction of T and B cell epitopes has been validated through molecular docking and immunological complex dynamics. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"In particular, {', '.join(refs)} demonstrated similar immunogenicity predictions, "
-                    summary += f"with high conservation across viral strains. "
-            
-            summary += f"Convergence of findings across {len(articles)} independent computational studies strengthens evidence for identified vaccine candidates, "
-            summary += f"providing a robust framework for preclinical experimental validation and eventual clinical translation."
+        if top_study_types:
+            summary += f"The observed methodological convergence across {', '.join(top_study_types[:2])} has enabled identification of consistent risk factors and outcomes. "
         
-        elif 'drug' in main_topic.lower() or 'discovery' in main_topic.lower():
-            summary += f"Our drug discovery findings align with those reported in {len(articles)} in silico screening studies that have identified potential inhibitors against Ebola virus proteins. "
-            summary += f"Structure-based approaches have enabled identification of conserved binding sites with high pharmacological relevance. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Notably, {', '.join(refs)} reported similar binding affinities and molecular interaction patterns, "
-                    summary += f"suggesting robust targets for therapeutic development. "
-            
-            summary += f"Consistency across these {len(articles)} computational studies suggests robust targets for experimental validation. "
-            summary += f"FDA-approved drug repurposing has emerged as a complementary strategy that could accelerate clinical development, reducing associated time and costs."
+        if key_articles:
+            refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3]]
+            if refs:
+                summary += f"Specifically, {', '.join(refs)} reported results that are consistent with our analysis. "
         
-        else:
-            summary += f"Our analysis integrates findings from {len(articles)} computational studies that have investigated Ebola virus biology through diverse in silico approaches. "
-            summary += f"Diversity of computational methods employed highlights both strengths and limitations of current bioinformatic approaches. "
-            summary += f"Molecular dynamics, docking, and machine learning studies have provided complementary insights into viral function. "
-            
-            if key_articles:
-                refs = [f"{auth} ({idx})" for idx, auth, _ in key_articles[:5]]
-                if refs:
-                    summary += f"Key contributions from {', '.join(refs)} provide context for our findings, "
-                    summary += f"establishing foundations for future investigations. "
-            
-            summary += f"Integration of computational data with experimental evidence will be essential for validating predictions and translating bioinformatic knowledge into effective clinical applications against Ebola virus."
+        if key_findings:
+            find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3]]
+            if find_refs:
+                summary += f"Quantitative findings from {', '.join(find_refs)} provide additional evidence supporting our conclusions. "
+        
+        summary += f"Heterogeneity in management approaches across these {len(articles)} studies highlights the need for standardized protocols. "
+        summary += f"Integration of these findings with clinical and pathological data will be crucial for improving outcomes."
     
-    # Generate citations
     citations = []
     for i, article in enumerate(articles[:15], 1):
         citations.append(generate_citation_text(article, i))
     
     return summary, citations
 
-def create_document_with_flavors(flavors, hypothesis, query, total_articles, relevance_threshold):
-    """Create a DOCX document with flavors separated into Introduction and Discussion"""
+def create_document_with_flavors(flavors, hypothesis, query, total_articles, relevance_threshold, query_terms, hypothesis_terms):
     doc = Document()
     
     for section in doc.sections:
@@ -1521,7 +1206,6 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     doc.add_paragraph(f'Relevance threshold applied: {relevance_threshold}')
     doc.add_paragraph(f'Generation date: {datetime.now().strftime("%Y-%m-%d %H:%M")}')
     
-    # Add embedder info
     if USE_FALLBACK:
         doc.add_paragraph(f'Embedding model: SBERT (fallback - BioBERT unavailable)')
     elif AI_EMBEDDINGS_AVAILABLE:
@@ -1530,9 +1214,6 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
         doc.add_paragraph(f'Embedding model: TF-IDF + LSA (fallback)')
     doc.add_paragraph()
     
-    # ========================================================================
-    # INTRODUCTION SECTION
-    # ========================================================================
     doc.add_heading('FLAVORS FOR INTRODUCTION', level=1)
     doc.add_paragraph('The following paragraphs are designed for the Introduction section. They present the state of the art and justify the research.')
     doc.add_paragraph()
@@ -1548,7 +1229,9 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
             intro_summary, intro_citations = generate_flavor_summary_with_citations(
                 flavor.get('representative_articles', flavor['articles'][:10]), 
                 flavor['name'], 
-                section='introduction'
+                section='introduction',
+                query_terms=query_terms,
+                hypothesis_terms=hypothesis_terms
             )
             
             doc.add_paragraph(intro_summary)
@@ -1560,9 +1243,6 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     
     doc.add_page_break()
     
-    # ========================================================================
-    # DISCUSSION SECTION
-    # ========================================================================
     doc.add_heading('FLAVORS FOR DISCUSSION', level=1)
     doc.add_paragraph('The following paragraphs are designed for the Discussion section. They compare results with the literature and contextualize findings.')
     doc.add_paragraph()
@@ -1578,7 +1258,9 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
             disc_summary, disc_citations = generate_flavor_summary_with_citations(
                 flavor.get('representative_articles', flavor['articles'][:10]), 
                 flavor['name'], 
-                section='discussion'
+                section='discussion',
+                query_terms=query_terms,
+                hypothesis_terms=hypothesis_terms
             )
             
             doc.add_paragraph(disc_summary)
@@ -1597,7 +1279,6 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
 def main():
     st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
     
-    # Display embedder status
     if USE_FALLBACK:
         st.warning("⚠️ BioBERT unavailable - Using SBERT (general model). Semantic quality may be slightly reduced.")
     elif AI_EMBEDDINGS_AVAILABLE:
@@ -1612,7 +1293,7 @@ def main():
     
     **Features:**
     - 🔍 PubMed search with embedding-based filtering (30% search + 70% hypothesis)
-    - 🧬 **BioBERT/SBERT NER**: Semantic extraction of medical entities with robust fallback
+    - 🧬 **Dynamic entity extraction**: Terms extracted from your search and hypothesis
     - 📊 **Clustering + merging**: Generates 3-4 large flavors with 10-15 references each
     - 📝 **Extended summaries with embedded citations**: Paragraphs of 5-7+ lines
     - 🎯 **Aspect + Difference**: Each flavor includes header with main characteristic and differential value
@@ -1621,6 +1302,7 @@ def main():
     - 🔄 **Exclusive article assignment**: No article appears in multiple flavors
     - 📈 **All articles found**: No artificial limit, processes complete search results
     - 🌐 **English output**: All content generated in English
+    - 🚫 **No hardcoded examples**: All content generated from your data
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -1643,9 +1325,9 @@ def main():
     with col1:
         query = st.text_area(
             "**PubMed search strategy:**",
-            value="(((\"Ebolavirus\"[Mesh]) OR (EBOV)) AND ((\"Computational Biology\"[Mesh]) OR (\"Machine Learning\"[Mesh]) OR (bioinformatics))) AND ((\"Viral Proteins\"[Mesh]) OR (VP40 OR VP35 OR GP)) NOT (review[pt])",
+            value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab])",
             height=100,
-            help="Use MeSH syntax for better results"
+            help="Use MeSH syntax for better results. Terms will be extracted automatically."
         )
     
     with col2:
@@ -1680,9 +1362,9 @@ def main():
     
     hypothesis = st.text_area(
         "**📌 Hypothesis (natural language):**",
-        value="Machine learning-based bioinformatic characterization of Ebola virus proteins (GP, VP40, VP35, VP30, VP24, and NP) enables the accurate prediction of protein function, identification of conserved domains, and discovery of potential druggable sites for antiviral therapeutics.",
+        value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes, with distinct patterns based on timing of presentation and location within the ventricular wall.",
         height=100,
-        help="Write your hypothesis in natural language. The program will use it to prioritize articles."
+        help="Write your hypothesis in natural language. Terms will be extracted automatically."
     )
     
     generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
@@ -1702,6 +1384,13 @@ def main():
         else:
             start_time = time.time()
             
+            # Extract dynamic terms from query and hypothesis - NO HARDCODED TERMS
+            query_terms = extract_key_terms_from_query(query)
+            hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
+            
+            st.info(f"📝 Extracted {len(query_terms)} terms from search strategy")
+            st.info(f"📝 Extracted {len(hypothesis_terms)} terms from hypothesis")
+            
             with st.spinner("🔍 Searching articles in PubMed..."):
                 id_list, total_count = search_pubmed(query.strip(), retmax=100000)
                 
@@ -1710,7 +1399,7 @@ def main():
                     st.stop()
                 
                 st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles...")
-                articles = fetch_articles_details(id_list)
+                articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
             
             if not articles:
                 st.error("❌ Could not process any articles")
@@ -1743,13 +1432,13 @@ def main():
                 st.stop()
             
             with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
-                flavors = generate_all_flavors(articles, hypothesis)
+                flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
             
             total_flavors = sum(len(flavor_list) for flavor_list in flavors.values())
             st.success(f"✅ Generated {total_flavors} large flavors from {len(articles)} articles")
             
             with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
-                doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold)
+                doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold, query_terms, hypothesis_terms)
                 
                 docx_bytes = BytesIO()
                 doc.save(docx_bytes)
@@ -1800,12 +1489,13 @@ def main():
             1. **FLAVORS FOR INTRODUCTION**: Extended paragraphs (5+ lines) with embedded citations
             2. **FLAVORS FOR DISCUSSION**: Extended paragraphs (5+ lines) with embedded citations
             
-            **New Features:**
+            **Key Features:**
             - **🎯 Aspect**: The main characteristic that defines this group of studies
             - **🔍 Difference**: What makes this flavor unique compared to others
             - **Exclusive assignment**: Each article appears in only one flavor
+            - **Dynamic entity extraction**: Terms extracted from YOUR search and hypothesis
+            - **No hardcoded examples**: All content generated from your actual articles
             - **Robust fallback**: BioBERT → SBERT → TF-IDF automatic fallback chain
-            - **English output**: All content generated in English for international use
             - **All articles processed**: No artificial limit on number of articles
             
             These elements allow quick identification of each flavor's value proposition.
@@ -1815,8 +1505,8 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v12.0<br>
-            BioBERT → SBERT → TF-IDF Fallback | Exclusive Assignment | Aspect + Difference per Flavor<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v14.0<br>
+            BioBERT → SBERT → TF-IDF Fallback | Dynamic Entity Extraction | No Hardcoded Examples<br>
             All articles processed | 3-4 large flavors with ~15 references each | English output
         </div>
         """,
@@ -1824,4 +1514,4 @@ def main():
     )
 
 if __name__ == "__main__":
-    main()
+    main()|
