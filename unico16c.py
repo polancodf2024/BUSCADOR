@@ -1349,7 +1349,7 @@ def main():
     else:
         st.warning("⚠️ Advanced embeddings unavailable - Using TF-IDF based methods")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | Auto-download ready")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -1366,6 +1366,7 @@ def main():
     - 📈 **All articles found**: No artificial limit, processes complete search results
     - 🌐 **English output**: All content generated in English
     - 🚫 **No hardcoded examples**: All content generated from your data
+    - 💾 **Auto-download**: Download button appears automatically when processing completes
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -1439,6 +1440,7 @@ def main():
         st.session_state.total_processed = 0
         st.session_state.n_flavors = 0
         st.session_state.applied_threshold = 0.35
+        st.session_state.auto_download_triggered = False
     
     if generate_button:
         if not query.strip():
@@ -1447,6 +1449,9 @@ def main():
             st.warning("⚠️ Please enter your hypothesis")
         else:
             start_time = time.time()
+            
+            # Reset auto-download flag
+            st.session_state.auto_download_triggered = False
             
             # Store the threshold used
             st.session_state.applied_threshold = relevance_threshold
@@ -1481,7 +1486,7 @@ def main():
             with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
                 articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
                 
-                # *** CORRECTED: Apply filter with selected threshold ***
+                # Apply filter with selected threshold
                 st.markdown("---")
                 st.subheader("🔍 Relevance Filter Results")
                 filtered_articles = filter_articles_by_relevance(articles, relevance_threshold)
@@ -1511,13 +1516,23 @@ def main():
                 st.session_state.total_articles = len(articles)
                 st.session_state.total_processed = len(id_list) if id_list else 0
                 st.session_state.n_flavors = total_flavors
+                st.session_state.auto_download_triggered = True
             
             elapsed_time = time.time() - start_time
             st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
+            
+            # Auto-expand the download section
+            st.success("🎉 Processing complete! Your document is ready for download.")
     
+    # Always show download button if document is generated
     if st.session_state.docx_generated and st.session_state.docx_data is not None:
         st.markdown("---")
-        st.markdown("### 📥 Generated Document")
+        st.markdown("### 📥 Download Your Document")
+        
+        # Show auto-download notification if just completed
+        if st.session_state.auto_download_triggered:
+            st.balloons()
+            st.success("✅ Document ready! Click the button below to download.")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -1529,13 +1544,23 @@ def main():
         with col4:
             st.metric("Large flavors", st.session_state.n_flavors)
         
-        st.download_button(
-            label="📥 DOWNLOAD FLAVORS (INTRO + DISCUSSION)",
-            data=st.session_state.docx_data,
-            file_name=f"flavors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
+        # Create filename with timestamp
+        filename = f"flavors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        
+        # Use columns to center the download button prominently
+        col_left, col_center, col_right = st.columns([1, 2, 1])
+        with col_center:
+            st.download_button(
+                label="📥 CLICK HERE TO DOWNLOAD YOUR FLAVORS DOCUMENT",
+                data=st.session_state.docx_data,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                type="primary"
+            )
+        
+        # Add a helpful message
+        st.info(f"💾 **File saved as:** {filename}")
         
         with st.expander("📖 Usage Guide"):
             st.markdown(f"""
@@ -1564,6 +1589,14 @@ def main():
             
             These elements allow quick identification of each flavor's value proposition.
             """)
+        
+        # Add a button to start a new search
+        st.markdown("---")
+        if st.button("🔄 Start New Search", use_container_width=True):
+            st.session_state.docx_generated = False
+            st.session_state.docx_data = None
+            st.session_state.auto_download_triggered = False
+            st.rerun()
     
     st.markdown("---")
     st.markdown(
@@ -1572,7 +1605,7 @@ def main():
             🧠 PubMed AI Analyzer - Advanced Flavor Generator v15.0<br>
             BioBERT → SBERT → TF-IDF Fallback | Dynamic Entity Extraction | No Hardcoded Examples<br>
             All articles processed | 3-4 large flavors with ~15 references each | English output<br>
-            <strong>✅ CORRECTED: Relevance filter now works with any threshold</strong>
+            <strong>✅ Auto-download: Download button appears automatically when processing completes</strong>
         </div>
         """,
         unsafe_allow_html=True
