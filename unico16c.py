@@ -10,7 +10,7 @@ import numpy as np
 import math
 import string
 import os
-from io import BytesIO
+from io import BytesIO, StringIO
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -131,26 +131,22 @@ def extract_key_terms_from_query(query):
     """Extract key terms from search query - NO HARDCODED TERMS"""
     terms = set()
     
-    # Extract MeSH terms
     mesh_pattern = r'"([^"]+)"\[Mesh\]'
     mesh_terms = re.findall(mesh_pattern, query, re.IGNORECASE)
     for term in mesh_terms:
         terms.add(term.lower())
     
-    # Extract tiab terms
     tiab_pattern = r'"([^"]+)"\[tiab\]'
     tiab_terms = re.findall(tiab_pattern, query, re.IGNORECASE)
     for term in tiab_terms:
         terms.add(term.lower())
     
-    # Extract quoted phrases
     quoted_pattern = r'"([^"]+)"'
     quoted_terms = re.findall(quoted_pattern, query)
     for term in quoted_terms:
         if len(term) > 3 and not term.lower().endswith('mesh') and not term.lower().endswith('tiab'):
             terms.add(term.lower())
     
-    # Extract words with brackets (MeSH format)
     bracket_pattern = r'([a-zA-Z\s]+)\[Mesh\]'
     bracket_terms = re.findall(bracket_pattern, query, re.IGNORECASE)
     for term in bracket_terms:
@@ -166,7 +162,6 @@ def extract_key_terms_from_hypothesis(hypothesis):
     terms = set()
     hypothesis_lower = hypothesis.lower()
     
-    # Extract noun phrases (simple approach)
     words = hypothesis_lower.split()
     for i in range(len(words)-1):
         if len(words[i]) > 4 and len(words[i+1]) > 3:
@@ -174,7 +169,6 @@ def extract_key_terms_from_hypothesis(hypothesis):
         if len(words[i]) > 3:
             terms.add(words[i])
     
-    # Extract specific patterns
     pattern = r'\b([a-z]+(?:\s+[a-z]+){1,3})\b'
     matches = re.findall(pattern, hypothesis_lower)
     for match in matches:
@@ -196,7 +190,6 @@ def get_embedder():
         return None
 
 def extract_entities_with_biobert(text, dynamic_terms):
-    """Extract entities using BioBERT embeddings - NO HARDCODED TERMS"""
     embedder = get_embedder()
     if not embedder or not text or not dynamic_terms:
         return []
@@ -219,7 +212,6 @@ def extract_entities_with_biobert(text, dynamic_terms):
         return []
 
 def extract_entities_with_regex(text, dynamic_terms):
-    """Extract entities using regex - NO HARDCODED PATTERNS"""
     if not text or not dynamic_terms:
         return []
     
@@ -233,11 +225,9 @@ def extract_entities_with_regex(text, dynamic_terms):
     return entities
 
 def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
-    """Extract entities combining BioBERT NER and regex - NO HARDCODED TERMS"""
     if not text:
         return []
     
-    # Combine all dynamic terms
     all_terms = list(set(query_terms + hypothesis_terms))
     
     biobert_entities = extract_entities_with_biobert(text, all_terms)
@@ -259,7 +249,6 @@ def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
     return all_entities
 
 def extract_numeric_results(text):
-    """Extract important numerical results"""
     if not text:
         return []
     
@@ -284,14 +273,12 @@ def extract_numeric_results(text):
     return results
 
 def extract_all_outcomes(text):
-    """Extract all mentioned outcomes - NO HARDCODED PATTERNS"""
     if not text:
         return []
     
     text_lower = text.lower()
     outcomes = set()
     
-    # Common outcome-related terms (these are generic enough to be acceptable)
     outcome_indicators = ['mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage', 
                           'stroke', 'reinfarction', 'complication', 'risk', 'rate', 'incidence', 
                           'outcome', 'endpoint', 'recovery', 'improvement', 'efficacy', 'safety']
@@ -303,7 +290,6 @@ def extract_all_outcomes(text):
     return list(outcomes)
 
 def analyze_sentiment_by_outcome(text):
-    """Analyze sentiment for each outcome"""
     if not text:
         return {}
     
@@ -364,7 +350,6 @@ def analyze_sentiment_by_outcome(text):
     return outcomes_sentiment
 
 def enhanced_quality_scoring(study_types, full_text):
-    """Enhanced quality scoring system"""
     score = 0
     factors = []
     text_lower = full_text.lower() if full_text else ""
@@ -408,7 +393,6 @@ def enhanced_quality_scoring(study_types, full_text):
     return min(score, 100), factors
 
 def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
-    """Determine effect directionality"""
     try:
         value = float(result_value)
         if value < 1:
@@ -427,7 +411,6 @@ def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
         return "NOT DETERMINED"
 
 def calculate_evidence_strength(statistical_results, quality_score):
-    """Calculate evidence strength"""
     if not statistical_results:
         return "No data", 0, {}
     
@@ -468,7 +451,6 @@ def calculate_evidence_strength(statistical_results, quality_score):
     return strength, min(strength_score, 100), directions
 
 def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
-    """Analyze an article with enhanced AI - NO HARDCODED TERMS"""
     if not title and not abstract:
         return {}
     
@@ -581,7 +563,6 @@ def search_pubmed(query, retmax=100000):
         return [], 0
 
 def fetch_articles_details(id_list, query_terms, hypothesis_terms):
-    """Fetch article details and analyze them"""
     if not id_list:
         return []
     
@@ -637,7 +618,6 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
     return articles
 
 def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
-    """Calculate relevance to search and hypothesis using embeddings"""
     embedder = get_embedder()
     if not embedder or not AI_EMBEDDINGS_AVAILABLE:
         for article in articles:
@@ -676,23 +656,18 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     return articles
 
 def filter_articles_by_relevance(articles, relevance_threshold):
-    """Filter articles by relevance threshold with detailed reporting"""
     if not articles:
         return []
     
-    # Create list with scores
     articles_with_scores = []
     for a in articles:
         score = a.get('relevance_score', 0)
         articles_with_scores.append((score, a))
     
-    # Sort by relevance (highest first)
     articles_with_scores.sort(key=lambda x: x[0], reverse=True)
     
-    # Filter by threshold
     filtered = [a for score, a in articles_with_scores if score >= relevance_threshold]
     
-    # Show detailed statistics
     scores = [score for score, _ in articles_with_scores]
     filtered_scores = [score for score, _ in articles_with_scores if score >= relevance_threshold]
     
@@ -707,35 +682,15 @@ def filter_articles_by_relevance(articles, relevance_threshold):
         st.write(f"   - Mean score: {np.mean(scores):.3f}")
         st.write(f"   - Median score: {np.median(scores):.3f}")
     
-    if filtered_scores:
-        st.write(f"   - Filtered min: {min(filtered_scores):.3f}")
-        st.write(f"   - Filtered max: {max(filtered_scores):.3f}")
-        st.write(f"   - Filtered mean: {np.mean(filtered_scores):.3f}")
-    
-    # Show top 5 most relevant articles
     if articles_with_scores:
         st.write("**🏆 Top 5 most relevant articles:**")
         for i, (score, article) in enumerate(articles_with_scores[:5]):
             title = article.get('title', 'No title')[:80]
             st.write(f"   {i+1}. [{score:.3f}] {title}...")
     
-    # Suggest alternative thresholds
-    if scores and len(scores) > 10:
-        p30 = np.percentile(scores, 30)
-        p40 = np.percentile(scores, 40)
-        p50 = np.percentile(scores, 50)
-        p60 = np.percentile(scores, 60)
-        st.write(f"**💡 Suggested thresholds:**")
-        st.write(f"   - {p30:.3f} (includes 70% of articles)")
-        st.write(f"   - {p40:.3f} (includes 60% of articles)")
-        st.write(f"   - {p50:.3f} (includes 50% of articles)")
-        st.write(f"   - {p60:.3f} (includes 40% of articles)")
-    
-    # If very few articles, suggest reducing threshold
     if len(filtered) < 5 and len(articles) >= 10:
         st.warning(f"⚠️ Only {len(filtered)} articles meet threshold (minimum 5 needed). Consider reducing relevance threshold.")
         
-        # Use all articles as fallback if too few
         if len(filtered) < 3:
             st.info(f"💡 Using all {len(articles)} articles to generate flavors (filter bypassed).")
             return articles
@@ -771,7 +726,6 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
         return []
 
 def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms):
-    """Determine aspect and difference based on actual article content - NO HARDCODED TERMS"""
     if not articles:
         return "Clinical analysis", "Integrative approach"
     
@@ -1052,7 +1006,6 @@ def assign_articles_to_best_flavor(flavors):
     return flavors
 
 def generate_descriptive_name(articles, query_terms, hypothesis_terms):
-    """Generate a descriptive name based on actual content - NO HARDCODED TERMS"""
     if not articles:
         return "Clinical Studies"
     
@@ -1075,7 +1028,6 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
     
     name = ""
     
-    # Use entities from query/hypothesis if available
     if entity_counts:
         top_entity = entity_counts.most_common(1)[0][0]
         if len(top_entity) > 3:
@@ -1094,7 +1046,6 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
     return name
 
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
-    """Generate all flavors from multiple perspectives - NO HARDCODED TERMS"""
     if not articles:
         return {}
     
@@ -1154,7 +1105,6 @@ def generate_citation_text(article, index):
     return citation
 
 def generate_flavor_summary_with_citations(articles, flavor_name, section, query_terms, hypothesis_terms):
-    """Generate a summary paragraph - FULLY DYNAMIC, NO HARDCODED TERMS"""
     if not articles:
         return "No articles available for this flavor.", []
     
@@ -1335,6 +1285,42 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     
     return doc
 
+def export_articles_to_csv(articles):
+    """Export articles data to CSV format"""
+    if not articles:
+        return None
+    
+    data = []
+    for article in articles:
+        row = {
+            'PMID': article.get('pmid', ''),
+            'Title': article.get('title', ''),
+            'Authors': article.get('authors', ''),
+            'Journal': article.get('journal', ''),
+            'Publication Date': article.get('pubdate', ''),
+            'DOI': article.get('doi', ''),
+            'Study Types': article.get('study_types', ''),
+            'Quality Score': article.get('quality_score', 0),
+            'Evidence Strength': article.get('evidence_strength', ''),
+            'Top Keywords': article.get('top_keywords', ''),
+            'Population': article.get('population', ''),
+            'Numeric Results': article.get('numeric_results_str', ''),
+            'Relevance Score': article.get('relevance_score', 0),
+            'Search Relevance': article.get('search_relevance', 0),
+            'Hypothesis Relevance': article.get('hypothesis_relevance', 0),
+            'Outcomes': ', '.join(article.get('all_outcomes', [])) if article.get('all_outcomes') else '',
+            'Abstract (first 500 chars)': article.get('abstract', '')[:500] if article.get('abstract') else ''
+        }
+        data.append(row)
+    
+    df = pd.DataFrame(data)
+    
+    csv_buffer = StringIO()
+    df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+    csv_buffer.seek(0)
+    
+    return csv_buffer.getvalue().encode('utf-8-sig')
+
 def display_flavors_preview(flavors):
     """Display a preview of the generated flavors in the UI"""
     st.markdown("---")
@@ -1348,14 +1334,11 @@ def display_flavors_preview(flavors):
         
         total_flavors += len(flavor_list)
         
-        # Category header
         category_title = category_name.replace('_', ' ').title()
         st.markdown(f"### 📂 {category_title}")
         
         for i, flavor in enumerate(flavor_list, 1):
-            # Create an expander for each flavor
             with st.expander(f"🔹 Flavor {i}: {flavor['name']} ({flavor['n_articles']} articles)", expanded=(i==1)):
-                # Display flavor details
                 col1, col2 = st.columns(2)
                 with col1:
                     aspect, difference = determine_flavor_aspect_and_difference(
@@ -1374,7 +1357,6 @@ def display_flavors_preview(flavors):
                         title = article.get('title', 'No title')[:80]
                         st.markdown(f"   {j}. {title}...")
                 
-                # Show sample articles
                 st.markdown("**📄 Sample articles in this flavor:**")
                 sample_data = []
                 for article in flavor.get('articles', [])[:5]:
@@ -1405,7 +1387,7 @@ def main():
     else:
         st.warning("⚠️ Advanced embeddings unavailable - Using TF-IDF based methods")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -1421,8 +1403,8 @@ def main():
     - 🔄 **Exclusive article assignment**: No article appears in multiple flavors
     - 📈 **All articles found**: No artificial limit, processes complete search results
     - 🌐 **English output**: All content generated in English
+    - 📊 **CSV Export**: Download all article data as CSV for further analysis
     - 🚫 **No hardcoded examples**: All content generated from your data
-    - 💾 **Auto-download**: Download button appears automatically when processing completes
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -1433,7 +1415,7 @@ def main():
         else:
             st.warning("⚠️ TF-IDF mode")
     with col_b:
-        st.info("📄 Output: DOCX with summaries")
+        st.info("📄 Output: DOCX + CSV")
     with col_c:
         st.success("📈 Max: All articles found")
     
@@ -1493,15 +1475,13 @@ def main():
     if 'results_generated' not in st.session_state:
         st.session_state.results_generated = False
         st.session_state.docx_data = None
+        st.session_state.csv_data = None
+        st.session_state.articles = None
         st.session_state.total_articles = 0
         st.session_state.total_processed = 0
         st.session_state.n_flavors = 0
         st.session_state.applied_threshold = 0.35
         st.session_state.flavors = None
-        st.session_state.query_terms = []
-        st.session_state.hypothesis_terms = []
-        st.session_state.query = ""
-        st.session_state.hypothesis = ""
     
     if generate_button:
         if not query.strip():
@@ -1514,17 +1494,14 @@ def main():
             # Reset state for new search
             st.session_state.results_generated = False
             st.session_state.docx_data = None
+            st.session_state.csv_data = None
             
             # Store the threshold used
             st.session_state.applied_threshold = relevance_threshold
-            st.session_state.query = query
-            st.session_state.hypothesis = hypothesis
             
             # Extract dynamic terms from query and hypothesis
             query_terms = extract_key_terms_from_query(query)
             hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
-            st.session_state.query_terms = query_terms
-            st.session_state.hypothesis_terms = hypothesis_terms
             
             st.info(f"📝 Extracted {len(query_terms)} terms from search strategy")
             if query_terms:
@@ -1563,6 +1540,9 @@ def main():
                 st.info("💡 Try reducing the relevance threshold to include more articles.")
                 st.stop()
             
+            # Store articles for CSV export
+            st.session_state.articles = articles
+            
             with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
                 flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
                 st.session_state.flavors = flavors
@@ -1583,19 +1563,25 @@ def main():
                 docx_bytes.seek(0)
                 
                 st.session_state.docx_data = docx_bytes
-                st.session_state.results_generated = True
+            
+            # Create CSV export
+            with st.spinner("📊 Creating CSV export..."):
+                csv_data = export_articles_to_csv(articles)
+                st.session_state.csv_data = csv_data
+            
+            st.session_state.results_generated = True
             
             elapsed_time = time.time() - start_time
             st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
             
             # Success notification with balloons
             st.balloons()
-            st.success("🎉 Processing complete! Your document is ready for download below.")
+            st.success("🎉 Processing complete! Your documents are ready for download below.")
     
     # Always show download section if results are generated
-    if st.session_state.results_generated and st.session_state.docx_data is not None:
+    if st.session_state.results_generated:
         st.markdown("---")
-        st.markdown("## 📥 Download Your Document")
+        st.markdown("## 📥 Download Your Documents")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -1607,24 +1593,40 @@ def main():
         with col4:
             st.metric("Large flavors", st.session_state.n_flavors)
         
-        # Create filename with timestamp
-        filename = f"flavors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        # Two-column layout for download buttons
+        col_left, col_right = st.columns(2)
         
-        # Prominent download button
-        st.markdown("### 👇 Click the button below to save the document to your computer")
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        col_left, col_center, col_right = st.columns([1, 2, 1])
-        with col_center:
-            st.download_button(
-                label="💾 DOWNLOAD FLAVORS DOCUMENT (DOCX)",
-                data=st.session_state.docx_data,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-                type="primary"
-            )
+        with col_left:
+            st.markdown("### 📄 Flavors Document (DOCX)")
+            if st.session_state.docx_data is not None:
+                st.download_button(
+                    label="💾 DOWNLOAD FLAVORS (DOCX)",
+                    data=st.session_state.docx_data,
+                    file_name=f"flavors_{timestamp}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    type="primary"
+                )
+                st.caption(f"📄 File: flavors_{timestamp}.docx")
         
-        st.info(f"💾 **File will be saved as:** {filename}")
+        with col_right:
+            st.markdown("### 📊 Article Data (CSV)")
+            if st.session_state.csv_data is not None:
+                st.download_button(
+                    label="📊 DOWNLOAD ARTICLES (CSV)",
+                    data=st.session_state.csv_data,
+                    file_name=f"articles_{timestamp}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    type="secondary"
+                )
+                st.caption(f"📊 File: articles_{timestamp}.csv | Includes all article metadata, relevance scores, and outcomes")
+        
+        # Show article count in CSV
+        if st.session_state.articles:
+            st.info(f"📊 CSV contains {len(st.session_state.articles)} articles with {len(st.session_state.articles[0].keys()) if st.session_state.articles else 0} fields each")
         
         # Option to start new search
         st.markdown("---")
@@ -1633,6 +1635,8 @@ def main():
             if st.button("🔄 Start New Search", use_container_width=True):
                 st.session_state.results_generated = False
                 st.session_state.docx_data = None
+                st.session_state.csv_data = None
+                st.session_state.articles = None
                 st.session_state.flavors = None
                 st.rerun()
         
@@ -1643,6 +1647,15 @@ def main():
             - Articles with relevance ≥ {st.session_state.applied_threshold:.2f}: {st.session_state.total_articles}
             - Large flavors generated: {st.session_state.n_flavors}
             
+            **Download Options:**
+            1. **FLAVORS (DOCX)**: Thematic paragraphs for Introduction and Discussion sections
+            2. **ARTICLES (CSV)**: Complete article data including:
+               - Bibliographic information (PMID, title, authors, journal, DOI)
+               - Analysis results (study type, quality score, evidence strength)
+               - Relevance scores (search + hypothesis)
+               - Extracted outcomes and numeric results
+               - Abstract preview
+            
             **How to adjust results:**
             - If you get **too few articles** (<15), **reduce the relevance threshold** (e.g., 0.25-0.30)
             - If you get **too many articles** (>200), **increase the threshold** (e.g., 0.45-0.50)
@@ -1651,25 +1664,16 @@ def main():
             **Document Structure:**
             1. **FLAVORS FOR INTRODUCTION**: Extended paragraphs (5+ lines) with embedded citations
             2. **FLAVORS FOR DISCUSSION**: Extended paragraphs (5+ lines) with embedded citations
-            
-            **Key Features:**
-            - **🎯 Aspect**: The main characteristic that defines this group of studies
-            - **🔍 Difference**: What makes this flavor unique compared to others
-            - **Exclusive assignment**: Each article appears in only one flavor
-            - **Dynamic entity extraction**: Terms extracted from YOUR search and hypothesis
-            - **No hardcoded examples**: All content generated from your actual articles
-            - **Robust fallback**: BioBERT → SBERT → TF-IDF automatic fallback chain
-            - **All articles processed**: No artificial limit on number of articles
             """)
     
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v15.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v16.0<br>
             BioBERT → SBERT → TF-IDF Fallback | Dynamic Entity Extraction | No Hardcoded Examples<br>
             All articles processed | 3-4 large flavors with ~15 references each | English output<br>
-            <strong>✅ Shows flavor preview | Auto-download ready</strong>
+            <strong>✅ CSV Export Available | DOCX + CSV Dual Download</strong>
         </div>
         """,
         unsafe_allow_html=True
