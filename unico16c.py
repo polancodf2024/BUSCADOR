@@ -77,7 +77,7 @@ except:
 st.set_page_config(
     page_title="PubMed AI Analyzer - Advanced Flavor Generator",
     page_icon="🧠",
-    layout="centered"
+    layout="wide"
 )
 
 # ============================================================================
@@ -1335,6 +1335,62 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     
     return doc
 
+def display_flavors_preview(flavors):
+    """Display a preview of the generated flavors in the UI"""
+    st.markdown("---")
+    st.markdown("## 🎨 Generated Flavors")
+    st.markdown("Below are the thematic groups (flavors) discovered from your articles:")
+    
+    total_flavors = 0
+    for category_name, flavor_list in flavors.items():
+        if not flavor_list:
+            continue
+        
+        total_flavors += len(flavor_list)
+        
+        # Category header
+        category_title = category_name.replace('_', ' ').title()
+        st.markdown(f"### 📂 {category_title}")
+        
+        for i, flavor in enumerate(flavor_list, 1):
+            # Create an expander for each flavor
+            with st.expander(f"🔹 Flavor {i}: {flavor['name']} ({flavor['n_articles']} articles)", expanded=(i==1)):
+                # Display flavor details
+                col1, col2 = st.columns(2)
+                with col1:
+                    aspect, difference = determine_flavor_aspect_and_difference(
+                        flavor.get('representative_articles', flavor['articles'][:5]),
+                        flavor['name'],
+                        [],
+                        []
+                    )
+                    st.markdown(f"**🎯 Aspect:** {aspect}")
+                    st.markdown(f"**🔍 Difference:** {difference}")
+                
+                with col2:
+                    st.markdown(f"**📊 Articles in this flavor:** {flavor['n_articles']}")
+                    st.markdown(f"**📚 Representative articles:**")
+                    for j, article in enumerate(flavor.get('representative_articles', [])[:3], 1):
+                        title = article.get('title', 'No title')[:80]
+                        st.markdown(f"   {j}. {title}...")
+                
+                # Show sample articles
+                st.markdown("**📄 Sample articles in this flavor:**")
+                sample_data = []
+                for article in flavor.get('articles', [])[:5]:
+                    sample_data.append({
+                        'Title': article.get('title', 'No title')[:100],
+                        'Study Type': article.get('study_types', 'N/A'),
+                        'Quality Score': article.get('quality_score', 0),
+                        'PMID': article.get('pmid', 'N/A')
+                    })
+                if sample_data:
+                    df_sample = pd.DataFrame(sample_data)
+                    st.dataframe(df_sample, use_container_width=True)
+    
+    st.info(f"✅ Total flavors generated: {total_flavors}")
+    return total_flavors
+
 # ============================================================================
 # MAIN APPLICATION
 # ============================================================================
@@ -1349,7 +1405,7 @@ def main():
     else:
         st.warning("⚠️ Advanced embeddings unavailable - Using TF-IDF based methods")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | Auto-download ready")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -1433,14 +1489,19 @@ def main():
     
     generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
     
-    if 'docx_generated' not in st.session_state:
-        st.session_state.docx_generated = False
+    # Initialize session state
+    if 'results_generated' not in st.session_state:
+        st.session_state.results_generated = False
         st.session_state.docx_data = None
         st.session_state.total_articles = 0
         st.session_state.total_processed = 0
         st.session_state.n_flavors = 0
         st.session_state.applied_threshold = 0.35
-        st.session_state.auto_download_triggered = False
+        st.session_state.flavors = None
+        st.session_state.query_terms = []
+        st.session_state.hypothesis_terms = []
+        st.session_state.query = ""
+        st.session_state.hypothesis = ""
     
     if generate_button:
         if not query.strip():
@@ -1450,15 +1511,20 @@ def main():
         else:
             start_time = time.time()
             
-            # Reset auto-download flag
-            st.session_state.auto_download_triggered = False
+            # Reset state for new search
+            st.session_state.results_generated = False
+            st.session_state.docx_data = None
             
             # Store the threshold used
             st.session_state.applied_threshold = relevance_threshold
+            st.session_state.query = query
+            st.session_state.hypothesis = hypothesis
             
-            # Extract dynamic terms from query and hypothesis - NO HARDCODED TERMS
+            # Extract dynamic terms from query and hypothesis
             query_terms = extract_key_terms_from_query(query)
             hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
+            st.session_state.query_terms = query_terms
+            st.session_state.hypothesis_terms = hypothesis_terms
             
             st.info(f"📝 Extracted {len(query_terms)} terms from search strategy")
             if query_terms:
@@ -1486,7 +1552,6 @@ def main():
             with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
                 articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
                 
-                # Apply filter with selected threshold
                 st.markdown("---")
                 st.subheader("🔍 Relevance Filter Results")
                 filtered_articles = filter_articles_by_relevance(articles, relevance_threshold)
@@ -1500,9 +1565,15 @@ def main():
             
             with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
                 flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
+                st.session_state.flavors = flavors
             
             total_flavors = sum(len(flavor_list) for flavor_list in flavors.values())
-            st.success(f"✅ Generated {total_flavors} large flavors from {len(articles)} articles")
+            st.session_state.n_flavors = total_flavors
+            st.session_state.total_articles = len(articles)
+            st.session_state.total_processed = len(id_list) if id_list else 0
+            
+            # Display flavors preview
+            display_flavors_preview(flavors)
             
             with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
                 doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold, query_terms, hypothesis_terms)
@@ -1512,27 +1583,19 @@ def main():
                 docx_bytes.seek(0)
                 
                 st.session_state.docx_data = docx_bytes
-                st.session_state.docx_generated = True
-                st.session_state.total_articles = len(articles)
-                st.session_state.total_processed = len(id_list) if id_list else 0
-                st.session_state.n_flavors = total_flavors
-                st.session_state.auto_download_triggered = True
+                st.session_state.results_generated = True
             
             elapsed_time = time.time() - start_time
             st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
             
-            # Auto-expand the download section
-            st.success("🎉 Processing complete! Your document is ready for download.")
-    
-    # Always show download button if document is generated
-    if st.session_state.docx_generated and st.session_state.docx_data is not None:
-        st.markdown("---")
-        st.markdown("### 📥 Download Your Document")
-        
-        # Show auto-download notification if just completed
-        if st.session_state.auto_download_triggered:
+            # Success notification with balloons
             st.balloons()
-            st.success("✅ Document ready! Click the button below to download.")
+            st.success("🎉 Processing complete! Your document is ready for download below.")
+    
+    # Always show download section if results are generated
+    if st.session_state.results_generated and st.session_state.docx_data is not None:
+        st.markdown("---")
+        st.markdown("## 📥 Download Your Document")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -1547,11 +1610,13 @@ def main():
         # Create filename with timestamp
         filename = f"flavors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
         
-        # Use columns to center the download button prominently
+        # Prominent download button
+        st.markdown("### 👇 Click the button below to save the document to your computer")
+        
         col_left, col_center, col_right = st.columns([1, 2, 1])
         with col_center:
             st.download_button(
-                label="📥 CLICK HERE TO DOWNLOAD YOUR FLAVORS DOCUMENT",
+                label="💾 DOWNLOAD FLAVORS DOCUMENT (DOCX)",
                 data=st.session_state.docx_data,
                 file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1559,8 +1624,17 @@ def main():
                 type="primary"
             )
         
-        # Add a helpful message
-        st.info(f"💾 **File saved as:** {filename}")
+        st.info(f"💾 **File will be saved as:** {filename}")
+        
+        # Option to start new search
+        st.markdown("---")
+        col_reset1, col_reset2, col_reset3 = st.columns([1, 1, 1])
+        with col_reset2:
+            if st.button("🔄 Start New Search", use_container_width=True):
+                st.session_state.results_generated = False
+                st.session_state.docx_data = None
+                st.session_state.flavors = None
+                st.rerun()
         
         with st.expander("📖 Usage Guide"):
             st.markdown(f"""
@@ -1586,17 +1660,7 @@ def main():
             - **No hardcoded examples**: All content generated from your actual articles
             - **Robust fallback**: BioBERT → SBERT → TF-IDF automatic fallback chain
             - **All articles processed**: No artificial limit on number of articles
-            
-            These elements allow quick identification of each flavor's value proposition.
             """)
-        
-        # Add a button to start a new search
-        st.markdown("---")
-        if st.button("🔄 Start New Search", use_container_width=True):
-            st.session_state.docx_generated = False
-            st.session_state.docx_data = None
-            st.session_state.auto_download_triggered = False
-            st.rerun()
     
     st.markdown("---")
     st.markdown(
@@ -1605,7 +1669,7 @@ def main():
             🧠 PubMed AI Analyzer - Advanced Flavor Generator v15.0<br>
             BioBERT → SBERT → TF-IDF Fallback | Dynamic Entity Extraction | No Hardcoded Examples<br>
             All articles processed | 3-4 large flavors with ~15 references each | English output<br>
-            <strong>✅ Auto-download: Download button appears automatically when processing completes</strong>
+            <strong>✅ Shows flavor preview | Auto-download ready</strong>
         </div>
         """,
         unsafe_allow_html=True
