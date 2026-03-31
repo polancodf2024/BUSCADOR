@@ -640,6 +640,10 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     """Calculate relevance to search and hypothesis using embeddings"""
     embedder = get_embedder()
     if not embedder or not AI_EMBEDDINGS_AVAILABLE:
+        for article in articles:
+            article['relevance_score'] = 0.5
+            article['search_relevance'] = 0.5
+            article['hypothesis_relevance'] = 0.5
         return articles
     
     try:
@@ -672,67 +676,71 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     return articles
 
 def filter_articles_by_relevance(articles, relevance_threshold):
-    filtered = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
-    return filtered
-
-def generate_descriptive_name(articles, query_terms, hypothesis_terms):
-    """Generate a descriptive name based on actual content - NO HARDCODED TERMS"""
+    """Filter articles by relevance threshold with detailed reporting"""
     if not articles:
-        return "Clinical Studies"
+        return []
     
-    all_keywords = []
-    all_outcomes = []
-    all_entities = []
-    
+    # Create list with scores
+    articles_with_scores = []
     for a in articles:
-        keywords = a.get('top_keywords', '').split(', ')
-        all_keywords.extend(keywords)
-        outcomes = a.get('all_outcomes', [])
-        all_outcomes.extend(outcomes)
+        score = a.get('relevance_score', 0)
+        articles_with_scores.append((score, a))
+    
+    # Sort by relevance (highest first)
+    articles_with_scores.sort(key=lambda x: x[0], reverse=True)
+    
+    # Filter by threshold
+    filtered = [a for score, a in articles_with_scores if score >= relevance_threshold]
+    
+    # Show detailed statistics
+    scores = [score for score, _ in articles_with_scores]
+    filtered_scores = [score for score, _ in articles_with_scores if score >= relevance_threshold]
+    
+    st.write(f"**📊 Relevance Filter Statistics:**")
+    st.write(f"   - Threshold: {relevance_threshold}")
+    st.write(f"   - Total articles: {len(articles)}")
+    st.write(f"   - Filtered articles: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
+    
+    if scores:
+        st.write(f"   - Min score: {min(scores):.3f}")
+        st.write(f"   - Max score: {max(scores):.3f}")
+        st.write(f"   - Mean score: {np.mean(scores):.3f}")
+        st.write(f"   - Median score: {np.median(scores):.3f}")
+    
+    if filtered_scores:
+        st.write(f"   - Filtered min: {min(filtered_scores):.3f}")
+        st.write(f"   - Filtered max: {max(filtered_scores):.3f}")
+        st.write(f"   - Filtered mean: {np.mean(filtered_scores):.3f}")
+    
+    # Show top 5 most relevant articles
+    if articles_with_scores:
+        st.write("**🏆 Top 5 most relevant articles:**")
+        for i, (score, article) in enumerate(articles_with_scores[:5]):
+            title = article.get('title', 'No title')[:80]
+            st.write(f"   {i+1}. [{score:.3f}] {title}...")
+    
+    # Suggest alternative thresholds
+    if scores and len(scores) > 10:
+        p30 = np.percentile(scores, 30)
+        p40 = np.percentile(scores, 40)
+        p50 = np.percentile(scores, 50)
+        p60 = np.percentile(scores, 60)
+        st.write(f"**💡 Suggested thresholds:**")
+        st.write(f"   - {p30:.3f} (includes 70% of articles)")
+        st.write(f"   - {p40:.3f} (includes 60% of articles)")
+        st.write(f"   - {p50:.3f} (includes 50% of articles)")
+        st.write(f"   - {p60:.3f} (includes 40% of articles)")
+    
+    # If very few articles, suggest reducing threshold
+    if len(filtered) < 5 and len(articles) >= 10:
+        st.warning(f"⚠️ Only {len(filtered)} articles meet threshold (minimum 5 needed). Consider reducing relevance threshold.")
         
-        entities = a.get('entities', [])
-        for entity, etype, score in entities:
-            all_entities.append(entity)
+        # Use all articles as fallback if too few
+        if len(filtered) < 3:
+            st.info(f"💡 Using all {len(articles)} articles to generate flavors (filter bypassed).")
+            return articles
     
-    outcome_counts = Counter(all_outcomes)
-    entity_counts = Counter(all_entities)
-    
-    name = ""
-    
-    # Use entities from query/hypothesis if available
-    if entity_counts:
-        top_entity = entity_counts.most_common(1)[0][0]
-        if len(top_entity) > 3:
-            name = top_entity.title()
-    
-    if not name and outcome_counts:
-        top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
-        name = f"Studies on {', '.join(top_outcomes)}"
-    
-    if not name and all_keywords:
-        name = all_keywords[0].title() if all_keywords else "Research"
-    
-    if not name:
-        name = "Clinical Studies"
-    
-    return name
-
-def generate_citation_text(article, index):
-    authors = article.get('authors', 'Author')
-    year = article.get('pubdate', 'n.d.')[:4] if article.get('pubdate') else 'n.d.'
-    title = article.get('title', 'No title')
-    journal = article.get('journal', 'Journal')
-    pmid = article.get('pmid', '')
-    
-    citation = f"{index}. {authors}. {title}. {journal}. {year}"
-    if pmid and pmid != 'N/A':
-        citation += f"; PMID: {pmid}"
-    
-    return citation
-
-# ============================================================================
-# CLUSTERING FUNCIONES - BASADAS EN DATOS REALES
-# ============================================================================
+    return filtered
 
 def extract_topic_keywords_tfidf(articles, n_keywords=5):
     if not articles or len(articles) < 2:
@@ -1043,6 +1051,48 @@ def assign_articles_to_best_flavor(flavors):
     
     return flavors
 
+def generate_descriptive_name(articles, query_terms, hypothesis_terms):
+    """Generate a descriptive name based on actual content - NO HARDCODED TERMS"""
+    if not articles:
+        return "Clinical Studies"
+    
+    all_keywords = []
+    all_outcomes = []
+    all_entities = []
+    
+    for a in articles:
+        keywords = a.get('top_keywords', '').split(', ')
+        all_keywords.extend(keywords)
+        outcomes = a.get('all_outcomes', [])
+        all_outcomes.extend(outcomes)
+        
+        entities = a.get('entities', [])
+        for entity, etype, score in entities:
+            all_entities.append(entity)
+    
+    outcome_counts = Counter(all_outcomes)
+    entity_counts = Counter(all_entities)
+    
+    name = ""
+    
+    # Use entities from query/hypothesis if available
+    if entity_counts:
+        top_entity = entity_counts.most_common(1)[0][0]
+        if len(top_entity) > 3:
+            name = top_entity.title()
+    
+    if not name and outcome_counts:
+        top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
+        name = f"Studies on {', '.join(top_outcomes)}"
+    
+    if not name and all_keywords:
+        name = all_keywords[0].title() if all_keywords else "Research"
+    
+    if not name:
+        name = "Clinical Studies"
+    
+    return name
+
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
     """Generate all flavors from multiple perspectives - NO HARDCODED TERMS"""
     if not articles:
@@ -1089,6 +1139,19 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
             flavors_by_category['merged_clusters'].append(flavor)
     
     return flavors_by_category
+
+def generate_citation_text(article, index):
+    authors = article.get('authors', 'Author')
+    year = article.get('pubdate', 'n.d.')[:4] if article.get('pubdate') else 'n.d.'
+    title = article.get('title', 'No title')
+    journal = article.get('journal', 'Journal')
+    pmid = article.get('pmid', '')
+    
+    citation = f"{index}. {authors}. {title}. {journal}. {year}"
+    if pmid and pmid != 'N/A':
+        citation += f"; PMID: {pmid}"
+    
+    return citation
 
 def generate_flavor_summary_with_citations(articles, flavor_name, section, query_terms, hypothesis_terms):
     """Generate a summary paragraph - FULLY DYNAMIC, NO HARDCODED TERMS"""
@@ -1298,7 +1361,7 @@ def main():
     - 📝 **Extended summaries with embedded citations**: Paragraphs of 5-7+ lines
     - 🎯 **Aspect + Difference**: Each flavor includes header with main characteristic and differential value
     - 📚 **Introduction/Discussion separation**: Section-specific paragraphs
-    - ⚙️ **Configurable relevance threshold**: Adjust filtering sensitivity
+    - ⚙️ **Configurable relevance threshold**: Adjust filtering sensitivity (REAL-TIME EFFECT)
     - 🔄 **Exclusive article assignment**: No article appears in multiple flavors
     - 📈 **All articles found**: No artificial limit, processes complete search results
     - 🌐 **English output**: All content generated in English
@@ -1344,11 +1407,11 @@ def main():
     with col_rel1:
         relevance_threshold = st.slider(
             "Relevance threshold (0 = less selective, 1 = more selective):",
-            min_value=0.2,
-            max_value=0.8,
+            min_value=0.0,
+            max_value=0.9,
             value=0.35,
             step=0.05,
-            help="Lower values include more articles. 0.35 is a good balance."
+            help="Lower values include more articles. 0.35 is a good balance. The filter is applied in real-time when you click GENERATE."
         )
     
     with col_rel2:
@@ -1375,6 +1438,7 @@ def main():
         st.session_state.total_articles = 0
         st.session_state.total_processed = 0
         st.session_state.n_flavors = 0
+        st.session_state.applied_threshold = 0.35
     
     if generate_button:
         if not query.strip():
@@ -1384,12 +1448,19 @@ def main():
         else:
             start_time = time.time()
             
+            # Store the threshold used
+            st.session_state.applied_threshold = relevance_threshold
+            
             # Extract dynamic terms from query and hypothesis - NO HARDCODED TERMS
             query_terms = extract_key_terms_from_query(query)
             hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
             
             st.info(f"📝 Extracted {len(query_terms)} terms from search strategy")
+            if query_terms:
+                st.write(f"   Query terms: {', '.join(query_terms[:10])}")
             st.info(f"📝 Extracted {len(hypothesis_terms)} terms from hypothesis")
+            if hypothesis_terms:
+                st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
             
             with st.spinner("🔍 Searching articles in PubMed..."):
                 id_list, total_count = search_pubmed(query.strip(), retmax=100000)
@@ -1410,25 +1481,16 @@ def main():
             with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
                 articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
                 
-                scores = [a.get('relevance_score', 0) for a in articles]
-                if scores:
-                    st.info(f"📊 Relevance distribution: min={min(scores):.2f}, max={max(scores):.2f}, mean={np.mean(scores):.2f}")
-                
+                # *** CORRECTED: Apply filter with selected threshold ***
+                st.markdown("---")
+                st.subheader("🔍 Relevance Filter Results")
                 filtered_articles = filter_articles_by_relevance(articles, relevance_threshold)
-                
-                st.info(f"📌 {len(filtered_articles)} articles with relevance ≥ {relevance_threshold} (out of {len(articles)} processed)")
-                
-                if len(filtered_articles) < 10:
-                    st.warning(f"⚠️ Only {len(filtered_articles)} articles meet threshold. Consider reducing relevance threshold.")
-                    
-                    if len(filtered_articles) < 5 and len(articles) >= 10:
-                        st.info("💡 Using all processed articles to generate flavors...")
-                        filtered_articles = articles
                 
                 articles = filtered_articles
             
             if len(articles) < 5:
-                st.error("❌ Not enough articles to generate flavors (minimum 5)")
+                st.error(f"❌ Not enough articles to generate flavors after filtering (minimum 5, got {len(articles)})")
+                st.info("💡 Try reducing the relevance threshold to include more articles.")
                 st.stop()
             
             with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
@@ -1457,12 +1519,14 @@ def main():
         st.markdown("---")
         st.markdown("### 📥 Generated Document")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Articles found", st.session_state.total_processed)
         with col2:
-            st.metric("Relevant articles", st.session_state.total_articles)
+            st.metric("After filtering", st.session_state.total_articles)
         with col3:
+            st.metric("Threshold used", f"{st.session_state.applied_threshold:.2f}")
+        with col4:
             st.metric("Large flavors", st.session_state.n_flavors)
         
         st.download_button(
@@ -1477,7 +1541,7 @@ def main():
             st.markdown(f"""
             **Execution Summary:**
             - Articles found in PubMed: {st.session_state.total_processed}
-            - Articles with relevance ≥ {relevance_threshold}: {st.session_state.total_articles}
+            - Articles with relevance ≥ {st.session_state.applied_threshold:.2f}: {st.session_state.total_articles}
             - Large flavors generated: {st.session_state.n_flavors}
             
             **How to adjust results:**
@@ -1505,9 +1569,10 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v14.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v15.0<br>
             BioBERT → SBERT → TF-IDF Fallback | Dynamic Entity Extraction | No Hardcoded Examples<br>
-            All articles processed | 3-4 large flavors with ~15 references each | English output
+            All articles processed | 3-4 large flavors with ~15 references each | English output<br>
+            <strong>✅ CORRECTED: Relevance filter now works with any threshold</strong>
         </div>
         """,
         unsafe_allow_html=True
