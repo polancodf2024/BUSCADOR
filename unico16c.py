@@ -18,6 +18,7 @@ import warnings
 import hashlib
 import paramiko
 import json
+from typing import List, Dict, Optional
 warnings.filterwarnings('ignore')
 
 # ============================================================================
@@ -378,6 +379,18 @@ class UserSessionManager:
         csv_buffer.seek(0)
         
         return csv_buffer.getvalue().encode('utf-8-sig')
+    
+    def get_session_info(self, session_id: str) -> Optional[Dict]:
+        """Obtener información de una sesión específica"""
+        df = self.remote.read_csv(self.sessions_file)
+        if df is None or df.empty:
+            return None
+        
+        session_data = df[df['session_id'] == session_id]
+        if session_data.empty:
+            return None
+        
+        return session_data.iloc[0].to_dict()
 
 
 # ============================================================================
@@ -1012,6 +1025,7 @@ def process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_m
     if session_manager:
         last_checkpoint = session_manager.get_last_checkpoint(session_id)
         start_block = 0
+        processed_pmids = set()
         
         if last_checkpoint:
             start_block = last_checkpoint['batch_number']
@@ -1020,26 +1034,51 @@ def process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_m
             existing_df = session_manager.get_session_articles(session_id)
             if not existing_df.empty:
                 all_articles = existing_df.to_dict('records')
+                processed_pmids = set(existing_df['pmid'].tolist())
+                st.info(f"📊 {len(processed_pmids)} artículos ya procesados encontrados")
+        else:
+            start_block = 0
+            processed_pmids = set()
     else:
         start_block = 0
+        processed_pmids = set()
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    initial_progress = start_block / total_blocks if total_blocks > 0 else 0
+    progress_bar.progress(initial_progress)
+    
     for block_num in range(start_block, total_blocks):
         start_idx = block_num * BLOCK_SIZE
         end_idx = min((block_num + 1) * BLOCK_SIZE, total_to_process)
+        
         block_ids = id_list[start_idx:end_idx]
         
-        status_text.text(f"📦 Procesando bloque {block_num + 1}/{total_blocks} (artículos {start_idx+1}-{end_idx})")
+        new_ids = [pid for pid in block_ids if pid not in processed_pmids]
         
-        block_articles = fetch_articles_details(block_ids, query_terms, hypothesis_terms)
+        if not new_ids:
+            status_text.text(f"⏭️ Bloque {block_num + 1} ya procesado completamente. Saltando...")
+            progress_bar.progress((block_num + 1) / total_blocks)
+            continue
+        
+        status_text.text(f"📦 Procesando bloque {block_num + 1}/{total_blocks} (artículos {start_idx+1}-{end_idx}, {len(new_ids)} nuevos)")
+        
+        block_articles = fetch_articles_details(new_ids, query_terms, hypothesis_terms)
         
         if session_manager and block_articles:
             session_manager.save_articles_batch(block_articles, session_id)
+            
+            for article in block_articles:
+                processed_pmids.add(article.get('pmid', ''))
+            
             session_manager.save_checkpoint(
-                session_id, block_num + 1, BLOCK_SIZE, 
-                start_idx, end_idx, len(block_articles)
+                session_id, 
+                block_num + 1,
+                BLOCK_SIZE, 
+                start_idx, 
+                end_idx, 
+                len(all_articles) + len(block_articles)
             )
         
         all_articles.extend(block_articles)
@@ -1819,51 +1858,6 @@ def display_flavors_preview(flavors):
     return total_flavors
 
 
-def display_session_exporter(session_manager):
-    """Mostrar opciones para exportar sesiones anteriores"""
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📤 Exportar sesión")
-    
-    user_sessions = session_manager.get_user_sessions()
-    if user_sessions.empty:
-        st.sidebar.info("No hay sesiones para exportar")
-        return
-    
-    session_options = {}
-    for _, session in user_sessions.iterrows():
-        session_id = session['session_id']
-        session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
-        session_options[session_name] = session_id
-    
-    selected_session_name = st.sidebar.selectbox(
-        "Seleccionar sesión:",
-        options=list(session_options.keys())
-    )
-    
-    if selected_session_name:
-        selected_session_id = session_options[selected_session_name]
-        stats = session_manager.get_session_stats(selected_session_id)
-        
-        st.sidebar.markdown(f"""
-        **Estadísticas:**
-        - 📄 Artículos: {stats['total_articles']}
-        - ⭐ Calidad media: {stats['avg_quality']:.1f}
-        - 💪 Evidencia fuerte: {stats['strong_evidence']}
-        - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
-        """)
-        
-        if st.sidebar.button("📥 Exportar esta sesión a CSV"):
-            csv_data = session_manager.export_session_to_csv(selected_session_id)
-            if csv_data:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                st.sidebar.download_button(
-                    label="💾 DESCARGAR CSV",
-                    data=csv_data,
-                    file_name=f"session_{selected_session_id[:8]}_{timestamp}.csv",
-                    mime="text/csv"
-                )
-
-
 # ============================================================================
 # MAIN APPLICATION
 # ============================================================================
@@ -1895,6 +1889,8 @@ def main():
     
     # Intentar conectar al almacenamiento remoto
     session_manager = None
+    selected_session_id = None
+    
     try:
         remote_storage = RemoteCSVStorage(
             host=st.secrets["remote_host"],
@@ -1912,11 +1908,49 @@ def main():
             del st.session_state.user_login
             st.rerun()
         
+        # --- NUEVO: Mostrar sesiones disponibles y permitir selección para uso ---
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📂 Seleccionar sesión para análisis")
+        
+        user_sessions = session_manager.get_user_sessions()
+        
+        if not user_sessions.empty:
+            session_options = {}
+            for _, session in user_sessions.iterrows():
+                session_id = session['session_id']
+                session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+                session_options[session_name] = session_id
+            
+            selected_session_name = st.sidebar.selectbox(
+                "Sesiones guardadas:",
+                options=["[NUEVA BÚSQUEDA]"] + list(session_options.keys()),
+                key="session_selector"
+            )
+            
+            if selected_session_name != "[NUEVA BÚSQUEDA]":
+                selected_session_id = session_options[selected_session_name]
+                st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:8]}...")
+                
+                # Mostrar estadísticas de la sesión
+                stats = session_manager.get_session_stats(selected_session_id)
+                st.sidebar.markdown(f"""
+                **📊 Estadísticas:**
+                - 📄 Artículos: {stats['total_articles']}
+                - ⭐ Calidad media: {stats['avg_quality']:.1f}
+                - 💪 Evidencia fuerte: {stats['strong_evidence']}
+                - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
+                """)
+        else:
+            st.sidebar.info("No hay sesiones guardadas. Realiza una nueva búsqueda.")
+        
+        # Mantener el exportador de sesiones existente
         display_session_exporter(session_manager)
         
     except Exception as e:
         st.warning(f"⚠️ No se pudo conectar al almacenamiento remoto: {e}")
-        st.info("💡 El programa funcionará sin guardado remoto. Los artículos no se conservarán entre sesiones.")
+        st.info("💡 El programa funcionará sin guardado remoto.")
+        session_manager = None
+        selected_session_id = None
     
     # Display embedder status
     if USE_FALLBACK:
@@ -1962,54 +1996,94 @@ def main():
     st.markdown("---")
     st.markdown("### 📝 Configuration")
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        query = st.text_area(
-            "**PubMed search strategy:**",
-            value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab])",
+    # Si hay una sesión seleccionada, mostrar la información de la sesión
+    if selected_session_id and session_manager:
+        session_info = session_manager.get_session_info(selected_session_id)
+        if session_info:
+            st.info(f"""
+            **📌 Usando sesión guardada:** {selected_session_id[:8]}...
+            - **Búsqueda original:** {session_info.get('query', 'N/A')[:200]}...
+            - **Hipótesis:** {session_info.get('hypothesis', 'N/A')[:200]}...
+            - **Threshold de relevancia:** {session_info.get('relevance_threshold', 0.35)}
+            - **Artículos totales:** {session_info.get('total_processed', 0)}
+            """)
+            
+            # Mostrar campos de configuración pero deshabilitados (solo lectura)
+            query = st.text_area(
+                "**PubMed search strategy (from saved session):**",
+                value=session_info.get('query', ''),
+                height=100,
+                disabled=True
+            )
+            
+            relevance_threshold = st.slider(
+                "Relevance threshold (from saved session):",
+                min_value=0.0,
+                max_value=0.9,
+                value=float(session_info.get('relevance_threshold', 0.35)),
+                step=0.05,
+                disabled=True
+            )
+            
+            hypothesis = st.text_area(
+                "**📌 Hypothesis (from saved session):**",
+                value=session_info.get('hypothesis', ''),
+                height=100,
+                disabled=True
+            )
+            
+            generate_button = st.button("🚀 GENERATE FLAVORS FROM SAVED SESSION", type="primary", use_container_width=True)
+            
+    else:
+        # Configuración normal para nueva búsqueda
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            query = st.text_area(
+                "**PubMed search strategy:**",
+                value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab])",
+                height=100,
+                help="Use MeSH syntax for better results. Terms will be extracted automatically."
+            )
+        
+        with col2:
+            st.info("""
+            **Article limit:**
+            - All articles found in PubMed will be processed
+            - No maximum limit set
+            - Processing time depends on result size
+            """)
+        
+        st.markdown("### ⚙️ Relevance filtering")
+        col_rel1, col_rel2 = st.columns(2)
+        
+        with col_rel1:
+            relevance_threshold = st.slider(
+                "Relevance threshold (0 = less selective, 1 = more selective):",
+                min_value=0.0,
+                max_value=0.9,
+                value=0.35,
+                step=0.05,
+                help="Lower values include more articles. 0.35 is a good balance. The filter is applied in real-time when you click GENERATE."
+            )
+        
+        with col_rel2:
+            st.info(f"""
+            **Threshold effect:**
+            - {relevance_threshold:.2f}: Current
+            - 0.20-0.30: Includes ~70-80% of articles
+            - 0.35-0.45: Includes ~40-60% of articles (recommended)
+            - 0.50+: Includes ~20-30% of articles (very selective)
+            """)
+        
+        hypothesis = st.text_area(
+            "**📌 Hypothesis (natural language):**",
+            value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes, with distinct patterns based on timing of presentation and location within the ventricular wall.",
             height=100,
-            help="Use MeSH syntax for better results. Terms will be extracted automatically."
+            help="Write your hypothesis in natural language. Terms will be extracted automatically."
         )
-    
-    with col2:
-        st.info("""
-        **Article limit:**
-        - All articles found in PubMed will be processed
-        - No maximum limit set
-        - Processing time depends on result size
-        """)
-    
-    st.markdown("### ⚙️ Relevance filtering")
-    col_rel1, col_rel2 = st.columns(2)
-    
-    with col_rel1:
-        relevance_threshold = st.slider(
-            "Relevance threshold (0 = less selective, 1 = more selective):",
-            min_value=0.0,
-            max_value=0.9,
-            value=0.35,
-            step=0.05,
-            help="Lower values include more articles. 0.35 is a good balance. The filter is applied in real-time when you click GENERATE."
-        )
-    
-    with col_rel2:
-        st.info(f"""
-        **Threshold effect:**
-        - {relevance_threshold:.2f}: Current
-        - 0.20-0.30: Includes ~70-80% of articles
-        - 0.35-0.45: Includes ~40-60% of articles (recommended)
-        - 0.50+: Includes ~20-30% of articles (very selective)
-        """)
-    
-    hypothesis = st.text_area(
-        "**📌 Hypothesis (natural language):**",
-        value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes, with distinct patterns based on timing of presentation and location within the ventricular wall.",
-        height=100,
-        help="Write your hypothesis in natural language. Terms will be extracted automatically."
-    )
-    
-    generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
+        
+        generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
     
     # Initialize session state
     if 'results_generated' not in st.session_state:
@@ -2025,102 +2099,173 @@ def main():
         st.session_state.session_id = None
     
     if generate_button:
-        if not query.strip():
-            st.warning("⚠️ Please enter a search strategy")
-        elif not hypothesis.strip():
-            st.warning("⚠️ Please enter your hypothesis")
-        else:
-            start_time = time.time()
+        if selected_session_id and session_manager:
+            # --- NUEVO: Usar artículos de sesión existente ---
+            st.info(f"📂 Cargando artículos de la sesión guardada: {selected_session_id[:8]}...")
             
-            # Reset state for new search
-            st.session_state.results_generated = False
-            st.session_state.docx_data = None
-            st.session_state.csv_data = None
-            st.session_state.applied_threshold = relevance_threshold
+            # Cargar artículos de la sesión
+            articles_df = session_manager.get_session_articles(selected_session_id)
             
-            # Extract dynamic terms from query and hypothesis
+            if articles_df.empty:
+                st.error("❌ La sesión seleccionada no tiene artículos")
+                st.stop()
+            
+            # Convertir DataFrame a lista de diccionarios
+            articles = articles_df.to_dict('records')
+            
+            # Reconstruir los términos de búsqueda e hipótesis desde la sesión
+            session_info = session_manager.get_session_info(selected_session_id)
+            query = session_info.get('query', '')
+            hypothesis = session_info.get('hypothesis', '')
+            relevance_threshold = float(session_info.get('relevance_threshold', 0.35))
+            
+            st.info(f"✅ Cargados {len(articles)} artículos de la sesión")
+            
+            # Extraer términos dinámicos
             query_terms = extract_key_terms_from_query(query)
             hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
             
-            st.info(f"📝 Extracted {len(query_terms)} terms from search strategy")
-            if query_terms:
-                st.write(f"   Query terms: {', '.join(query_terms[:10])}")
-            st.info(f"📝 Extracted {len(hypothesis_terms)} terms from hypothesis")
-            if hypothesis_terms:
-                st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
+            st.info(f"📝 Extraídos {len(query_terms)} términos de la búsqueda y {len(hypothesis_terms)} de la hipótesis")
             
-            with st.spinner("🔍 Searching articles in PubMed..."):
-                id_list, total_count = search_pubmed(query.strip(), retmax=1000)
-                
-                if not id_list:
-                    st.error("❌ No articles found")
-                    st.stop()
-                
-                st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles...")
-                
-                # Crear sesión si hay almacenamiento remoto
-                if session_manager:
-                    session_id = session_manager.create_session(query, hypothesis, relevance_threshold)
-                    st.session_state.session_id = session_id
-                    articles = process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_manager, session_id)
-                    session_manager.update_session(session_id, 'completed', total_found=total_count, total_processed=len(articles))
-                else:
-                    articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
-                    st.session_state.session_id = None
-            
-            if not articles:
-                st.error("❌ Could not process any articles")
-                st.stop()
-            
-            st.success(f"✅ Processed {len(articles)} articles")
-            
-            with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
-                articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
-                
-                st.markdown("---")
-                st.subheader("🔍 Relevance Filter Results")
-                filtered_articles = filter_articles_by_relevance(articles, relevance_threshold)
-                
-                articles = filtered_articles
+            # Aplicar filtro de relevancia si es necesario
+            filtered_articles = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
+            st.info(f"📊 Filtro de relevancia ({relevance_threshold}): {len(filtered_articles)} de {len(articles)} artículos")
+            articles = filtered_articles
             
             if len(articles) < 5:
-                st.error(f"❌ Not enough articles to generate flavors after filtering (minimum 5, got {len(articles)})")
-                st.info("💡 Try reducing the relevance threshold to include more articles.")
+                st.error(f"❌ No hay suficientes artículos después del filtro (mínimo 5, hay {len(articles)})")
+                st.info("💡 Puedes intentar con otra sesión que tenga más artículos")
                 st.stop()
             
-            st.session_state.articles = articles
-            
-            with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
+            # Generar flavors
+            with st.spinner("🔍 Generando flavors desde artículos guardados..."):
                 flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
-                st.session_state.flavors = flavors
             
-            total_flavors = sum(len(flavor_list) for flavor_list in flavors.values())
-            st.session_state.n_flavors = total_flavors
+            # Guardar en session_state
+            st.session_state.articles = articles
+            st.session_state.flavors = flavors
             st.session_state.total_articles = len(articles)
-            st.session_state.total_processed = len(id_list) if id_list else 0
+            st.session_state.total_processed = len(articles_df)
+            st.session_state.applied_threshold = relevance_threshold
             
-            display_flavors_preview(flavors)
+            # Mostrar preview
+            total_flavors = display_flavors_preview(flavors)
+            st.session_state.n_flavors = total_flavors
             
-            with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
+            # Generar documento
+            with st.spinner("📄 Creando documento con flavors..."):
                 doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold, query_terms, hypothesis_terms)
-                
                 docx_bytes = BytesIO()
                 doc.save(docx_bytes)
                 docx_bytes.seek(0)
-                
                 st.session_state.docx_data = docx_bytes
             
-            with st.spinner("📊 Creating CSV export..."):
+            # Generar CSV
+            with st.spinner("📊 Creando archivo CSV..."):
                 csv_data = export_articles_to_csv(articles)
                 st.session_state.csv_data = csv_data
             
             st.session_state.results_generated = True
+            st.success("✅ Flavors generados exitosamente desde la sesión guardada!")
             
-            elapsed_time = time.time() - start_time
-            st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
-            
-            st.balloons()
-            st.success("🎉 Processing complete! Your documents are ready for download below.")
+        else:
+            # --- Código existente para nueva búsqueda ---
+            if not query.strip():
+                st.warning("⚠️ Please enter a search strategy")
+            elif not hypothesis.strip():
+                st.warning("⚠️ Please enter your hypothesis")
+            else:
+                start_time = time.time()
+                
+                # Reset state for new search
+                st.session_state.results_generated = False
+                st.session_state.docx_data = None
+                st.session_state.csv_data = None
+                st.session_state.applied_threshold = relevance_threshold
+                
+                # Extract dynamic terms from query and hypothesis
+                query_terms = extract_key_terms_from_query(query)
+                hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
+                
+                st.info(f"📝 Extracted {len(query_terms)} terms from search strategy")
+                if query_terms:
+                    st.write(f"   Query terms: {', '.join(query_terms[:10])}")
+                st.info(f"📝 Extracted {len(hypothesis_terms)} terms from hypothesis")
+                if hypothesis_terms:
+                    st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
+                
+                with st.spinner("🔍 Searching articles in PubMed..."):
+                    id_list, total_count = search_pubmed(query.strip(), retmax=1000)
+                    
+                    if not id_list:
+                        st.error("❌ No articles found")
+                        st.stop()
+                    
+                    st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles...")
+                    
+                    # Crear sesión si hay almacenamiento remoto
+                    if session_manager:
+                        session_id = session_manager.create_session(query, hypothesis, relevance_threshold)
+                        st.session_state.session_id = session_id
+                        articles = process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_manager, session_id)
+                        session_manager.update_session(session_id, 'completed', total_found=total_count, total_processed=len(articles))
+                    else:
+                        articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
+                        st.session_state.session_id = None
+                
+                if not articles:
+                    st.error("❌ Could not process any articles")
+                    st.stop()
+                
+                st.success(f"✅ Processed {len(articles)} articles")
+                
+                with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
+                    articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
+                    
+                    st.markdown("---")
+                    st.subheader("🔍 Relevance Filter Results")
+                    filtered_articles = filter_articles_by_relevance(articles, relevance_threshold)
+                    
+                    articles = filtered_articles
+                
+                if len(articles) < 5:
+                    st.error(f"❌ Not enough articles to generate flavors after filtering (minimum 5, got {len(articles)})")
+                    st.info("💡 Try reducing the relevance threshold to include more articles.")
+                    st.stop()
+                
+                st.session_state.articles = articles
+                
+                with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
+                    flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
+                    st.session_state.flavors = flavors
+                
+                total_flavors = sum(len(flavor_list) for flavor_list in flavors.values())
+                st.session_state.n_flavors = total_flavors
+                st.session_state.total_articles = len(articles)
+                st.session_state.total_processed = len(id_list) if id_list else 0
+                
+                display_flavors_preview(flavors)
+                
+                with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
+                    doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold, query_terms, hypothesis_terms)
+                    
+                    docx_bytes = BytesIO()
+                    doc.save(docx_bytes)
+                    docx_bytes.seek(0)
+                    
+                    st.session_state.docx_data = docx_bytes
+                
+                with st.spinner("📊 Creating CSV export..."):
+                    csv_data = export_articles_to_csv(articles)
+                    st.session_state.csv_data = csv_data
+                
+                st.session_state.results_generated = True
+                
+                elapsed_time = time.time() - start_time
+                st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
+                
+                st.balloons()
+                st.success("🎉 Processing complete! Your documents are ready for download below.")
     
     if st.session_state.results_generated:
         st.markdown("---")
@@ -2209,14 +2354,61 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v18.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v19.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Remote Storage: Articles saved per user on remote server</strong>
+            <strong>✅ Remote Storage with Session Loading: Load saved sessions and generate flavors</strong>
         </div>
         """,
         unsafe_allow_html=True
     )
+
+
+def display_session_exporter(session_manager):
+    """Mostrar opciones para exportar sesiones anteriores"""
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📤 Exportar sesión")
+    
+    user_sessions = session_manager.get_user_sessions()
+    if user_sessions.empty:
+        st.sidebar.info("No hay sesiones para exportar")
+        return
+    
+    session_options = {}
+    for _, session in user_sessions.iterrows():
+        session_id = session['session_id']
+        session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+        session_options[session_name] = session_id
+    
+    selected_session_name = st.sidebar.selectbox(
+        "Seleccionar sesión para exportar:",
+        options=list(session_options.keys()),
+        key="exporter_selector"
+    )
+    
+    if selected_session_name:
+        selected_session_id = session_options[selected_session_name]
+        stats = session_manager.get_session_stats(selected_session_id)
+        
+        st.sidebar.markdown(f"""
+        **Estadísticas:**
+        - 📄 Artículos: {stats['total_articles']}
+        - ⭐ Calidad media: {stats['avg_quality']:.1f}
+        - 💪 Evidencia fuerte: {stats['strong_evidence']}
+        - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
+        """)
+        
+        if st.sidebar.button("📥 Exportar esta sesión a CSV", key="export_button"):
+            csv_data = session_manager.export_session_to_csv(selected_session_id)
+            if csv_data:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                st.sidebar.download_button(
+                    label="💾 DESCARGAR CSV",
+                    data=csv_data,
+                    file_name=f"session_{selected_session_id[:8]}_{timestamp}.csv",
+                    mime="text/csv",
+                    key="download_button"
+                )
 
 
 if __name__ == "__main__":
