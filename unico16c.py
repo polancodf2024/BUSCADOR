@@ -581,7 +581,7 @@ def extract_article_info(doc_sum):
     
     return article
 
-def search_pubmed(query, retmax=100):
+def search_pubmed(query, retmax=2000):
     """Search articles in PubMed with rate limiting"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
@@ -1578,7 +1578,7 @@ def main():
                 st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
             
             with st.spinner("🔍 Searching articles in PubMed..."):
-                id_list, total_count = search_pubmed(query.strip(), retmax=100)
+                id_list, total_count = search_pubmed(query.strip(), retmax=2000)
                 
                 if not id_list:
                     st.error("❌ No articles found")
