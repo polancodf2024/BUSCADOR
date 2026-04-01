@@ -15,6 +15,9 @@ from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import warnings
+import hashlib
+import paramiko
+import json
 warnings.filterwarnings('ignore')
 
 # ============================================================================
@@ -68,13 +71,314 @@ except Exception as e:
     print(f"⚠️ Some ML libraries not available: {e}")
     AI_EMBEDDINGS_AVAILABLE = False
 
-TFIDF_AVAILABLE = True  # Siempre disponible
+TFIDF_AVAILABLE = True
 
 st.set_page_config(
     page_title="PubMed AI Analyzer - Advanced Flavor Generator",
     page_icon="🧠",
     layout="centered"
 )
+
+# ============================================================================
+# CLASES PARA ALMACENAMIENTO REMOTO CON CSV
+# ============================================================================
+
+class RemoteCSVStorage:
+    """Gestor de almacenamiento remoto vía SFTP usando CSV"""
+    
+    def __init__(self, host, port, username, password, remote_dir):
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.remote_dir = remote_dir
+        self.client = None
+        self.sftp = None
+        self._connect()
+    
+    def _connect(self):
+        """Establecer conexión SFTP"""
+        try:
+            self.client = paramiko.SSHClient()
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self.client.connect(
+                hostname=self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                timeout=30
+            )
+            self.sftp = self.client.open_sftp()
+            return True
+        except Exception as e:
+            st.error(f"❌ Error de conexión remota: {e}")
+            return False
+    
+    def _ensure_dir(self):
+        """Asegurar que el directorio remoto existe"""
+        try:
+            self.sftp.stat(self.remote_dir)
+        except FileNotFoundError:
+            try:
+                self.sftp.mkdir(self.remote_dir)
+            except:
+                pass
+    
+    def _get_file_path(self, filename):
+        """Obtener ruta completa del archivo"""
+        return f"{self.remote_dir}/{filename}"
+    
+    def read_csv(self, filename):
+        """Leer CSV desde servidor remoto"""
+        try:
+            if not self.sftp:
+                return None
+            self._ensure_dir()
+            file_path = self._get_file_path(filename)
+            with self.sftp.open(file_path, 'r') as f:
+                content = f.read().decode('utf-8')
+                if content.strip():
+                    return pd.read_csv(StringIO(content))
+                else:
+                    return None
+        except FileNotFoundError:
+            return None
+        except Exception as e:
+            st.warning(f"⚠️ Error leyendo {filename}: {e}")
+            return None
+    
+    def write_csv(self, filename, df):
+        """Escribir CSV en servidor remoto"""
+        try:
+            if not self.sftp:
+                return False
+            self._ensure_dir()
+            file_path = self._get_file_path(filename)
+            
+            csv_content = df.to_csv(index=False, encoding='utf-8-sig')
+            
+            with self.sftp.open(file_path, 'w') as f:
+                f.write(csv_content.encode('utf-8-sig'))
+            
+            return True
+        except Exception as e:
+            st.error(f"❌ Error escribiendo {filename}: {e}")
+            return False
+    
+    def append_to_csv(self, filename, new_data):
+        """Agregar datos a CSV existente"""
+        try:
+            existing_df = self.read_csv(filename)
+            
+            if existing_df is not None and not existing_df.empty:
+                df = pd.concat([existing_df, new_data], ignore_index=True)
+                # Eliminar duplicados
+                if 'pmid' in df.columns:
+                    df = df.drop_duplicates(subset=['pmid'], keep='last')
+                if 'session_id' in df.columns:
+                    df = df.drop_duplicates(subset=['session_id'], keep='last')
+            else:
+                df = new_data
+            
+            return self.write_csv(filename, df)
+        except Exception as e:
+            st.error(f"❌ Error append a {filename}: {e}")
+            return False
+    
+    def close(self):
+        """Cerrar conexiones"""
+        if hasattr(self, 'sftp') and self.sftp:
+            try:
+                self.sftp.close()
+            except:
+                pass
+        if hasattr(self, 'client') and self.client:
+            try:
+                self.client.close()
+            except:
+                pass
+
+
+class UserSessionManager:
+    """Gestor de sesiones por usuario usando CSV remoto"""
+    
+    def __init__(self, remote_storage, login):
+        self.remote = remote_storage
+        self.login = login
+        self.articles_file = f"{login}_articles.csv"
+        self.sessions_file = f"{login}_sessions.csv"
+        self.checkpoints_file = f"{login}_checkpoints.csv"
+    
+    def create_session(self, query: str, hypothesis: str, relevance_threshold: float) -> str:
+        """Crear nueva sesión para el usuario"""
+        session_id = hashlib.md5(f"{query}{hypothesis}{self.login}{datetime.now()}".encode()).hexdigest()[:16]
+        query_hash = hashlib.md5(query.encode()).hexdigest()
+        
+        session_data = pd.DataFrame([{
+            'session_id': session_id,
+            'login': self.login,
+            'query': query[:500],
+            'hypothesis': hypothesis[:500],
+            'query_hash': query_hash,
+            'relevance_threshold': relevance_threshold,
+            'total_found': 0,
+            'total_processed': 0,
+            'start_time': datetime.now().isoformat(),
+            'end_time': None,
+            'status': 'running'
+        }])
+        
+        self.remote.append_to_csv(self.sessions_file, session_data)
+        return session_id
+    
+    def save_articles_batch(self, articles: List[Dict], session_id: str):
+        """Guardar lote de artículos"""
+        if not articles:
+            return
+        
+        records = []
+        for article in articles:
+            records.append({
+                'pmid': article.get('pmid', ''),
+                'session_id': session_id,
+                'login': self.login,
+                'title': article.get('title', '')[:1000],
+                'authors': article.get('authors', '')[:500],
+                'journal': article.get('journal', '')[:200],
+                'pubdate': article.get('pubdate', ''),
+                'doi': article.get('doi', '')[:100],
+                'abstract': article.get('abstract', '')[:5000],
+                'study_types': article.get('study_types', ''),
+                'quality_score': article.get('quality_score', 0),
+                'evidence_strength': article.get('evidence_strength', ''),
+                'top_keywords': article.get('top_keywords', ''),
+                'population': article.get('population', ''),
+                'outcomes': ','.join(article.get('all_outcomes', [])),
+                'numeric_results': article.get('numeric_results_str', ''),
+                'relevance_score': article.get('relevance_score', 0),
+                'search_relevance': article.get('search_relevance', 0),
+                'hypothesis_relevance': article.get('hypothesis_relevance', 0),
+                'embedding_used': 'BioBERT' if not USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else ('SBERT' if USE_FALLBACK else 'TF-IDF'),
+                'processed_date': datetime.now().isoformat()
+            })
+        
+        df_new = pd.DataFrame(records)
+        self.remote.append_to_csv(self.articles_file, df_new)
+    
+    def save_checkpoint(self, session_id: str, batch_num: int, batch_size: int,
+                        start_idx: int, end_idx: int, articles_processed: int):
+        """Guardar checkpoint de procesamiento"""
+        checkpoint_data = pd.DataFrame([{
+            'session_id': session_id,
+            'login': self.login,
+            'batch_number': batch_num,
+            'batch_size': batch_size,
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'articles_processed': articles_processed,
+            'checkpoint_time': datetime.now().isoformat(),
+            'status': 'completed'
+        }])
+        
+        self.remote.append_to_csv(self.checkpoints_file, checkpoint_data)
+    
+    def get_last_checkpoint(self, session_id: str) -> Optional[Dict]:
+        """Obtener último checkpoint de una sesión"""
+        df = self.remote.read_csv(self.checkpoints_file)
+        if df is None or df.empty:
+            return None
+        
+        session_checkpoints = df[df['session_id'] == session_id]
+        if session_checkpoints.empty:
+            return None
+        
+        latest = session_checkpoints.sort_values('batch_number', ascending=False).iloc[0]
+        
+        return {
+            'batch_number': int(latest['batch_number']),
+            'batch_size': int(latest['batch_size']),
+            'start_idx': int(latest['start_idx']),
+            'end_idx': int(latest['end_idx']),
+            'articles_processed': int(latest['articles_processed'])
+        }
+    
+    def get_processed_pmids(self, session_id: str) -> set:
+        """Obtener PMIDs ya procesados en esta sesión"""
+        df = self.remote.read_csv(self.articles_file)
+        if df is None or df.empty:
+            return set()
+        
+        session_articles = df[df['session_id'] == session_id]
+        return set(session_articles['pmid'].tolist())
+    
+    def update_session(self, session_id: str, status: str, total_found: int = None, total_processed: int = None):
+        """Actualizar información de la sesión"""
+        df = self.remote.read_csv(self.sessions_file)
+        if df is None or df.empty:
+            return
+        
+        mask = df['session_id'] == session_id
+        if total_found is not None:
+            df.loc[mask, 'total_found'] = total_found
+        if total_processed is not None:
+            df.loc[mask, 'total_processed'] = total_processed
+        df.loc[mask, 'status'] = status
+        df.loc[mask, 'end_time'] = datetime.now().isoformat()
+        
+        self.remote.write_csv(self.sessions_file, df)
+    
+    def get_user_sessions(self) -> pd.DataFrame:
+        """Obtener todas las sesiones del usuario"""
+        df = self.remote.read_csv(self.sessions_file)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df[df['login'] == self.login].sort_values('start_time', ascending=False)
+    
+    def get_session_articles(self, session_id: str) -> pd.DataFrame:
+        """Obtener artículos de una sesión específica"""
+        df = self.remote.read_csv(self.articles_file)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df[df['session_id'] == session_id]
+    
+    def get_session_stats(self, session_id: str) -> Dict:
+        """Obtener estadísticas de una sesión"""
+        articles_df = self.get_session_articles(session_id)
+        
+        if articles_df.empty:
+            return {
+                'total_articles': 0,
+                'avg_quality': 0,
+                'strong_evidence': 0,
+                'avg_relevance': 0
+            }
+        
+        return {
+            'total_articles': len(articles_df),
+            'avg_quality': articles_df['quality_score'].mean() if 'quality_score' in articles_df else 0,
+            'strong_evidence': len(articles_df[articles_df['evidence_strength'].str.contains('STRONG', na=False)]),
+            'avg_relevance': articles_df['relevance_score'].mean() if 'relevance_score' in articles_df else 0
+        }
+    
+    def export_session_to_csv(self, session_id: str) -> bytes:
+        """Exportar artículos de una sesión a CSV para descarga"""
+        articles_df = self.get_session_articles(session_id)
+        if articles_df.empty:
+            return None
+        
+        export_columns = ['pmid', 'title', 'authors', 'journal', 'pubdate', 'doi',
+                          'study_types', 'quality_score', 'evidence_strength',
+                          'relevance_score', 'outcomes', 'processed_date']
+        
+        available_cols = [col for col in export_columns if col in articles_df.columns]
+        export_df = articles_df[available_cols]
+        
+        csv_buffer = StringIO()
+        export_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+        csv_buffer.seek(0)
+        
+        return csv_buffer.getvalue().encode('utf-8-sig')
+
 
 # ============================================================================
 # FUNCIONES DE UTILIDAD PARA PubMed CON MANEJO DE RATE LIMITING
@@ -89,7 +393,6 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
             response = requests.get(url, params=params, timeout=30)
             
             if response.status_code == 429:
-                # Too Many Requests - wait and retry
                 wait_time = delay * (2 ** attempt)
                 st.warning(f"⚠️ Rate limit reached. Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
@@ -104,6 +407,7 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
             time.sleep(delay)
     
     return None
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_abstract(pmid):
@@ -135,6 +439,7 @@ def get_abstract(pmid):
     except Exception as e:
         return None
 
+
 def preprocess_text(text):
     """Preprocess text for NLP analysis"""
     if not text:
@@ -147,6 +452,7 @@ def preprocess_text(text):
     
     return text
 
+
 # ============================================================================
 # EXTRACCIÓN DINÁMICA DE TÉRMINOS DESDE BÚSQUEDA E HIPÓTESIS
 # ============================================================================
@@ -155,32 +461,29 @@ def extract_key_terms_from_query(query):
     """Extract key terms from search query - NO HARDCODED TERMS"""
     terms = set()
     
-    # Extract MeSH terms
     mesh_pattern = r'"([^"]+)"\[Mesh\]'
     mesh_terms = re.findall(mesh_pattern, query, re.IGNORECASE)
     for term in mesh_terms:
         terms.add(term.lower())
     
-    # Extract tiab terms
     tiab_pattern = r'"([^"]+)"\[tiab\]'
     tiab_terms = re.findall(tiab_pattern, query, re.IGNORECASE)
     for term in tiab_terms:
         terms.add(term.lower())
     
-    # Extract quoted phrases
     quoted_pattern = r'"([^"]+)"'
     quoted_terms = re.findall(quoted_pattern, query)
     for term in quoted_terms:
         if len(term) > 3 and not term.lower().endswith('mesh') and not term.lower().endswith('tiab'):
             terms.add(term.lower())
     
-    # Extract words with brackets (MeSH format)
     bracket_pattern = r'([a-zA-Z\s]+)\[Mesh\]'
     bracket_terms = re.findall(bracket_pattern, query, re.IGNORECASE)
     for term in bracket_terms:
         terms.add(term.lower().strip())
     
     return list(terms)
+
 
 def extract_key_terms_from_hypothesis(hypothesis):
     """Extract key terms from hypothesis - NO HARDCODED TERMS"""
@@ -190,7 +493,6 @@ def extract_key_terms_from_hypothesis(hypothesis):
     terms = set()
     hypothesis_lower = hypothesis.lower()
     
-    # Extract noun phrases (simple approach)
     words = hypothesis_lower.split()
     for i in range(len(words)-1):
         if len(words[i]) > 4 and len(words[i+1]) > 3:
@@ -198,7 +500,6 @@ def extract_key_terms_from_hypothesis(hypothesis):
         if len(words[i]) > 3:
             terms.add(words[i])
     
-    # Extract specific patterns
     pattern = r'\b([a-z]+(?:\s+[a-z]+){1,3})\b'
     matches = re.findall(pattern, hypothesis_lower)
     for match in matches:
@@ -206,6 +507,7 @@ def extract_key_terms_from_hypothesis(hypothesis):
             terms.add(match)
     
     return list(terms)
+
 
 # ============================================================================
 # ENTITY EXTRACTION - DINÁMICA CON FALLBACK
@@ -219,6 +521,7 @@ def get_embedder():
         return FALLBACK_EMBEDDER
     else:
         return None
+
 
 def extract_entities_with_embeddings(text, dynamic_terms):
     """Extract entities using embeddings if available"""
@@ -243,6 +546,7 @@ def extract_entities_with_embeddings(text, dynamic_terms):
     except Exception as e:
         return []
 
+
 def extract_entities_with_regex(text, dynamic_terms):
     """Extract entities using regex - NO HARDCODED PATTERNS"""
     if not text or not dynamic_terms:
@@ -257,12 +561,12 @@ def extract_entities_with_regex(text, dynamic_terms):
     
     return entities
 
+
 def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
     """Extract entities combining embeddings and regex - NO HARDCODED TERMS"""
     if not text:
         return []
     
-    # Combine all dynamic terms
     all_terms = list(set(query_terms + hypothesis_terms))
     
     embedding_entities = extract_entities_with_embeddings(text, all_terms)
@@ -282,6 +586,7 @@ def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
             seen.add(entity.lower())
     
     return all_entities
+
 
 def extract_numeric_results(text):
     """Extract important numerical results"""
@@ -308,6 +613,7 @@ def extract_numeric_results(text):
     
     return results
 
+
 def extract_all_outcomes(text):
     """Extract all mentioned outcomes - NO HARDCODED PATTERNS"""
     if not text:
@@ -316,7 +622,6 @@ def extract_all_outcomes(text):
     text_lower = text.lower()
     outcomes = set()
     
-    # Common outcome-related terms (generic enough)
     outcome_indicators = ['mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage', 
                           'stroke', 'reinfarction', 'complication', 'risk', 'rate', 'incidence', 
                           'outcome', 'endpoint', 'recovery', 'improvement', 'efficacy', 'safety']
@@ -326,6 +631,7 @@ def extract_all_outcomes(text):
             outcomes.add(indicator)
     
     return list(outcomes)
+
 
 def analyze_sentiment_by_outcome(text):
     """Analyze sentiment for each outcome"""
@@ -388,6 +694,7 @@ def analyze_sentiment_by_outcome(text):
     
     return outcomes_sentiment
 
+
 def enhanced_quality_scoring(study_types, full_text):
     """Enhanced quality scoring system"""
     score = 0
@@ -432,6 +739,7 @@ def enhanced_quality_scoring(study_types, full_text):
     
     return min(score, 100), factors
 
+
 def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
     """Determine effect directionality"""
     try:
@@ -450,6 +758,7 @@ def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
             return "NO EFFECT"
     except:
         return "NOT DETERMINED"
+
 
 def calculate_evidence_strength(statistical_results, quality_score):
     """Calculate evidence strength"""
@@ -491,6 +800,7 @@ def calculate_evidence_strength(statistical_results, quality_score):
         strength = "INSUFFICIENT EVIDENCE"
     
     return strength, min(strength_score, 100), directions
+
 
 def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
     """Analyze an article with enhanced AI - NO HARDCODED TERMS"""
@@ -558,6 +868,7 @@ def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
         'abstract': abstract if abstract else ''
     }
 
+
 def extract_article_info(doc_sum):
     """Extract basic article information from DocSum"""
     article = {}
@@ -580,6 +891,7 @@ def extract_article_info(doc_sum):
     article["doi"] = doi_item.text if doi_item is not None else "N/A"
     
     return article
+
 
 def search_pubmed(query, retmax=1000):
     """Search articles in PubMed with rate limiting"""
@@ -608,13 +920,14 @@ def search_pubmed(query, retmax=1000):
         st.error(f"Search error: {e}")
         return [], 0
 
+
 def fetch_articles_details(id_list, query_terms, hypothesis_terms):
-    """Fetch article details and analyze them with improved rate limiting"""
+    """Fetch article details and analyze them"""
     if not id_list:
         return []
     
     total_to_process = len(id_list)
-    batch_size = 30  # Reduced from 50 to avoid rate limiting
+    batch_size = 30
     num_batches = math.ceil(total_to_process / batch_size)
     
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
@@ -659,8 +972,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
                     
                     article = extract_article_info(doc_sum)
                     
-                    # Add delay between abstract requests
-                    time.sleep(0.3)  # Increased from 0.05 to 0.3
+                    time.sleep(0.3)
                     
                     abstract = get_abstract(article["pmid"])
                     article["abstract"] = abstract if abstract else "Not available"
@@ -670,7 +982,6 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
                     
                     articles.append(article)
                 
-                # Break out of retry loop on success
                 break
                 
             except Exception as e:
@@ -681,13 +992,69 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
                 else:
                     st.warning(f"Error in batch {batch_num + 1}: {str(e)[:100]}")
         
-        # Add delay between batches
         time.sleep(1.0)
     
     progress_bar.empty()
     status_text.empty()
     
     return articles
+
+
+def process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_manager, session_id):
+    """Procesar artículos en bloques de 1000 con checkpoint"""
+    
+    BLOCK_SIZE = 1000
+    total_to_process = len(id_list)
+    total_blocks = (total_to_process + BLOCK_SIZE - 1) // BLOCK_SIZE
+    
+    all_articles = []
+    
+    if session_manager:
+        last_checkpoint = session_manager.get_last_checkpoint(session_id)
+        start_block = 0
+        
+        if last_checkpoint:
+            start_block = last_checkpoint['batch_number']
+            st.info(f"🔄 Reanudando desde bloque {start_block} (ya procesados {last_checkpoint['articles_processed']} artículos)")
+            
+            existing_df = session_manager.get_session_articles(session_id)
+            if not existing_df.empty:
+                all_articles = existing_df.to_dict('records')
+    else:
+        start_block = 0
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for block_num in range(start_block, total_blocks):
+        start_idx = block_num * BLOCK_SIZE
+        end_idx = min((block_num + 1) * BLOCK_SIZE, total_to_process)
+        block_ids = id_list[start_idx:end_idx]
+        
+        status_text.text(f"📦 Procesando bloque {block_num + 1}/{total_blocks} (artículos {start_idx+1}-{end_idx})")
+        
+        block_articles = fetch_articles_details(block_ids, query_terms, hypothesis_terms)
+        
+        if session_manager and block_articles:
+            session_manager.save_articles_batch(block_articles, session_id)
+            session_manager.save_checkpoint(
+                session_id, block_num + 1, BLOCK_SIZE, 
+                start_idx, end_idx, len(block_articles)
+            )
+        
+        all_articles.extend(block_articles)
+        
+        progress_bar.progress((block_num + 1) / total_blocks)
+        status_text.text(f"✅ Bloque {block_num + 1} completado. Total procesados: {len(all_articles)}")
+        
+        if block_num < total_blocks - 1:
+            time.sleep(2)
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return all_articles
+
 
 def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     """Calculate relevance to search and hypothesis using embeddings"""
@@ -728,11 +1095,11 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     
     return articles
 
+
 def filter_articles_by_relevance(articles, relevance_threshold):
     """Filter articles by relevance threshold"""
     filtered = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
     
-    # Show statistics
     if articles:
         scores = [a.get('relevance_score', 0) for a in articles]
         st.write(f"**📊 Relevance Filter:**")
@@ -745,6 +1112,7 @@ def filter_articles_by_relevance(articles, relevance_threshold):
             st.write(f"   - Filtered max: {max([a.get('relevance_score', 0) for a in filtered]):.3f}")
     
     return filtered
+
 
 # ============================================================================
 # FUNCIONES DE CLUSTERING
@@ -778,6 +1146,7 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
         return top_keywords[:n_keywords]
     except Exception as e:
         return []
+
 
 def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms):
     """Determine aspect and difference based on actual article content"""
@@ -852,6 +1221,7 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
     
     return aspect, difference
 
+
 def get_text_embeddings(texts):
     """Get embeddings with fallback to TF-IDF if needed"""
     embedder = get_embedder()
@@ -862,7 +1232,6 @@ def get_text_embeddings(texts):
         except:
             pass
     
-    # Fallback: TF-IDF + TruncatedSVD
     try:
         vectorizer = TfidfVectorizer(max_features=500, stop_words='english')
         tfidf_matrix = vectorizer.fit_transform(texts)
@@ -872,6 +1241,7 @@ def get_text_embeddings(texts):
         pass
     
     return None
+
 
 def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms):
     """Discover flavors using HDBSCAN with embedding fallback"""
@@ -921,6 +1291,7 @@ def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_ter
     except Exception as e:
         st.warning(f"Error in HDBSCAN clustering: {e}")
         return []
+
 
 def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
     """Group articles by shared outcomes"""
@@ -978,6 +1349,7 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
         st.warning(f"Error in outcome clustering: {e}")
         return []
 
+
 def merge_small_clusters(flavors, target_count=4):
     """Merge small clusters to achieve approximately target_count large flavors"""
     if not flavors:
@@ -1018,6 +1390,7 @@ def merge_small_clusters(flavors, target_count=4):
         })
     
     return merged_flavors
+
 
 def assign_articles_to_best_flavor(flavors):
     """Assign each article to the most relevant flavor (exclusive assignment)"""
@@ -1065,6 +1438,7 @@ def assign_articles_to_best_flavor(flavors):
     
     return flavors
 
+
 def generate_descriptive_name(articles, query_terms, hypothesis_terms):
     """Generate a descriptive name based on actual content"""
     if not articles:
@@ -1106,6 +1480,7 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
     
     return name
 
+
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
     """Generate all flavors from multiple perspectives"""
     if not articles:
@@ -1114,7 +1489,6 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
     all_flavors = []
     
     if len(articles) >= 5:
-        # Siempre intentar clustering semántico (usa TF-IDF como fallback)
         semantic_flavors = discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms)
         all_flavors.extend(semantic_flavors)
     
@@ -1154,6 +1528,7 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
     
     return flavors_by_category
 
+
 def generate_citation_text(article, index):
     """Generate citation text"""
     authors = article.get('authors', 'Author')
@@ -1167,6 +1542,7 @@ def generate_citation_text(article, index):
         citation += f"; PMID: {pmid}"
     
     return citation
+
 
 def generate_flavor_summary_with_citations(articles, flavor_name, section, query_terms, hypothesis_terms):
     """Generate a summary paragraph with citations"""
@@ -1266,6 +1642,7 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
     
     return summary, citations
 
+
 def create_document_with_flavors(flavors, hypothesis, query, total_articles, relevance_threshold, query_terms, hypothesis_terms):
     """Create a DOCX document with flavors"""
     doc = Document()
@@ -1351,6 +1728,7 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     
     return doc
 
+
 def export_articles_to_csv(articles):
     """Export articles data to CSV format"""
     if not articles:
@@ -1386,6 +1764,7 @@ def export_articles_to_csv(articles):
     csv_buffer.seek(0)
     
     return csv_buffer.getvalue().encode('utf-8-sig')
+
 
 def display_flavors_preview(flavors):
     """Display a preview of the generated flavors"""
@@ -1439,12 +1818,105 @@ def display_flavors_preview(flavors):
     st.info(f"✅ Total flavors generated: {total_flavors}")
     return total_flavors
 
+
+def display_session_exporter(session_manager):
+    """Mostrar opciones para exportar sesiones anteriores"""
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📤 Exportar sesión")
+    
+    user_sessions = session_manager.get_user_sessions()
+    if user_sessions.empty:
+        st.sidebar.info("No hay sesiones para exportar")
+        return
+    
+    session_options = {}
+    for _, session in user_sessions.iterrows():
+        session_id = session['session_id']
+        session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+        session_options[session_name] = session_id
+    
+    selected_session_name = st.sidebar.selectbox(
+        "Seleccionar sesión:",
+        options=list(session_options.keys())
+    )
+    
+    if selected_session_name:
+        selected_session_id = session_options[selected_session_name]
+        stats = session_manager.get_session_stats(selected_session_id)
+        
+        st.sidebar.markdown(f"""
+        **Estadísticas:**
+        - 📄 Artículos: {stats['total_articles']}
+        - ⭐ Calidad media: {stats['avg_quality']:.1f}
+        - 💪 Evidencia fuerte: {stats['strong_evidence']}
+        - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
+        """)
+        
+        if st.sidebar.button("📥 Exportar esta sesión a CSV"):
+            csv_data = session_manager.export_session_to_csv(selected_session_id)
+            if csv_data:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                st.sidebar.download_button(
+                    label="💾 DESCARGAR CSV",
+                    data=csv_data,
+                    file_name=f"session_{selected_session_id[:8]}_{timestamp}.csv",
+                    mime="text/csv"
+                )
+
+
 # ============================================================================
 # MAIN APPLICATION
 # ============================================================================
 
 def main():
     st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
+    
+    # Solicitar login del usuario al inicio
+    if 'user_login' not in st.session_state:
+        st.markdown("### 🔐 Identificación de usuario")
+        st.markdown("Por favor, ingrese su login para guardar su progreso:")
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            login = st.text_input("Login (identificador único):", 
+                                  placeholder="ejemplo: juan_perez",
+                                  help="Este login se usará para guardar sus artículos procesados")
+        with col2:
+            st.markdown("---")
+            st.markdown("💡 **Nota:** Sus datos se guardarán en archivos remotos con su login")
+        
+        if st.button("✅ Continuar con este login", type="primary"):
+            if login.strip():
+                st.session_state.user_login = login.strip().lower()
+                st.rerun()
+            else:
+                st.warning("⚠️ Por favor ingrese un login válido")
+        return
+    
+    # Intentar conectar al almacenamiento remoto
+    session_manager = None
+    try:
+        remote_storage = RemoteCSVStorage(
+            host=st.secrets["remote_host"],
+            port=st.secrets["remote_port"],
+            username=st.secrets["remote_user"],
+            password=st.secrets["remote_password"],
+            remote_dir=st.secrets["remote_dir"]
+        )
+        
+        session_manager = UserSessionManager(remote_storage, st.session_state.user_login)
+        
+        st.sidebar.success(f"👤 Usuario: **{st.session_state.user_login}**")
+        
+        if st.sidebar.button("🔄 Cambiar usuario"):
+            del st.session_state.user_login
+            st.rerun()
+        
+        display_session_exporter(session_manager)
+        
+    except Exception as e:
+        st.warning(f"⚠️ No se pudo conectar al almacenamiento remoto: {e}")
+        st.info("💡 El programa funcionará sin guardado remoto. Los artículos no se conservarán entre sesiones.")
     
     # Display embedder status
     if USE_FALLBACK:
@@ -1472,6 +1944,7 @@ def main():
     - 🌐 **English output**: All content generated in English
     - 📊 **CSV Export**: Download all article data as CSV for further analysis
     - 🚫 **No hardcoded examples**: All content generated from your data
+    - 💾 **Remote storage**: Your articles are saved on remote server with your login
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -1549,6 +2022,7 @@ def main():
         st.session_state.n_flavors = 0
         st.session_state.applied_threshold = 0.35
         st.session_state.flavors = None
+        st.session_state.session_id = None
     
     if generate_button:
         if not query.strip():
@@ -1562,8 +2036,6 @@ def main():
             st.session_state.results_generated = False
             st.session_state.docx_data = None
             st.session_state.csv_data = None
-            
-            # Store the threshold used
             st.session_state.applied_threshold = relevance_threshold
             
             # Extract dynamic terms from query and hypothesis
@@ -1585,7 +2057,16 @@ def main():
                     st.stop()
                 
                 st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles...")
-                articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
+                
+                # Crear sesión si hay almacenamiento remoto
+                if session_manager:
+                    session_id = session_manager.create_session(query, hypothesis, relevance_threshold)
+                    st.session_state.session_id = session_id
+                    articles = process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_manager, session_id)
+                    session_manager.update_session(session_id, 'completed', total_found=total_count, total_processed=len(articles))
+                else:
+                    articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
+                    st.session_state.session_id = None
             
             if not articles:
                 st.error("❌ Could not process any articles")
@@ -1607,7 +2088,6 @@ def main():
                 st.info("💡 Try reducing the relevance threshold to include more articles.")
                 st.stop()
             
-            # Store articles for CSV export
             st.session_state.articles = articles
             
             with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
@@ -1619,7 +2099,6 @@ def main():
             st.session_state.total_articles = len(articles)
             st.session_state.total_processed = len(id_list) if id_list else 0
             
-            # Display flavors preview
             display_flavors_preview(flavors)
             
             with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
@@ -1631,7 +2110,6 @@ def main():
                 
                 st.session_state.docx_data = docx_bytes
             
-            # Create CSV export
             with st.spinner("📊 Creating CSV export..."):
                 csv_data = export_articles_to_csv(articles)
                 st.session_state.csv_data = csv_data
@@ -1641,11 +2119,9 @@ def main():
             elapsed_time = time.time() - start_time
             st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
             
-            # Success notification with balloons
             st.balloons()
             st.success("🎉 Processing complete! Your documents are ready for download below.")
     
-    # Always show download section if results are generated
     if st.session_state.results_generated:
         st.markdown("---")
         st.markdown("## 📥 Download Your Documents")
@@ -1660,7 +2136,6 @@ def main():
         with col4:
             st.metric("Large flavors", st.session_state.n_flavors)
         
-        # Two-column layout for download buttons
         col_left, col_right = st.columns(2)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1691,11 +2166,12 @@ def main():
                 )
                 st.caption(f"📊 File: articles_{timestamp}.csv | Includes all article metadata, relevance scores, and outcomes")
         
-        # Show article count in CSV
         if st.session_state.articles:
             st.info(f"📊 CSV contains {len(st.session_state.articles)} articles with analysis data")
         
-        # Option to start new search
+        if st.session_state.session_id and session_manager:
+            st.success(f"💾 Session saved: {st.session_state.session_id[:8]}...")
+        
         st.markdown("---")
         col_reset1, col_reset2, col_reset3 = st.columns([1, 1, 1])
         with col_reset2:
@@ -1733,14 +2209,15 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v17.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v18.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Robust version - Works without torch if needed</strong>
+            <strong>✅ Remote Storage: Articles saved per user on remote server</strong>
         </div>
         """,
         unsafe_allow_html=True
     )
+
 
 if __name__ == "__main__":
     main()
