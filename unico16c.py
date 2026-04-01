@@ -18,7 +18,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# CONFIGURACIÓN PARA STREAMLIT CLOUD
+# CONFIGURACIÓN DE EMBEDDINGS CON FALLBACK ROBUSTO
 # ============================================================================
 
 AI_EMBEDDINGS_AVAILABLE = False
@@ -26,28 +26,31 @@ BIOMED_EMBEDDER = None
 FALLBACK_EMBEDDER = None
 USE_FALLBACK = False
 
+# Intentar cargar embeddings solo si es posible (no crítico)
 try:
-    from sentence_transformers import SentenceTransformer
     from sklearn.metrics.pairwise import cosine_similarity
     from sklearn.cluster import HDBSCAN, KMeans, AgglomerativeClustering
     from sklearn.decomposition import PCA, TruncatedSVD
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.preprocessing import normalize
-    import torch
     
-    with st.spinner("🔄 Loading BioBERT (first time may take ~2 minutes)..."):
-        try:
-            BIOMED_EMBEDDER = SentenceTransformer(
-                'pritamdeka/S-Biomed-Roberta-snli-multinli-stsb',
-                device='cpu'
-            )
-            AI_EMBEDDINGS_AVAILABLE = True
-            USE_FALLBACK = False
-            st.success("✅ BioBERT embeddings available")
-        except Exception as e:
-            print(f"⚠️ BioBERT failed to load: {e}")
-            
-            with st.spinner("🔄 BioBERT failed, loading SBERT (general model)..."):
+    # Intentar cargar sentence-transformers (opcional)
+    try:
+        from sentence_transformers import SentenceTransformer
+        import torch
+        
+        with st.spinner("🔄 Loading embeddings model (optional)..."):
+            try:
+                # Intentar BioBERT primero
+                BIOMED_EMBEDDER = SentenceTransformer(
+                    'pritamdeka/S-Biomed-Roberta-snli-multinli-stsb',
+                    device='cpu'
+                )
+                AI_EMBEDDINGS_AVAILABLE = True
+                USE_FALLBACK = False
+                st.success("✅ BioBERT embeddings available")
+            except:
+                # Fallback a SBERT
                 try:
                     FALLBACK_EMBEDDER = SentenceTransformer(
                         'all-MiniLM-L6-v2',
@@ -56,28 +59,21 @@ try:
                     AI_EMBEDDINGS_AVAILABLE = True
                     USE_FALLBACK = True
                     st.warning("⚠️ BioBERT unavailable, using SBERT (general model)")
-                except Exception as e2:
-                    print(f"⚠️ SBERT also failed: {e2}")
+                except:
                     AI_EMBEDDINGS_AVAILABLE = False
-                    USE_FALLBACK = False
-                    
+    except ImportError:
+        AI_EMBEDDINGS_AVAILABLE = False
+        
 except Exception as e:
-    print(f"⚠️ Embeddings not available: {e}")
+    print(f"⚠️ Some ML libraries not available: {e}")
     AI_EMBEDDINGS_AVAILABLE = False
-    USE_FALLBACK = False
 
-TFIDF_AVAILABLE = False
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.decomposition import TruncatedSVD
-    TFIDF_AVAILABLE = True
-except:
-    TFIDF_AVAILABLE = False
+TFIDF_AVAILABLE = True  # Siempre disponible
 
 st.set_page_config(
     page_title="PubMed AI Analyzer - Advanced Flavor Generator",
     page_icon="🧠",
-    layout="wide"
+    layout="centered"
 )
 
 # ============================================================================
@@ -86,6 +82,7 @@ st.set_page_config(
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_abstract(pmid):
+    """Get article abstract from PubMed with caching"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     fetch_url = f"{base_url}efetch.fcgi"
     
@@ -113,6 +110,7 @@ def get_abstract(pmid):
         return None
 
 def preprocess_text(text):
+    """Preprocess text for NLP analysis"""
     if not text:
         return ""
     
@@ -131,22 +129,26 @@ def extract_key_terms_from_query(query):
     """Extract key terms from search query - NO HARDCODED TERMS"""
     terms = set()
     
+    # Extract MeSH terms
     mesh_pattern = r'"([^"]+)"\[Mesh\]'
     mesh_terms = re.findall(mesh_pattern, query, re.IGNORECASE)
     for term in mesh_terms:
         terms.add(term.lower())
     
+    # Extract tiab terms
     tiab_pattern = r'"([^"]+)"\[tiab\]'
     tiab_terms = re.findall(tiab_pattern, query, re.IGNORECASE)
     for term in tiab_terms:
         terms.add(term.lower())
     
+    # Extract quoted phrases
     quoted_pattern = r'"([^"]+)"'
     quoted_terms = re.findall(quoted_pattern, query)
     for term in quoted_terms:
         if len(term) > 3 and not term.lower().endswith('mesh') and not term.lower().endswith('tiab'):
             terms.add(term.lower())
     
+    # Extract words with brackets (MeSH format)
     bracket_pattern = r'([a-zA-Z\s]+)\[Mesh\]'
     bracket_terms = re.findall(bracket_pattern, query, re.IGNORECASE)
     for term in bracket_terms:
@@ -162,6 +164,7 @@ def extract_key_terms_from_hypothesis(hypothesis):
     terms = set()
     hypothesis_lower = hypothesis.lower()
     
+    # Extract noun phrases (simple approach)
     words = hypothesis_lower.split()
     for i in range(len(words)-1):
         if len(words[i]) > 4 and len(words[i+1]) > 3:
@@ -169,6 +172,7 @@ def extract_key_terms_from_hypothesis(hypothesis):
         if len(words[i]) > 3:
             terms.add(words[i])
     
+    # Extract specific patterns
     pattern = r'\b([a-z]+(?:\s+[a-z]+){1,3})\b'
     matches = re.findall(pattern, hypothesis_lower)
     for match in matches:
@@ -178,10 +182,11 @@ def extract_key_terms_from_hypothesis(hypothesis):
     return list(terms)
 
 # ============================================================================
-# ENTITY EXTRACTION - DINÁMICA SIN EJEMPLOS
+# ENTITY EXTRACTION - DINÁMICA CON FALLBACK
 # ============================================================================
 
 def get_embedder():
+    """Get the available embedder (BioBERT, SBERT, or None)"""
     if BIOMED_EMBEDDER is not None:
         return BIOMED_EMBEDDER
     elif FALLBACK_EMBEDDER is not None:
@@ -189,9 +194,10 @@ def get_embedder():
     else:
         return None
 
-def extract_entities_with_biobert(text, dynamic_terms):
+def extract_entities_with_embeddings(text, dynamic_terms):
+    """Extract entities using embeddings if available"""
     embedder = get_embedder()
-    if not embedder or not text or not dynamic_terms:
+    if not embedder or not text or not dynamic_terms or not AI_EMBEDDINGS_AVAILABLE:
         return []
     
     try:
@@ -205,13 +211,14 @@ def extract_entities_with_biobert(text, dynamic_terms):
         entities = []
         for i, sim in enumerate(similarities):
             if sim > threshold:
-                entities.append((dynamic_terms[i], 'dynamic_ner', sim))
+                entities.append((dynamic_terms[i], 'semantic', sim))
         
         return entities
     except Exception as e:
         return []
 
 def extract_entities_with_regex(text, dynamic_terms):
+    """Extract entities using regex - NO HARDCODED PATTERNS"""
     if not text or not dynamic_terms:
         return []
     
@@ -225,18 +232,20 @@ def extract_entities_with_regex(text, dynamic_terms):
     return entities
 
 def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
+    """Extract entities combining embeddings and regex - NO HARDCODED TERMS"""
     if not text:
         return []
     
+    # Combine all dynamic terms
     all_terms = list(set(query_terms + hypothesis_terms))
     
-    biobert_entities = extract_entities_with_biobert(text, all_terms)
+    embedding_entities = extract_entities_with_embeddings(text, all_terms)
     regex_entities = extract_entities_with_regex(text, all_terms)
     
     all_entities = []
     seen = set()
     
-    for entity, etype, score in biobert_entities:
+    for entity, etype, score in embedding_entities:
         if entity.lower() not in seen:
             all_entities.append((entity, etype, score))
             seen.add(entity.lower())
@@ -249,6 +258,7 @@ def extract_medical_entities_enhanced(text, query_terms, hypothesis_terms):
     return all_entities
 
 def extract_numeric_results(text):
+    """Extract important numerical results"""
     if not text:
         return []
     
@@ -273,12 +283,14 @@ def extract_numeric_results(text):
     return results
 
 def extract_all_outcomes(text):
+    """Extract all mentioned outcomes - NO HARDCODED PATTERNS"""
     if not text:
         return []
     
     text_lower = text.lower()
     outcomes = set()
     
+    # Common outcome-related terms (generic enough)
     outcome_indicators = ['mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage', 
                           'stroke', 'reinfarction', 'complication', 'risk', 'rate', 'incidence', 
                           'outcome', 'endpoint', 'recovery', 'improvement', 'efficacy', 'safety']
@@ -290,6 +302,7 @@ def extract_all_outcomes(text):
     return list(outcomes)
 
 def analyze_sentiment_by_outcome(text):
+    """Analyze sentiment for each outcome"""
     if not text:
         return {}
     
@@ -350,6 +363,7 @@ def analyze_sentiment_by_outcome(text):
     return outcomes_sentiment
 
 def enhanced_quality_scoring(study_types, full_text):
+    """Enhanced quality scoring system"""
     score = 0
     factors = []
     text_lower = full_text.lower() if full_text else ""
@@ -393,6 +407,7 @@ def enhanced_quality_scoring(study_types, full_text):
     return min(score, 100), factors
 
 def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
+    """Determine effect directionality"""
     try:
         value = float(result_value)
         if value < 1:
@@ -411,6 +426,7 @@ def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
         return "NOT DETERMINED"
 
 def calculate_evidence_strength(statistical_results, quality_score):
+    """Calculate evidence strength"""
     if not statistical_results:
         return "No data", 0, {}
     
@@ -451,6 +467,7 @@ def calculate_evidence_strength(statistical_results, quality_score):
     return strength, min(strength_score, 100), directions
 
 def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
+    """Analyze an article with enhanced AI - NO HARDCODED TERMS"""
     if not title and not abstract:
         return {}
     
@@ -516,6 +533,7 @@ def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
     }
 
 def extract_article_info(doc_sum):
+    """Extract basic article information from DocSum"""
     article = {}
     article["pmid"] = doc_sum.find("Id").text if doc_sum.find("Id") is not None else "N/A"
     
@@ -538,6 +556,7 @@ def extract_article_info(doc_sum):
     return article
 
 def search_pubmed(query, retmax=100000):
+    """Search articles in PubMed"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
     search_url = f"{base_url}esearch.fcgi"
@@ -563,6 +582,7 @@ def search_pubmed(query, retmax=100000):
         return [], 0
 
 def fetch_articles_details(id_list, query_terms, hypothesis_terms):
+    """Fetch article details and analyze them"""
     if not id_list:
         return []
     
@@ -618,6 +638,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
     return articles
 
 def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
+    """Calculate relevance to search and hypothesis using embeddings"""
     embedder = get_embedder()
     if not embedder or not AI_EMBEDDINGS_AVAILABLE:
         for article in articles:
@@ -656,48 +677,29 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
     return articles
 
 def filter_articles_by_relevance(articles, relevance_threshold):
-    if not articles:
-        return []
+    """Filter articles by relevance threshold"""
+    filtered = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
     
-    articles_with_scores = []
-    for a in articles:
-        score = a.get('relevance_score', 0)
-        articles_with_scores.append((score, a))
-    
-    articles_with_scores.sort(key=lambda x: x[0], reverse=True)
-    
-    filtered = [a for score, a in articles_with_scores if score >= relevance_threshold]
-    
-    scores = [score for score, _ in articles_with_scores]
-    filtered_scores = [score for score, _ in articles_with_scores if score >= relevance_threshold]
-    
-    st.write(f"**📊 Relevance Filter Statistics:**")
-    st.write(f"   - Threshold: {relevance_threshold}")
-    st.write(f"   - Total articles: {len(articles)}")
-    st.write(f"   - Filtered articles: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
-    
-    if scores:
-        st.write(f"   - Min score: {min(scores):.3f}")
-        st.write(f"   - Max score: {max(scores):.3f}")
-        st.write(f"   - Mean score: {np.mean(scores):.3f}")
-        st.write(f"   - Median score: {np.median(scores):.3f}")
-    
-    if articles_with_scores:
-        st.write("**🏆 Top 5 most relevant articles:**")
-        for i, (score, article) in enumerate(articles_with_scores[:5]):
-            title = article.get('title', 'No title')[:80]
-            st.write(f"   {i+1}. [{score:.3f}] {title}...")
-    
-    if len(filtered) < 5 and len(articles) >= 10:
-        st.warning(f"⚠️ Only {len(filtered)} articles meet threshold (minimum 5 needed). Consider reducing relevance threshold.")
+    # Show statistics
+    if articles:
+        scores = [a.get('relevance_score', 0) for a in articles]
+        st.write(f"**📊 Relevance Filter:**")
+        st.write(f"   - Threshold: {relevance_threshold}")
+        st.write(f"   - Articles before: {len(articles)}")
+        st.write(f"   - Articles after: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
         
-        if len(filtered) < 3:
-            st.info(f"💡 Using all {len(articles)} articles to generate flavors (filter bypassed).")
-            return articles
+        if filtered:
+            st.write(f"   - Filtered min: {min([a.get('relevance_score', 0) for a in filtered]):.3f}")
+            st.write(f"   - Filtered max: {max([a.get('relevance_score', 0) for a in filtered]):.3f}")
     
     return filtered
 
+# ============================================================================
+# FUNCIONES DE CLUSTERING
+# ============================================================================
+
 def extract_topic_keywords_tfidf(articles, n_keywords=5):
+    """Extract topic keywords using TF-IDF"""
     if not articles or len(articles) < 2:
         return []
     
@@ -726,6 +728,7 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
         return []
 
 def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms):
+    """Determine aspect and difference based on actual article content"""
     if not articles:
         return "Clinical analysis", "Integrative approach"
     
@@ -798,6 +801,7 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
     return aspect, difference
 
 def get_text_embeddings(texts):
+    """Get embeddings with fallback to TF-IDF if needed"""
     embedder = get_embedder()
     
     if embedder and AI_EMBEDDINGS_AVAILABLE:
@@ -806,18 +810,19 @@ def get_text_embeddings(texts):
         except:
             pass
     
-    if TFIDF_AVAILABLE:
-        try:
-            vectorizer = TfidfVectorizer(max_features=500, stop_words='english')
-            tfidf_matrix = vectorizer.fit_transform(texts)
-            svd = TruncatedSVD(n_components=min(50, tfidf_matrix.shape[1] - 1), random_state=42)
-            return svd.fit_transform(tfidf_matrix)
-        except:
-            pass
+    # Fallback: TF-IDF + TruncatedSVD
+    try:
+        vectorizer = TfidfVectorizer(max_features=500, stop_words='english')
+        tfidf_matrix = vectorizer.fit_transform(texts)
+        svd = TruncatedSVD(n_components=min(50, tfidf_matrix.shape[1] - 1), random_state=42)
+        return svd.fit_transform(tfidf_matrix)
+    except:
+        pass
     
     return None
 
 def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms):
+    """Discover flavors using HDBSCAN with embedding fallback"""
     if len(articles) < 3:
         return []
     
@@ -866,6 +871,7 @@ def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_ter
         return []
 
 def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
+    """Group articles by shared outcomes"""
     if len(articles) < 3:
         return []
     
@@ -921,6 +927,7 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
         return []
 
 def merge_small_clusters(flavors, target_count=4):
+    """Merge small clusters to achieve approximately target_count large flavors"""
     if not flavors:
         return []
     
@@ -961,6 +968,7 @@ def merge_small_clusters(flavors, target_count=4):
     return merged_flavors
 
 def assign_articles_to_best_flavor(flavors):
+    """Assign each article to the most relevant flavor (exclusive assignment)"""
     if not flavors:
         return []
     
@@ -1006,6 +1014,7 @@ def assign_articles_to_best_flavor(flavors):
     return flavors
 
 def generate_descriptive_name(articles, query_terms, hypothesis_terms):
+    """Generate a descriptive name based on actual content"""
     if not articles:
         return "Clinical Studies"
     
@@ -1046,12 +1055,14 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
     return name
 
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
+    """Generate all flavors from multiple perspectives"""
     if not articles:
         return {}
     
     all_flavors = []
     
-    if len(articles) >= 5 and AI_EMBEDDINGS_AVAILABLE:
+    if len(articles) >= 5:
+        # Siempre intentar clustering semántico (usa TF-IDF como fallback)
         semantic_flavors = discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms)
         all_flavors.extend(semantic_flavors)
     
@@ -1092,6 +1103,7 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
     return flavors_by_category
 
 def generate_citation_text(article, index):
+    """Generate citation text"""
     authors = article.get('authors', 'Author')
     year = article.get('pubdate', 'n.d.')[:4] if article.get('pubdate') else 'n.d.'
     title = article.get('title', 'No title')
@@ -1105,6 +1117,7 @@ def generate_citation_text(article, index):
     return citation
 
 def generate_flavor_summary_with_citations(articles, flavor_name, section, query_terms, hypothesis_terms):
+    """Generate a summary paragraph with citations"""
     if not articles:
         return "No articles available for this flavor.", []
     
@@ -1202,6 +1215,7 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
     return summary, citations
 
 def create_document_with_flavors(flavors, hypothesis, query, total_articles, relevance_threshold, query_terms, hypothesis_terms):
+    """Create a DOCX document with flavors"""
     doc = Document()
     
     for section in doc.sections:
@@ -1322,7 +1336,7 @@ def export_articles_to_csv(articles):
     return csv_buffer.getvalue().encode('utf-8-sig')
 
 def display_flavors_preview(flavors):
-    """Display a preview of the generated flavors in the UI"""
+    """Display a preview of the generated flavors"""
     st.markdown("---")
     st.markdown("## 🎨 Generated Flavors")
     st.markdown("Below are the thematic groups (flavors) discovered from your articles:")
@@ -1380,12 +1394,13 @@ def display_flavors_preview(flavors):
 def main():
     st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
     
+    # Display embedder status
     if USE_FALLBACK:
         st.warning("⚠️ BioBERT unavailable - Using SBERT (general model). Semantic quality may be slightly reduced.")
     elif AI_EMBEDDINGS_AVAILABLE:
         st.success("✅ BioBERT biomedical embeddings available")
     else:
-        st.warning("⚠️ Advanced embeddings unavailable - Using TF-IDF based methods")
+        st.info("ℹ️ Using TF-IDF based methods (no embeddings). Quality still good for most use cases.")
     
     st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available")
     
@@ -1413,7 +1428,7 @@ def main():
             model_name = "BioBERT" if not USE_FALLBACK else "SBERT"
             st.success(f"✅ {model_name} available")
         else:
-            st.warning("⚠️ TF-IDF mode")
+            st.info("ℹ️ TF-IDF mode")
     with col_b:
         st.info("📄 Output: DOCX + CSV")
     with col_c:
@@ -1626,7 +1641,7 @@ def main():
         
         # Show article count in CSV
         if st.session_state.articles:
-            st.info(f"📊 CSV contains {len(st.session_state.articles)} articles with {len(st.session_state.articles[0].keys()) if st.session_state.articles else 0} fields each")
+            st.info(f"📊 CSV contains {len(st.session_state.articles)} articles with analysis data")
         
         # Option to start new search
         st.markdown("---")
@@ -1649,31 +1664,27 @@ def main():
             
             **Download Options:**
             1. **FLAVORS (DOCX)**: Thematic paragraphs for Introduction and Discussion sections
-            2. **ARTICLES (CSV)**: Complete article data including:
-               - Bibliographic information (PMID, title, authors, journal, DOI)
-               - Analysis results (study type, quality score, evidence strength)
-               - Relevance scores (search + hypothesis)
-               - Extracted outcomes and numeric results
-               - Abstract preview
+            2. **ARTICLES (CSV)**: Complete article data for further analysis
             
             **How to adjust results:**
             - If you get **too few articles** (<15), **reduce the relevance threshold** (e.g., 0.25-0.30)
             - If you get **too many articles** (>200), **increase the threshold** (e.g., 0.45-0.50)
             - If processing is **too slow**, consider narrowing your search query
             
-            **Document Structure:**
-            1. **FLAVORS FOR INTRODUCTION**: Extended paragraphs (5+ lines) with embedded citations
-            2. **FLAVORS FOR DISCUSSION**: Extended paragraphs (5+ lines) with embedded citations
+            **Embedding Status:**
+            - BioBERT: {'✅ Available' if not USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else '❌ Not available'}
+            - SBERT: {'✅ Available' if USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else '❌ Not available'}
+            - TF-IDF: {'✅ Available' if TFIDF_AVAILABLE else '❌ Not available'}
             """)
     
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v16.0<br>
-            BioBERT → SBERT → TF-IDF Fallback | Dynamic Entity Extraction | No Hardcoded Examples<br>
-            All articles processed | 3-4 large flavors with ~15 references each | English output<br>
-            <strong>✅ CSV Export Available | DOCX + CSV Dual Download</strong>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v17.0<br>
+            Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
+            BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
+            <strong>✅ Robust version - Works without torch if needed</strong>
         </div>
         """,
         unsafe_allow_html=True
