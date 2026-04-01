@@ -77,12 +77,37 @@ st.set_page_config(
 )
 
 # ============================================================================
-# FUNCIONES DE UTILIDAD PARA PubMed
+# FUNCIONES DE UTILIDAD PARA PubMed CON MANEJO DE RATE LIMITING
 # ============================================================================
+
+def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
+    """Make request with exponential backoff for rate limiting"""
+    delay = initial_delay
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code == 429:
+                # Too Many Requests - wait and retry
+                wait_time = delay * (2 ** attempt)
+                st.warning(f"⚠️ Rate limit reached. Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+                continue
+            
+            response.raise_for_status()
+            return response
+            
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep(delay)
+    
+    return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_abstract(pmid):
-    """Get article abstract from PubMed with caching"""
+    """Get article abstract from PubMed with caching and rate limiting"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     fetch_url = f"{base_url}efetch.fcgi"
     
@@ -94,9 +119,10 @@ def get_abstract(pmid):
     }
     
     try:
-        response = requests.get(fetch_url, params=params, timeout=10)
-        response.raise_for_status()
-        
+        response = make_request_with_retry(fetch_url, params)
+        if response is None:
+            return None
+            
         root = ElementTree.fromstring(response.content)
         
         abstract_texts = []
@@ -556,7 +582,7 @@ def extract_article_info(doc_sum):
     return article
 
 def search_pubmed(query, retmax=100000):
-    """Search articles in PubMed"""
+    """Search articles in PubMed with rate limiting"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
     search_url = f"{base_url}esearch.fcgi"
@@ -569,9 +595,10 @@ def search_pubmed(query, retmax=100000):
     }
     
     try:
-        response = requests.get(search_url, params=search_params, timeout=30)
-        response.raise_for_status()
-        
+        response = make_request_with_retry(search_url, search_params)
+        if response is None:
+            return [], 0
+            
         root = ElementTree.fromstring(response.content)
         id_list = [id_elem.text for id_elem in root.findall(".//Id")]
         count = root.find(".//Count").text if root.find(".//Count") is not None else "0"
@@ -582,12 +609,12 @@ def search_pubmed(query, retmax=100000):
         return [], 0
 
 def fetch_articles_details(id_list, query_terms, hypothesis_terms):
-    """Fetch article details and analyze them"""
+    """Fetch article details and analyze them with improved rate limiting"""
     if not id_list:
         return []
     
     total_to_process = len(id_list)
-    batch_size = 50
+    batch_size = 30  # Reduced from 50 to avoid rate limiting
     num_batches = math.ceil(total_to_process / batch_size)
     
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
@@ -609,28 +636,53 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
             "retmode": "xml"
         }
         
-        try:
-            summary_response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, timeout=30)
-            summary_response.raise_for_status()
-            summary_root = ElementTree.fromstring(summary_response.content)
-            
-            for j, doc_sum in enumerate(summary_root.findall(".//DocSum")):
-                overall_idx = start_idx + j
-                progress_bar.progress((overall_idx + 1) / total_to_process)
+        max_retries = 3
+        retry_delay = 5
+        
+        for retry in range(max_retries):
+            try:
+                summary_response = make_request_with_retry(f"{base_url}esummary.fcgi", summary_params)
+                if summary_response is None:
+                    if retry < max_retries - 1:
+                        wait_time = retry_delay * (2 ** retry)
+                        status_text.text(f"⚠️ Rate limit. Waiting {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception("Max retries exceeded")
                 
-                article = extract_article_info(doc_sum)
-                abstract = get_abstract(article["pmid"])
-                article["abstract"] = abstract if abstract else "Not available"
+                summary_root = ElementTree.fromstring(summary_response.content)
                 
-                ai_analysis = analyze_article_with_ai(article["title"], abstract, query_terms, hypothesis_terms)
-                article.update(ai_analysis)
+                for j, doc_sum in enumerate(summary_root.findall(".//DocSum")):
+                    overall_idx = start_idx + j
+                    progress_bar.progress((overall_idx + 1) / total_to_process)
+                    
+                    article = extract_article_info(doc_sum)
+                    
+                    # Add delay between abstract requests
+                    time.sleep(0.3)  # Increased from 0.05 to 0.3
+                    
+                    abstract = get_abstract(article["pmid"])
+                    article["abstract"] = abstract if abstract else "Not available"
+                    
+                    ai_analysis = analyze_article_with_ai(article["title"], abstract, query_terms, hypothesis_terms)
+                    article.update(ai_analysis)
+                    
+                    articles.append(article)
                 
-                articles.append(article)
-                time.sleep(0.05)
+                # Break out of retry loop on success
+                break
                 
-        except Exception as e:
-            st.warning(f"Error in batch {batch_num + 1}: {str(e)[:100]}")
-            continue
+            except Exception as e:
+                if retry < max_retries - 1:
+                    status_text.text(f"⚠️ Error in batch {batch_num + 1}: {str(e)[:50]}. Retrying...")
+                    time.sleep(retry_delay * (2 ** retry))
+                    continue
+                else:
+                    st.warning(f"Error in batch {batch_num + 1}: {str(e)[:100]}")
+        
+        # Add delay between batches
+        time.sleep(1.0)
     
     progress_bar.empty()
     status_text.empty()
