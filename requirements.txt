@@ -1,5 +1,5 @@
-streamlit==1.29.0
-pandas==2.2.0
-numpy==1.26.4
-torch==2.1.0
-torchvision==0.16.0
+streamlit>=1.29.0,<2.0
+pandas>=2.0,<3.0
+numpy>=1.26,<2.0
+torch>=2.0,<3.0
+torchvision>=0.16,<1.0
