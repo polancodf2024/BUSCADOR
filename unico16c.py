@@ -252,27 +252,44 @@ class UserSessionManager:
                 st.warning(f"⚠️ Artículo {i} sin PMID, saltando...")
                 continue
             
+            # Obtener valores de forma segura
+            relevance_score = article.get('relevance_score', 0.5)
+            if relevance_score is None:
+                relevance_score = 0.5
+                
+            search_relevance = article.get('search_relevance', 0.5)
+            if search_relevance is None:
+                search_relevance = 0.5
+                
+            hypothesis_relevance = article.get('hypothesis_relevance', 0.5)
+            if hypothesis_relevance is None:
+                hypothesis_relevance = 0.5
+            
+            outcomes = article.get('all_outcomes', [])
+            if outcomes is None:
+                outcomes = []
+            
             # Crear registro con todos los campos necesarios
             record = {
-                'pmid': pmid,
+                'pmid': str(pmid),
                 'session_id': session_id,
                 'login': self.login,
-                'title': article.get('title', '')[:1000],
-                'authors': article.get('authors', '')[:500],
-                'journal': article.get('journal', '')[:200],
-                'pubdate': article.get('pubdate', ''),
-                'doi': article.get('doi', '')[:100],
-                'abstract': article.get('abstract', '')[:5000],
-                'study_types': article.get('study_types', 'Not specified'),
-                'quality_score': article.get('quality_score', 0),
-                'evidence_strength': article.get('evidence_strength', 'No data'),
-                'top_keywords': article.get('top_keywords', ''),
-                'population': article.get('population', 'Not specified'),
-                'outcomes': ','.join(article.get('all_outcomes', [])) if article.get('all_outcomes') else '',
-                'numeric_results': article.get('numeric_results_str', ''),
-                'relevance_score': article.get('relevance_score', 0.5),
-                'search_relevance': article.get('search_relevance', 0.5),
-                'hypothesis_relevance': article.get('hypothesis_relevance', 0.5),
+                'title': str(article.get('title', ''))[:1000],
+                'authors': str(article.get('authors', ''))[:500],
+                'journal': str(article.get('journal', ''))[:200],
+                'pubdate': str(article.get('pubdate', '')),
+                'doi': str(article.get('doi', ''))[:100],
+                'abstract': str(article.get('abstract', ''))[:5000],
+                'study_types': str(article.get('study_types', 'Not specified')),
+                'quality_score': float(article.get('quality_score', 0)),
+                'evidence_strength': str(article.get('evidence_strength', 'No data')),
+                'top_keywords': str(article.get('top_keywords', '')),
+                'population': str(article.get('population', 'Not specified')),
+                'outcomes': ','.join(str(o) for o in outcomes if o),
+                'numeric_results': str(article.get('numeric_results_str', '')),
+                'relevance_score': float(relevance_score),
+                'search_relevance': float(search_relevance),
+                'hypothesis_relevance': float(hypothesis_relevance),
                 'embedding_used': 'BioBERT' if not USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else ('SBERT' if USE_FALLBACK else 'TF-IDF'),
                 'processed_date': datetime.now().isoformat()
             }
@@ -417,11 +434,26 @@ class UserSessionManager:
                 'avg_relevance': 0
             }
         
+        # Calcular promedio de calidad de forma segura
+        avg_quality = 0
+        if 'quality_score' in articles_df.columns:
+            avg_quality = articles_df['quality_score'].mean() if not articles_df['quality_score'].isna().all() else 0
+        
+        # Calcular evidencia fuerte de forma segura
+        strong_evidence = 0
+        if 'evidence_strength' in articles_df.columns:
+            strong_evidence = len(articles_df[articles_df['evidence_strength'].str.contains('STRONG', na=False)])
+        
+        # Calcular relevancia promedio de forma segura
+        avg_relevance = 0
+        if 'relevance_score' in articles_df.columns:
+            avg_relevance = articles_df['relevance_score'].mean() if not articles_df['relevance_score'].isna().all() else 0
+        
         return {
             'total_articles': len(articles_df),
-            'avg_quality': articles_df['quality_score'].mean() if 'quality_score' in articles_df else 0,
-            'strong_evidence': len(articles_df[articles_df['evidence_strength'].str.contains('STRONG', na=False)]),
-            'avg_relevance': articles_df['relevance_score'].mean() if 'relevance_score' in articles_df else 0
+            'avg_quality': avg_quality,
+            'strong_evidence': strong_evidence,
+            'avg_relevance': avg_relevance
         }
     
     def export_session_to_csv(self, session_id: str) -> bytes:
@@ -1296,8 +1328,12 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
     all_entities = []
     
     for a in articles:
+        if not a:
+            continue
+            
         outcomes = a.get('all_outcomes', [])
-        all_outcomes.extend(outcomes)
+        if outcomes:
+            all_outcomes.extend(outcomes)
         
         text = f"{a.get('title', '')} {a.get('abstract', '')}".lower()
         
@@ -1315,8 +1351,9 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
             all_populations.extend(pop.split(', '))
         
         entities = a.get('entities', [])
-        for entity, etype, score in entities:
-            all_entities.append(entity)
+        if entities:
+            for entity, etype, score in entities:
+                all_entities.append(entity)
     
     outcome_counts = Counter(all_outcomes)
     method_counts = Counter(all_methods)
@@ -1386,7 +1423,7 @@ def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_ter
         return []
     
     try:
-        texts = [f"{a.get('title', '')} {' '.join(a.get('all_outcomes', []))}" for a in articles]
+        texts = [f"{a.get('title', '')} {' '.join(a.get('all_outcomes', []))}" for a in articles if a]
         embeddings = get_text_embeddings(texts)
         
         if embeddings is None:
@@ -1438,8 +1475,10 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
     try:
         all_outcomes = set()
         for article in articles:
-            outcomes = article.get('all_outcomes', [])
-            all_outcomes.update(outcomes)
+            if article:
+                outcomes = article.get('all_outcomes', [])
+                if outcomes:
+                    all_outcomes.update(outcomes)
         
         if len(all_outcomes) < 2:
             return []
@@ -1447,9 +1486,10 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
         all_outcomes_list = list(all_outcomes)
         outcome_matrix = []
         for article in articles:
-            outcomes = set(article.get('all_outcomes', []))
-            row = [1 if o in outcomes else 0 for o in all_outcomes_list]
-            outcome_matrix.append(row)
+            if article:
+                outcomes = set(article.get('all_outcomes', []))
+                row = [1 if o in outcomes else 0 for o in all_outcomes_list]
+                outcome_matrix.append(row)
         
         n_clusters = min(max(3, len(articles) // 15), 4)
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
@@ -1465,12 +1505,14 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
             
             outcome_counts = Counter()
             for article in cluster_articles:
-                outcomes = article.get('all_outcomes', [])
-                outcome_counts.update(outcomes)
+                if article:
+                    outcomes = article.get('all_outcomes', [])
+                    if outcomes:
+                        outcome_counts.update(outcomes)
             
             top_outcomes = [o for o, _ in outcome_counts.most_common(3)]
             name = f"Studies on {', '.join(top_outcomes)}"
-            representative = sorted(cluster_articles, key=lambda x: x.get('quality_score', 0), reverse=True)[:5]
+            representative = sorted(cluster_articles, key=lambda x: x.get('quality_score', 0) if x else 0, reverse=True)[:5]
             
             flavors.append({
                 'type': 'outcome_based',
@@ -1508,14 +1550,17 @@ def merge_small_clusters(flavors, target_count=4):
         
         all_outcomes = []
         for article in remaining_articles:
-            all_outcomes.extend(article.get('all_outcomes', []))
+            if article:
+                outcomes = article.get('all_outcomes', [])
+                if outcomes:
+                    all_outcomes.extend(outcomes)
         outcome_counts = Counter(all_outcomes)
         if outcome_counts:
             top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
             if top_outcomes:
                 name += f": {', '.join(top_outcomes)}"
         
-        representative = sorted(remaining_articles, key=lambda x: x.get('quality_score', 0), reverse=True)[:5]
+        representative = sorted(remaining_articles, key=lambda x: x.get('quality_score', 0) if x else 0, reverse=True)[:5]
         
         merged_flavors.append({
             'type': 'merged',
@@ -1542,6 +1587,8 @@ def assign_articles_to_best_flavor(flavors):
         flavor_articles = flavor['articles']
         
         for article in flavor_articles:
+            if not article:
+                continue
             article_id = article.get('pmid', id(article))
             score = article.get('quality_score', 50) / 100.0
             
@@ -1555,7 +1602,7 @@ def assign_articles_to_best_flavor(flavors):
                 article_to_flavor[article_id] = flavor_id
     
     flavor_article_map = {flavor['id']: [] for flavor in flavors}
-    for article in [a for flavor in flavors for a in flavor['articles']]:
+    for article in [a for flavor in flavors for a in flavor['articles'] if a]:
         article_id = article.get('pmid', id(article))
         if article_id in article_to_flavor:
             assigned_flavor = article_to_flavor[article_id]
@@ -1567,7 +1614,7 @@ def assign_articles_to_best_flavor(flavors):
         flavor['n_articles'] = len(flavor['articles'])
         flavor['representative_articles'] = sorted(
             flavor['articles'], 
-            key=lambda x: x.get('quality_score', 0), 
+            key=lambda x: x.get('quality_score', 0) if x else 0, 
             reverse=True
         )[:5]
     
@@ -1586,14 +1633,19 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
     all_entities = []
     
     for a in articles:
-        keywords = a.get('top_keywords', '').split(', ')
-        all_keywords.extend(keywords)
+        if not a:
+            continue
+        keywords = a.get('top_keywords', '')
+        if keywords:
+            all_keywords.extend(keywords.split(', '))
         outcomes = a.get('all_outcomes', [])
-        all_outcomes.extend(outcomes)
+        if outcomes:
+            all_outcomes.extend(outcomes)
         
         entities = a.get('entities', [])
-        for entity, etype, score in entities:
-            all_entities.append(entity)
+        if entities:
+            for entity, etype, score in entities:
+                all_entities.append(entity)
     
     outcome_counts = Counter(all_outcomes)
     entity_counts = Counter(all_entities)
@@ -1620,6 +1672,11 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
 
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
     """Generate all flavors from multiple perspectives"""
+    if not articles:
+        return {}
+    
+    # Filtrar artículos None
+    articles = [a for a in articles if a is not None]
     if not articles:
         return {}
     
@@ -1668,11 +1725,14 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
 
 def generate_citation_text(article, index):
     """Generate citation text"""
-    authors = article.get('authors', 'Author')
-    year = article.get('pubdate', 'n.d.')[:4] if article.get('pubdate') else 'n.d.'
-    title = article.get('title', 'No title')
-    journal = article.get('journal', 'Journal')
-    pmid = article.get('pmid', '')
+    if not article:
+        return f"{index}. [No article data]"
+    
+    authors = str(article.get('authors', 'Author'))
+    year = str(article.get('pubdate', 'n.d.'))[:4] if article.get('pubdate') else 'n.d.'
+    title = str(article.get('title', 'No title'))
+    journal = str(article.get('journal', 'Journal'))
+    pmid = str(article.get('pmid', ''))
     
     citation = f"{index}. {authors}. {title}. {journal}. {year}"
     if pmid and pmid != 'N/A':
@@ -1686,6 +1746,11 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
     if not articles:
         return "No articles available for this flavor.", []
     
+    # Filtrar artículos None
+    articles = [a for a in articles if a is not None]
+    if not articles:
+        return "No articles available for this flavor.", []
+    
     aspect, difference = determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms)
     
     main_outcomes = []
@@ -1694,10 +1759,25 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
     key_articles = []
     
     for idx, a in enumerate(articles[:10], 1):
+        if not a:
+            continue
+            
         outcomes = a.get('all_outcomes', [])
+        if outcomes is None:
+            outcomes = []
+            
         study_type = a.get('study_types', '')
+        if study_type is None:
+            study_type = ''
+            
         numeric = a.get('numeric_results_str', '')
-        authors = a.get('authors', '').split(',')[0] if a.get('authors') else 'Author'
+        if numeric is None:
+            numeric = ''
+            
+        authors = a.get('authors', '')
+        if authors is None:
+            authors = 'Author'
+        authors = authors.split(',')[0] if authors else 'Author'
         
         main_outcomes.extend(outcomes[:2])
         
@@ -1740,12 +1820,12 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
             summary += f"reflecting a focus on clinically relevant endpoints. "
         
         if key_articles:
-            refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3]]
+            refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3] if auth]
             if refs:
                 summary += f"Key contributions from {', '.join(refs)} have advanced understanding of clinical outcomes. "
         
         if key_findings:
-            find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3]]
+            find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3] if auth]
             if find_refs:
                 summary += f"Notable findings from {', '.join(find_refs)} include {key_findings[0][2] if key_findings else 'significant clinical associations'}, "
                 summary += f"establishing foundations for risk stratification and treatment optimization."
@@ -1761,12 +1841,12 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
             summary += f"The observed methodological convergence across {', '.join(top_study_types[:2])} has enabled identification of consistent risk factors and outcomes. "
         
         if key_articles:
-            refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3]]
+            refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3] if auth]
             if refs:
                 summary += f"Specifically, {', '.join(refs)} reported results that are consistent with our analysis. "
         
         if key_findings:
-            find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3]]
+            find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3] if auth]
             if find_refs:
                 summary += f"Quantitative findings from {', '.join(find_refs)} provide additional evidence supporting our conclusions. "
         
@@ -1775,7 +1855,8 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
     
     citations = []
     for i, article in enumerate(articles[:15], 1):
-        citations.append(generate_citation_text(article, i))
+        if article:
+            citations.append(generate_citation_text(article, i))
     
     return summary, citations
 
@@ -1793,8 +1874,8 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     title = doc.add_heading('Thematic Flavors for Scientific Article', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    doc.add_paragraph(f'Search strategy: {query[:200]}...')
-    doc.add_paragraph(f'Hypothesis: "{hypothesis[:200]}..."')
+    doc.add_paragraph(f'Search strategy: {str(query)[:200]}...')
+    doc.add_paragraph(f'Hypothesis: "{str(hypothesis)[:200]}..."')
     doc.add_paragraph(f'Total articles analyzed: {total_articles}')
     doc.add_paragraph(f'Relevance threshold applied: {relevance_threshold}')
     doc.add_paragraph(f'Generation date: {datetime.now().strftime("%Y-%m-%d %H:%M")}')
@@ -1873,27 +1954,57 @@ def export_articles_to_csv(articles):
     
     data = []
     for article in articles:
+        # Asegurar que article es un diccionario
+        if not article:
+            continue
+            
+        # Obtener abstract de forma segura
+        abstract = article.get('abstract', '')
+        if abstract is None:
+            abstract = ''
+        
+        # Obtener outcomes de forma segura
+        outcomes = article.get('all_outcomes', [])
+        if outcomes is None:
+            outcomes = []
+        
+        # Obtener relevance scores de forma segura
+        relevance_score = article.get('relevance_score', 0)
+        if relevance_score is None:
+            relevance_score = 0
+        
+        search_relevance = article.get('search_relevance', 0)
+        if search_relevance is None:
+            search_relevance = 0
+            
+        hypothesis_relevance = article.get('hypothesis_relevance', 0)
+        if hypothesis_relevance is None:
+            hypothesis_relevance = 0
+        
         row = {
-            'PMID': article.get('pmid', ''),
-            'Title': article.get('title', ''),
-            'Authors': article.get('authors', ''),
-            'Journal': article.get('journal', ''),
-            'Publication Date': article.get('pubdate', ''),
-            'DOI': article.get('doi', ''),
-            'Study Types': article.get('study_types', ''),
-            'Quality Score': article.get('quality_score', 0),
-            'Evidence Strength': article.get('evidence_strength', ''),
-            'Top Keywords': article.get('top_keywords', ''),
-            'Population': article.get('population', ''),
-            'Numeric Results': article.get('numeric_results_str', ''),
-            'Relevance Score': article.get('relevance_score', 0),
-            'Search Relevance': article.get('search_relevance', 0),
-            'Hypothesis Relevance': article.get('hypothesis_relevance', 0),
-            'Outcomes': ', '.join(article.get('all_outcomes', [])) if article.get('all_outcomes') else '',
-            'Abstract (first 500 chars)': article.get('abstract', '')[:500] if article.get('abstract') else ''
+            'PMID': str(article.get('pmid', '')),
+            'Title': str(article.get('title', '')),
+            'Authors': str(article.get('authors', '')),
+            'Journal': str(article.get('journal', '')),
+            'Publication Date': str(article.get('pubdate', '')),
+            'DOI': str(article.get('doi', '')),
+            'Study Types': str(article.get('study_types', '')),
+            'Quality Score': float(article.get('quality_score', 0)),
+            'Evidence Strength': str(article.get('evidence_strength', '')),
+            'Top Keywords': str(article.get('top_keywords', '')),
+            'Population': str(article.get('population', '')),
+            'Numeric Results': str(article.get('numeric_results_str', '')),
+            'Relevance Score': float(relevance_score),
+            'Search Relevance': float(search_relevance),
+            'Hypothesis Relevance': float(hypothesis_relevance),
+            'Outcomes': ', '.join(str(o) for o in outcomes if o) if outcomes else '',
+            'Abstract (first 500 chars)': str(abstract)[:500] if abstract else ''
         }
         data.append(row)
     
+    if not data:
+        return None
+        
     df = pd.DataFrame(data)
     
     csv_buffer = StringIO()
@@ -1920,12 +2031,17 @@ def display_flavors_preview(flavors):
         st.markdown(f"### 📂 {category_title}")
         
         for i, flavor in enumerate(flavor_list, 1):
-            with st.expander(f"🔹 Flavor {i}: {flavor['name']} ({flavor['n_articles']} articles)", expanded=(i==1)):
+            with st.expander(f"🔹 Flavor {i}: {flavor.get('name', 'Unnamed')} ({flavor.get('n_articles', 0)} articles)", expanded=(i==1)):
                 col1, col2 = st.columns(2)
                 with col1:
+                    # Obtener artículos de forma segura
+                    rep_articles = flavor.get('representative_articles', [])
+                    if not rep_articles:
+                        rep_articles = flavor.get('articles', [])[:5]
+                    
                     aspect, difference = determine_flavor_aspect_and_difference(
-                        flavor.get('representative_articles', flavor['articles'][:5]),
-                        flavor['name'],
+                        rep_articles[:5],
+                        flavor.get('name', 'Clinical Studies'),
                         [],
                         []
                     )
@@ -1933,21 +2049,23 @@ def display_flavors_preview(flavors):
                     st.markdown(f"**🔍 Difference:** {difference}")
                 
                 with col2:
-                    st.markdown(f"**📊 Articles in this flavor:** {flavor['n_articles']}")
+                    st.markdown(f"**📊 Articles in this flavor:** {flavor.get('n_articles', 0)}")
                     st.markdown(f"**📚 Representative articles:**")
                     for j, article in enumerate(flavor.get('representative_articles', [])[:3], 1):
-                        title = article.get('title', 'No title')[:80]
-                        st.markdown(f"   {j}. {title}...")
+                        if article:
+                            title = str(article.get('title', 'No title'))[:80]
+                            st.markdown(f"   {j}. {title}...")
                 
                 st.markdown("**📄 Sample articles in this flavor:**")
                 sample_data = []
                 for article in flavor.get('articles', [])[:5]:
-                    sample_data.append({
-                        'Title': article.get('title', 'No title')[:100],
-                        'Study Type': article.get('study_types', 'N/A'),
-                        'Quality Score': article.get('quality_score', 0),
-                        'PMID': article.get('pmid', 'N/A')
-                    })
+                    if article:
+                        sample_data.append({
+                            'Title': str(article.get('title', 'No title'))[:100],
+                            'Study Type': str(article.get('study_types', 'N/A')),
+                            'Quality Score': float(article.get('quality_score', 0)),
+                            'PMID': str(article.get('pmid', 'N/A'))
+                        })
                 if sample_data:
                     df_sample = pd.DataFrame(sample_data)
                     st.dataframe(df_sample, use_container_width=True)
@@ -2217,6 +2335,9 @@ def main():
             # Convertir DataFrame a lista de diccionarios
             articles = articles_df.to_dict('records')
             
+            # Filtrar artículos None
+            articles = [a for a in articles if a is not None]
+            
             # Reconstruir los términos de búsqueda e hipótesis desde la sesión
             session_info = session_manager.get_session_info(selected_session_id)
             query = session_info.get('query', '')
@@ -2232,7 +2353,7 @@ def main():
             st.info(f"📝 Extraídos {len(query_terms)} términos de la búsqueda y {len(hypothesis_terms)} de la hipótesis")
             
             # Aplicar filtro de relevancia si es necesario
-            filtered_articles = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
+            filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= relevance_threshold]
             st.info(f"📊 Filtro de relevancia ({relevance_threshold}): {len(filtered_articles)} de {len(articles)} artículos")
             articles = filtered_articles
             
@@ -2461,7 +2582,7 @@ def main():
             🧠 PubMed AI Analyzer - Advanced Flavor Generator v20.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Fixed: Articles now save correctly with relevance scores | Session loading working</strong>
+            <strong>✅ Fixed: TypeErrors handled with safe value conversions | Session loading working</strong>
         </div>
         """,
         unsafe_allow_html=True
