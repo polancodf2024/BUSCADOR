@@ -227,11 +227,23 @@ class UserSessionManager:
             'total_processed': 0,
             'start_time': datetime.now().isoformat(),
             'end_time': None,
-            'status': 'running'
+            'status': 'running',
+            'flavors_generated': False
         }])
         
         self.remote.append_to_csv(self.sessions_file, session_data)
         return session_id
+    
+    def mark_flavors_generated(self, session_id: str):
+        """Marcar que los flavors ya fueron generados para esta sesión"""
+        df = self.remote.read_csv(self.sessions_file)
+        if df is None or df.empty:
+            return
+        
+        mask = df['session_id'] == session_id
+        df.loc[mask, 'flavors_generated'] = True
+        
+        self.remote.write_csv(self.sessions_file, df)
     
     def save_articles_batch(self, articles: List[Dict], session_id: str):
         """Guardar lote de artículos con verificación mejorada"""
@@ -239,7 +251,7 @@ class UserSessionManager:
             st.warning("⚠️ No hay artículos para guardar")
             return
         
-        st.info(f"💾 Guardando {len(articles)} artículos en la sesión {session_id[:8]}...")
+        st.info(f"💾 Guardando {len(articles)} artículos en la sesión {session_id[:20]}...")
         
         records = []
         for i, article in enumerate(articles):
@@ -322,7 +334,7 @@ class UserSessionManager:
             verify_df = self.remote.read_csv(self.articles_file)
             if verify_df is not None:
                 session_articles = verify_df[verify_df['session_id'] == session_id]
-                st.info(f"📊 Verificación: {len(session_articles)} artículos en la sesión {session_id[:8]}")
+                st.info(f"📊 Verificación: {len(session_articles)} artículos en la sesión {session_id[:20]}...")
                 
                 if not session_articles.empty and 'relevance_score' in session_articles.columns:
                     avg_relevance = session_articles['relevance_score'].mean()
@@ -514,6 +526,18 @@ class UserSessionManager:
             start_idx = (block_number - 1) * BLOCK_SIZE
             end_idx = block_number * BLOCK_SIZE
             return articles_df.iloc[start_idx:end_idx] if len(articles_df) > start_idx else pd.DataFrame()
+    
+    def has_flavors_generated(self, session_id: str) -> bool:
+        """Verificar si ya se generaron flavors para esta sesión"""
+        df = self.remote.read_csv(self.sessions_file)
+        if df is None or df.empty:
+            return False
+        
+        session_data = df[df['session_id'] == session_id]
+        if session_data.empty:
+            return False
+        
+        return session_data.iloc[0].get('flavors_generated', False)
 
 
 # ============================================================================
@@ -1228,7 +1252,7 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
                                       total_found=total_to_process, 
                                       total_processed=len(all_articles))
     
-    return all_articles
+    return all_articles, total_blocks
 
 
 def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
@@ -2061,6 +2085,64 @@ def generate_flavors_from_saved_session_only(session_manager, session_id, releva
     return flavors, filtered_articles, query, hypothesis
 
 
+def generate_automatic_flavors(session_manager, session_id, relevance_threshold):
+    """Generar flavors automáticamente después del procesamiento"""
+    
+    st.markdown("---")
+    st.markdown("## 🎨 GENERANDO FLAVORS AUTOMÁTICAMENTE...")
+    st.info("El procesamiento de artículos ha finalizado. Ahora generando los flavors...")
+    
+    flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
+        session_manager, session_id, relevance_threshold, block_number=None
+    )
+    
+    if flavors:
+        session_manager.mark_flavors_generated(session_id)
+        
+        display_flavors_preview(flavors)
+        
+        query_terms = extract_key_terms_from_query(query)
+        hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
+        
+        doc = create_document_with_flavors(flavors, hypothesis, query, len(filtered_articles),
+                                          relevance_threshold, query_terms, hypothesis_terms)
+        
+        docx_bytes = BytesIO()
+        doc.save(docx_bytes)
+        docx_bytes.seek(0)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        st.markdown("---")
+        st.markdown("## 📥 RESULTADO FINAL")
+        st.success("✅ ¡Flavors generados exitosamente!")
+        
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            st.download_button(
+                label="💾 DESCARGAR FLAVORS (DOCX)",
+                data=docx_bytes,
+                file_name=f"flavors_automatic_{session_id[:20]}_{timestamp}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary"
+            )
+        
+        with col_right:
+            csv_data = export_articles_to_csv(filtered_articles)
+            if csv_data:
+                st.download_button(
+                    label="📊 DESCARGAR ARTÍCULOS (CSV)",
+                    data=csv_data,
+                    file_name=f"articles_automatic_{session_id[:20]}_{timestamp}.csv",
+                    mime="text/csv"
+                )
+        
+        return True
+    
+    return False
+
+
 def display_flavors_preview(flavors):
     """Display a preview of the generated flavors"""
     st.markdown("---")
@@ -2133,7 +2215,8 @@ def display_session_exporter(session_manager):
     session_options = {}
     for _, session in user_sessions.iterrows():
         session_id = session['session_id']
-        session_name = f"{session_id[:20]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+        flavors_status = "✅" if session.get('flavors_generated', False) else "⏳"
+        session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
         session_options[session_name] = session_id
     
     selected_session_name = st.sidebar.selectbox(
@@ -2194,6 +2277,8 @@ def main():
                     del st.session_state.selected_session_id
                 if 'new_search_mode' in st.session_state:
                     st.session_state.new_search_mode = True
+                if 'auto_generate_flavors' in st.session_state:
+                    st.session_state.auto_generate_flavors = False
                 st.rerun()
             else:
                 st.warning("⚠️ Por favor ingrese un login válido")
@@ -2201,6 +2286,9 @@ def main():
     
     if 'new_search_mode' not in st.session_state:
         st.session_state.new_search_mode = True
+    
+    if 'auto_generate_flavors' not in st.session_state:
+        st.session_state.auto_generate_flavors = False
     
     session_manager = None
     selected_session_id = None
@@ -2224,6 +2312,8 @@ def main():
                 del st.session_state.selected_session_id
             if 'new_search_mode' in st.session_state:
                 st.session_state.new_search_mode = True
+            if 'auto_generate_flavors' in st.session_state:
+                st.session_state.auto_generate_flavors = False
             st.rerun()
         
         st.sidebar.markdown("---")
@@ -2235,7 +2325,8 @@ def main():
             session_options = {}
             for _, session in user_sessions.iterrows():
                 session_id = session['session_id']
-                session_name = f"{session_id[:20]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+                flavors_status = "✅" if session.get('flavors_generated', False) else "⏳"
+                session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
                 session_options[session_name] = session_id
             
             session_names = ["[NUEVA BÚSQUEDA]"] + list(session_options.keys())
@@ -2262,7 +2353,13 @@ def main():
                 st.session_state.new_search_mode = False
                 selected_session_id = session_options[selected_session_name]
                 st.session_state.selected_session_id = selected_session_id
-                st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:20]}...")
+                st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:25]}...")
+                
+                # Verificar si ya se generaron flavors para esta sesión
+                if session_manager.has_flavors_generated(selected_session_id):
+                    st.sidebar.info("✅ Flavors ya generados para esta sesión")
+                else:
+                    st.sidebar.warning("⏳ Flavors no generados aún")
                 
                 stats = session_manager.get_session_stats(selected_session_id)
                 st.sidebar.markdown(f"""
@@ -2303,7 +2400,7 @@ def main():
     else:
         st.info("ℹ️ Using TF-IDF based methods (no embeddings). Quality still good for most use cases.")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | Block processing (1000 articles per block)")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | Block processing (1000 articles per block) | AUTO FLAVOR GENERATION")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -2323,6 +2420,7 @@ def main():
     - 🚫 **No hardcoded examples**: All content generated from your data
     - 💾 **Remote storage**: Your articles are saved on remote server with your login
     - 📦 **Block processing**: Articles processed in blocks of 1000 with independent checkpoints
+    - 🤖 **Auto flavor generation**: Flavors generated automatically after processing completes
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -2344,11 +2442,12 @@ def main():
         session_info = session_manager.get_session_info(selected_session_id)
         if session_info:
             st.info(f"""
-            **📌 Usando sesión guardada:** {selected_session_id[:20]}...
+            **📌 Usando sesión guardada:** {selected_session_id[:25]}...
             - **Búsqueda original:** {session_info.get('query', 'N/A')[:200]}...
             - **Hipótesis:** {session_info.get('hypothesis', 'N/A')[:200]}...
             - **Threshold de relevancia:** {session_info.get('relevance_threshold', 0.35)}
             - **Artículos totales:** {session_info.get('total_processed', 0)}
+            - **Flavors generados:** {'✅ Sí' if session_manager.has_flavors_generated(selected_session_id) else '⏳ No'}
             """)
             
             articles_df = session_manager.get_session_articles(selected_session_id)
@@ -2378,7 +2477,7 @@ def main():
                         flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
                             session_manager, selected_session_id, relevance_threshold_display, block_number=None
                         )
-                        block_label = "sesión_completa"
+                        block_label = "sesion_completa"
                     else:
                         block_num = int(selected_block_option.split()[1])
                         flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
@@ -2387,6 +2486,7 @@ def main():
                         block_label = f"bloque_{block_num}"
                     
                     if flavors:
+                        session_manager.mark_flavors_generated(selected_session_id)
                         display_flavors_preview(flavors)
                         
                         query_terms = extract_key_terms_from_query(query)
@@ -2466,6 +2566,12 @@ def main():
             help="Write your hypothesis in natural language. Terms will be extracted automatically."
         )
         
+        auto_flavors = st.checkbox(
+            "🤖 Generar flavors automáticamente después del procesamiento",
+            value=True,
+            help="Si activas esta opción, después de procesar todos los artículos se generarán automáticamente los flavors y podrás descargarlos directamente."
+        )
+        
         generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
         
         if generate_button:
@@ -2498,18 +2604,19 @@ def main():
                     if session_manager:
                         session_id = session_manager.create_session(query, hypothesis, relevance_threshold)
                         st.session_state.session_id = session_id
-                        articles = process_articles_in_independent_blocks(
+                        articles, total_blocks = process_articles_in_independent_blocks(
                             id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis
                         )
                     else:
                         articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
                         st.session_state.session_id = None
+                        total_blocks = 1
                 
                 if not articles:
                     st.error("❌ Could not process any articles")
                     st.stop()
                 
-                st.success(f"✅ Processed {len(articles)} articles")
+                st.success(f"✅ Processed {len(articles)} articles from {total_blocks} blocks")
                 
                 with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
                     articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
@@ -2525,60 +2632,29 @@ def main():
                     st.info("💡 Try reducing the relevance threshold to include more articles.")
                     st.stop()
                 
-                with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
-                    flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
-                
-                display_flavors_preview(flavors)
-                
-                with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
-                    doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), 
-                                                      relevance_threshold, query_terms, hypothesis_terms)
-                    
-                    docx_bytes = BytesIO()
-                    doc.save(docx_bytes)
-                    docx_bytes.seek(0)
-                
-                with st.spinner("📊 Creating CSV export..."):
-                    csv_data = export_articles_to_csv(articles)
-                
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                
-                st.markdown("---")
-                st.markdown("## 📥 Download Your Documents")
-                
-                col_left, col_right = st.columns(2)
-                with col_left:
-                    st.download_button(
-                        label="💾 DOWNLOAD FLAVORS (DOCX)",
-                        data=docx_bytes,
-                        file_name=f"flavors_{timestamp}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        type="primary"
-                    )
-                with col_right:
-                    if csv_data:
-                        st.download_button(
-                            label="📊 DOWNLOAD ARTICLES (CSV)",
-                            data=csv_data,
-                            file_name=f"articles_{timestamp}.csv",
-                            mime="text/csv"
-                        )
-                
-                if session_manager and st.session_state.session_id:
-                    st.success(f"💾 Session saved: {st.session_state.session_id[:20]}...")
-                
                 elapsed_time = time.time() - start_time
-                st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
-                st.balloons()
+                st.info(f"⏱️ Processing time: {elapsed_time/60:.1f} minutes")
+                
+                # Generar flavors automáticamente si está activada la opción
+                if auto_flavors and session_manager and st.session_state.session_id:
+                    st.balloons()
+                    success = generate_automatic_flavors(session_manager, st.session_state.session_id, relevance_threshold)
+                    if success:
+                        st.success("🎉 ¡Proceso completado! Los flavors se han generado y puedes descargarlos arriba.")
+                else:
+                    # Si no se generan automáticamente, mostrar mensaje
+                    st.success(f"✅ Processing complete! Session saved: {st.session_state.session_id[:25]}...")
+                    st.info("💡 Ve a la sección de sesiones guardadas en el panel izquierdo para generar los flavors cuando lo necesites.")
+                    st.balloons()
     
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v21.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v22.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Block processing (1000 articles/block) | Independent checkpoints | Generate flavors per block</strong>
+            <strong>✅ Block processing (1000 articles/block) | Independent checkpoints | AUTO FLAVOR GENERATION</strong>
         </div>
         """,
         unsafe_allow_html=True
