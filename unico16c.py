@@ -211,9 +211,10 @@ class UserSessionManager:
         self.checkpoints_file = f"{login}_checkpoints.csv"
     
     def create_session(self, query: str, hypothesis: str, relevance_threshold: float) -> str:
-        """Crear nueva sesión para el usuario"""
-        session_id = hashlib.md5(f"{query}{hypothesis}{self.login}{datetime.now()}".encode()).hexdigest()[:16]
-        query_hash = hashlib.md5(query.encode()).hexdigest()
+        """Crear nueva sesión para el usuario con ID único basado en timestamp"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
+        session_id = f"{timestamp}_{query_hash}"
         
         session_data = pd.DataFrame([{
             'session_id': session_id,
@@ -242,17 +243,14 @@ class UserSessionManager:
         
         records = []
         for i, article in enumerate(articles):
-            # Depuración: mostrar progreso cada 100 artículos
             if i % 100 == 0 and i > 0:
                 st.write(f"   Procesando artículo {i+1}/{len(articles)}...")
             
-            # Asegurar que el PMID existe
             pmid = article.get('pmid', '')
             if not pmid:
                 st.warning(f"⚠️ Artículo {i} sin PMID, saltando...")
                 continue
             
-            # Obtener valores de forma segura
             relevance_score = article.get('relevance_score', 0.5)
             if relevance_score is None:
                 relevance_score = 0.5
@@ -269,7 +267,6 @@ class UserSessionManager:
             if outcomes is None:
                 outcomes = []
             
-            # Crear registro con todos los campos necesarios
             record = {
                 'pmid': str(pmid),
                 'session_id': session_id,
@@ -291,7 +288,8 @@ class UserSessionManager:
                 'search_relevance': float(search_relevance),
                 'hypothesis_relevance': float(hypothesis_relevance),
                 'embedding_used': 'BioBERT' if not USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else ('SBERT' if USE_FALLBACK else 'TF-IDF'),
-                'processed_date': datetime.now().isoformat()
+                'processed_date': datetime.now().isoformat(),
+                'block_number': article.get('block_number', 0)
             }
             records.append(record)
         
@@ -299,26 +297,15 @@ class UserSessionManager:
             st.error("❌ Error: No se pudieron crear registros válidos")
             return
         
-        # Crear DataFrame
         df_new = pd.DataFrame(records)
-        
         st.info(f"📊 DataFrame creado con {len(df_new)} registros")
         
-        # Mostrar los primeros 5 PMIDs para verificar
-        if len(df_new) > 0:
-            st.write(f"   Primeros 5 PMIDs: {', '.join(df_new['pmid'].head(5).tolist())}")
-        
-        # Leer archivo existente
         existing_df = self.remote.read_csv(self.articles_file)
         
         if existing_df is not None and not existing_df.empty:
             st.info(f"📂 Archivo existente tiene {len(existing_df)} registros")
-            
-            # Combinar y eliminar duplicados
             df = pd.concat([existing_df, df_new], ignore_index=True)
             original_len = len(df)
-            
-            # Eliminar duplicados por pmid Y session_id
             df = df.drop_duplicates(subset=['pmid', 'session_id'], keep='last')
             
             if len(df) < original_len:
@@ -327,32 +314,29 @@ class UserSessionManager:
             st.info("📂 Creando nuevo archivo")
             df = df_new
         
-        # Guardar
         success = self.remote.write_csv(self.articles_file, df)
         
         if success:
             st.success(f"✅ Guardados {len(df_new)} artículos correctamente")
             
-            # Verificar que se guardaron
             verify_df = self.remote.read_csv(self.articles_file)
             if verify_df is not None:
                 session_articles = verify_df[verify_df['session_id'] == session_id]
                 st.info(f"📊 Verificación: {len(session_articles)} artículos en la sesión {session_id[:8]}")
                 
-                # Mostrar estadísticas de relevancia
                 if not session_articles.empty and 'relevance_score' in session_articles.columns:
                     avg_relevance = session_articles['relevance_score'].mean()
                     st.info(f"   Relevancia promedio: {avg_relevance:.3f}")
         else:
             st.error("❌ Error al guardar artículos")
     
-    def save_checkpoint(self, session_id: str, batch_num: int, batch_size: int,
+    def save_checkpoint(self, session_id: str, block_num: int, batch_size: int,
                         start_idx: int, end_idx: int, articles_processed: int):
-        """Guardar checkpoint de procesamiento"""
+        """Guardar checkpoint para un bloque específico (1-indexed)"""
         checkpoint_data = pd.DataFrame([{
             'session_id': session_id,
             'login': self.login,
-            'batch_number': batch_num,
+            'batch_number': block_num,
             'batch_size': batch_size,
             'start_idx': start_idx,
             'end_idx': end_idx,
@@ -362,6 +346,15 @@ class UserSessionManager:
         }])
         
         self.remote.append_to_csv(self.checkpoints_file, checkpoint_data)
+    
+    def get_completed_blocks(self, session_id: str) -> set:
+        """Obtener conjunto de números de bloque completados"""
+        df = self.remote.read_csv(self.checkpoints_file)
+        if df is None or df.empty:
+            return set()
+        
+        session_checkpoints = df[df['session_id'] == session_id]
+        return set(int(cp['batch_number']) for _, cp in session_checkpoints.iterrows())
     
     def get_last_checkpoint(self, session_id: str) -> Optional[Dict]:
         """Obtener último checkpoint de una sesión"""
@@ -434,17 +427,14 @@ class UserSessionManager:
                 'avg_relevance': 0
             }
         
-        # Calcular promedio de calidad de forma segura
         avg_quality = 0
         if 'quality_score' in articles_df.columns:
             avg_quality = articles_df['quality_score'].mean() if not articles_df['quality_score'].isna().all() else 0
         
-        # Calcular evidencia fuerte de forma segura
         strong_evidence = 0
         if 'evidence_strength' in articles_df.columns:
             strong_evidence = len(articles_df[articles_df['evidence_strength'].str.contains('STRONG', na=False)])
         
-        # Calcular relevancia promedio de forma segura
         avg_relevance = 0
         if 'relevance_score' in articles_df.columns:
             avg_relevance = articles_df['relevance_score'].mean() if not articles_df['relevance_score'].isna().all() else 0
@@ -464,7 +454,7 @@ class UserSessionManager:
         
         export_columns = ['pmid', 'title', 'authors', 'journal', 'pubdate', 'doi',
                           'study_types', 'quality_score', 'evidence_strength',
-                          'relevance_score', 'outcomes', 'processed_date']
+                          'relevance_score', 'outcomes', 'processed_date', 'block_number']
         
         available_cols = [col for col in export_columns if col in articles_df.columns]
         export_df = articles_df[available_cols]
@@ -490,20 +480,16 @@ class UserSessionManager:
     def delete_session(self, session_id: str) -> bool:
         """Eliminar una sesión y sus artículos asociados"""
         try:
-            # Obtener artículos actuales
             articles_df = self.remote.read_csv(self.articles_file)
             if articles_df is not None and not articles_df.empty:
-                # Filtrar artículos de otras sesiones
                 articles_df = articles_df[articles_df['session_id'] != session_id]
                 self.remote.write_csv(self.articles_file, articles_df)
             
-            # Obtener sesiones actuales
             sessions_df = self.remote.read_csv(self.sessions_file)
             if sessions_df is not None and not sessions_df.empty:
                 sessions_df = sessions_df[sessions_df['session_id'] != session_id]
                 self.remote.write_csv(self.sessions_file, sessions_df)
             
-            # Obtener checkpoints actuales
             checkpoints_df = self.remote.read_csv(self.checkpoints_file)
             if checkpoints_df is not None and not checkpoints_df.empty:
                 checkpoints_df = checkpoints_df[checkpoints_df['session_id'] != session_id]
@@ -513,6 +499,21 @@ class UserSessionManager:
         except Exception as e:
             st.error(f"Error eliminando sesión: {e}")
             return False
+    
+    def get_articles_by_block(self, session_id: str, block_number: int) -> pd.DataFrame:
+        """Obtener artículos de un bloque específico"""
+        articles_df = self.get_session_articles(session_id)
+        if articles_df.empty:
+            return pd.DataFrame()
+        
+        if 'block_number' in articles_df.columns:
+            return articles_df[articles_df['block_number'] == block_number]
+        else:
+            # Fallback: inferir bloque por posición
+            BLOCK_SIZE = 1000
+            start_idx = (block_number - 1) * BLOCK_SIZE
+            end_idx = block_number * BLOCK_SIZE
+            return articles_df.iloc[start_idx:end_idx] if len(articles_df) > start_idx else pd.DataFrame()
 
 
 # ============================================================================
@@ -1028,8 +1029,8 @@ def extract_article_info(doc_sum):
     return article
 
 
-def search_pubmed(query, retmax=1000):
-    """Search articles in PubMed with rate limiting"""
+def search_pubmed(query, retmax=100000):
+    """Search articles in PubMed with rate limiting - increased retmax"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
     search_url = f"{base_url}esearch.fcgi"
@@ -1056,7 +1057,7 @@ def search_pubmed(query, retmax=1000):
         return [], 0
 
 
-def fetch_articles_details(id_list, query_terms, hypothesis_terms):
+def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=0):
     """Fetch article details and analyze them"""
     if not id_list:
         return []
@@ -1114,6 +1115,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
                     
                     ai_analysis = analyze_article_with_ai(article["title"], abstract, query_terms, hypothesis_terms)
                     article.update(ai_analysis)
+                    article["block_number"] = block_number
                     
                     articles.append(article)
                 
@@ -1135,8 +1137,9 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms):
     return articles
 
 
-def process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis):
-    """Procesar artículos en bloques de 1000 con checkpoint y cálculo de relevancia"""
+def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_terms, 
+                                           session_manager, session_id, query, hypothesis):
+    """Procesar artículos en bloques de 1000 con checkpoint independiente por bloque"""
     
     BLOCK_SIZE = 1000
     total_to_process = len(id_list)
@@ -1145,82 +1148,85 @@ def process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_m
     all_articles = []
     
     if session_manager:
-        last_checkpoint = session_manager.get_last_checkpoint(session_id)
-        start_block = 0
-        processed_pmids = set()
+        completed_blocks = session_manager.get_completed_blocks(session_id)
         
-        if last_checkpoint:
-            start_block = last_checkpoint['batch_number']
-            st.info(f"🔄 Reanudando desde bloque {start_block} (ya procesados {last_checkpoint['articles_processed']} artículos)")
-            
-            existing_df = session_manager.get_session_articles(session_id)
-            if not existing_df.empty:
-                all_articles = existing_df.to_dict('records')
-                processed_pmids = set(existing_df['pmid'].tolist())
-                st.info(f"📊 {len(processed_pmids)} artículos ya procesados encontrados")
+        if completed_blocks:
+            st.info(f"🔄 Bloques ya completados: {sorted(completed_blocks)}")
+        
+        existing_df = session_manager.get_session_articles(session_id)
+        if not existing_df.empty:
+            all_articles = existing_df.to_dict('records')
+            processed_pmids = set(existing_df['pmid'].tolist())
+            st.info(f"📊 {len(processed_pmids)} artículos ya procesados encontrados")
         else:
-            start_block = 0
             processed_pmids = set()
     else:
-        start_block = 0
+        completed_blocks = set()
         processed_pmids = set()
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    initial_progress = start_block / total_blocks if total_blocks > 0 else 0
-    progress_bar.progress(initial_progress)
-    
-    for block_num in range(start_block, total_blocks):
-        start_idx = block_num * BLOCK_SIZE
-        end_idx = min((block_num + 1) * BLOCK_SIZE, total_to_process)
+    for block_num in range(1, total_blocks + 1):
+        if block_num in completed_blocks:
+            status_text.text(f"⏭️ Bloque {block_num}/{total_blocks} ya completado. Saltando...")
+            progress_bar.progress(block_num / total_blocks)
+            continue
+        
+        start_idx = (block_num - 1) * BLOCK_SIZE
+        end_idx = min(block_num * BLOCK_SIZE, total_to_process)
         
         block_ids = id_list[start_idx:end_idx]
         
         new_ids = [pid for pid in block_ids if pid not in processed_pmids]
         
         if not new_ids:
-            status_text.text(f"⏭️ Bloque {block_num + 1} ya procesado completamente. Saltando...")
-            progress_bar.progress((block_num + 1) / total_blocks)
+            status_text.text(f"⏭️ Bloque {block_num} sin nuevos IDs. Marcando como completado...")
+            if session_manager:
+                session_manager.save_checkpoint(session_id, block_num, BLOCK_SIZE, 
+                                               start_idx, end_idx, len(all_articles))
+            progress_bar.progress(block_num / total_blocks)
             continue
         
-        status_text.text(f"📦 Procesando bloque {block_num + 1}/{total_blocks} (artículos {start_idx+1}-{end_idx}, {len(new_ids)} nuevos)")
+        status_text.text(f"📦 PROCESANDO BLOQUE {block_num}/{total_blocks} (artículos {start_idx+1}-{end_idx}, {len(new_ids)} nuevos)")
         
-        # Obtener detalles de los artículos
-        block_articles = fetch_articles_details(new_ids, query_terms, hypothesis_terms)
+        block_articles = fetch_articles_details(new_ids, query_terms, hypothesis_terms, block_num)
         
-        # Calcular relevancia para los nuevos artículos
         if block_articles:
-            st.info(f"🧠 Calculando relevancia para {len(block_articles)} artículos...")
+            st.info(f"🧠 Calculando relevancia para {len(block_articles)} artículos del bloque {block_num}...")
             block_articles = calculate_relevance_to_search_and_hypothesis(block_articles, query, hypothesis)
         
         if session_manager and block_articles:
-            # Guardar los nuevos artículos
             session_manager.save_articles_batch(block_articles, session_id)
             
             for article in block_articles:
                 processed_pmids.add(article.get('pmid', ''))
             
-            # Actualizar checkpoint
             session_manager.save_checkpoint(
                 session_id, 
-                block_num + 1,
+                block_num,
                 BLOCK_SIZE, 
                 start_idx, 
                 end_idx, 
                 len(all_articles) + len(block_articles)
             )
+            
+            st.success(f"✅ BLOQUE {block_num} COMPLETADO y guardado. {len(block_articles)} artículos añadidos.")
         
         all_articles.extend(block_articles)
         
-        progress_bar.progress((block_num + 1) / total_blocks)
-        status_text.text(f"✅ Bloque {block_num + 1} completado. Total procesados: {len(all_articles)}")
+        progress_bar.progress(block_num / total_blocks)
         
-        if block_num < total_blocks - 1:
+        if block_num < total_blocks:
             time.sleep(2)
     
     progress_bar.empty()
     status_text.empty()
+    
+    if session_manager:
+        session_manager.update_session(session_id, 'completed', 
+                                      total_found=total_to_process, 
+                                      total_processed=len(all_articles))
     
     return all_articles
 
@@ -1675,7 +1681,6 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
     if not articles:
         return {}
     
-    # Filtrar artículos None
     articles = [a for a in articles if a is not None]
     if not articles:
         return {}
@@ -1746,7 +1751,6 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
     if not articles:
         return "No articles available for this flavor.", []
     
-    # Filtrar artículos None
     articles = [a for a in articles if a is not None]
     if not articles:
         return "No articles available for this flavor.", []
@@ -1954,21 +1958,17 @@ def export_articles_to_csv(articles):
     
     data = []
     for article in articles:
-        # Asegurar que article es un diccionario
         if not article:
             continue
             
-        # Obtener abstract de forma segura
         abstract = article.get('abstract', '')
         if abstract is None:
             abstract = ''
         
-        # Obtener outcomes de forma segura
         outcomes = article.get('all_outcomes', [])
         if outcomes is None:
             outcomes = []
         
-        # Obtener relevance scores de forma segura
         relevance_score = article.get('relevance_score', 0)
         if relevance_score is None:
             relevance_score = 0
@@ -1998,6 +1998,7 @@ def export_articles_to_csv(articles):
             'Search Relevance': float(search_relevance),
             'Hypothesis Relevance': float(hypothesis_relevance),
             'Outcomes': ', '.join(str(o) for o in outcomes if o) if outcomes else '',
+            'Block Number': int(article.get('block_number', 0)),
             'Abstract (first 500 chars)': str(abstract)[:500] if abstract else ''
         }
         data.append(row)
@@ -2012,6 +2013,52 @@ def export_articles_to_csv(articles):
     csv_buffer.seek(0)
     
     return csv_buffer.getvalue().encode('utf-8-sig')
+
+
+def generate_flavors_from_saved_session_only(session_manager, session_id, relevance_threshold, block_number=None):
+    """Función separada: SOLO genera flavors desde archivos guardados de un bloque específico"""
+    
+    if block_number is not None:
+        articles_df = session_manager.get_articles_by_block(session_id, block_number)
+        block_label = f"bloque {block_number}"
+    else:
+        articles_df = session_manager.get_session_articles(session_id)
+        block_label = "sesión completa"
+    
+    if articles_df.empty:
+        st.error(f"❌ No hay artículos en {block_label}")
+        return None, None, None, None
+    
+    session_info = session_manager.get_session_info(session_id)
+    if session_info is None:
+        st.error("❌ No se pudo obtener información de la sesión")
+        return None, None, None, None
+    
+    query = session_info.get('query', '')
+    hypothesis = session_info.get('hypothesis', '')
+    
+    articles = articles_df.to_dict('records')
+    articles = [a for a in articles if a is not None]
+    
+    st.info(f"✅ Cargados {len(articles)} artículos de {block_label}")
+    
+    threshold = relevance_threshold if relevance_threshold is not None else float(session_info.get('relevance_threshold', 0.35))
+    filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= threshold]
+    st.info(f"📊 Filtro de relevancia ({threshold}): {len(filtered_articles)} de {len(articles)} artículos")
+    
+    if len(filtered_articles) < 5:
+        st.error(f"❌ No hay suficientes artículos después del filtro (mínimo 5, hay {len(filtered_articles)})")
+        return None, None, None, None
+    
+    query_terms = extract_key_terms_from_query(query)
+    hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
+    
+    st.info(f"📝 Extraídos {len(query_terms)} términos de búsqueda y {len(hypothesis_terms)} de hipótesis")
+    
+    with st.spinner("🔍 Generando flavors desde artículos guardados..."):
+        flavors = generate_all_flavors(filtered_articles, query_terms, hypothesis_terms)
+    
+    return flavors, filtered_articles, query, hypothesis
 
 
 def display_flavors_preview(flavors):
@@ -2034,7 +2081,6 @@ def display_flavors_preview(flavors):
             with st.expander(f"🔹 Flavor {i}: {flavor.get('name', 'Unnamed')} ({flavor.get('n_articles', 0)} articles)", expanded=(i==1)):
                 col1, col2 = st.columns(2)
                 with col1:
-                    # Obtener artículos de forma segura
                     rep_articles = flavor.get('representative_articles', [])
                     if not rep_articles:
                         rep_articles = flavor.get('articles', [])[:5]
@@ -2074,6 +2120,53 @@ def display_flavors_preview(flavors):
     return total_flavors
 
 
+def display_session_exporter(session_manager):
+    """Mostrar opciones para exportar sesiones anteriores"""
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📤 Exportar sesión")
+    
+    user_sessions = session_manager.get_user_sessions()
+    if user_sessions.empty:
+        st.sidebar.info("No hay sesiones para exportar")
+        return
+    
+    session_options = {}
+    for _, session in user_sessions.iterrows():
+        session_id = session['session_id']
+        session_name = f"{session_id[:20]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+        session_options[session_name] = session_id
+    
+    selected_session_name = st.sidebar.selectbox(
+        "Seleccionar sesión para exportar:",
+        options=list(session_options.keys()),
+        key="exporter_selector"
+    )
+    
+    if selected_session_name:
+        selected_session_id = session_options[selected_session_name]
+        stats = session_manager.get_session_stats(selected_session_id)
+        
+        st.sidebar.markdown(f"""
+        **Estadísticas:**
+        - 📄 Artículos: {stats['total_articles']}
+        - ⭐ Calidad media: {stats['avg_quality']:.1f}
+        - 💪 Evidencia fuerte: {stats['strong_evidence']}
+        - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
+        """)
+        
+        if st.sidebar.button("📥 Exportar esta sesión a CSV", key="export_button"):
+            csv_data = session_manager.export_session_to_csv(selected_session_id)
+            if csv_data:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                st.sidebar.download_button(
+                    label="💾 DESCARGAR CSV",
+                    data=csv_data,
+                    file_name=f"session_{selected_session_id[:8]}_{timestamp}.csv",
+                    mime="text/csv",
+                    key="download_button"
+                )
+
+
 # ============================================================================
 # MAIN APPLICATION
 # ============================================================================
@@ -2081,7 +2174,6 @@ def display_flavors_preview(flavors):
 def main():
     st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
     
-    # Solicitar login del usuario al inicio
     if 'user_login' not in st.session_state:
         st.markdown("### 🔐 Identificación de usuario")
         st.markdown("Por favor, ingrese su login para guardar su progreso:")
@@ -2098,7 +2190,6 @@ def main():
         if st.button("✅ Continuar con este login", type="primary"):
             if login.strip():
                 st.session_state.user_login = login.strip().lower()
-                # Limpiar cualquier estado de sesión al iniciar nuevo login
                 if 'selected_session_id' in st.session_state:
                     del st.session_state.selected_session_id
                 if 'new_search_mode' in st.session_state:
@@ -2108,11 +2199,9 @@ def main():
                 st.warning("⚠️ Por favor ingrese un login válido")
         return
     
-    # Inicializar estado de nueva búsqueda si no existe
     if 'new_search_mode' not in st.session_state:
         st.session_state.new_search_mode = True
     
-    # Intentar conectar al almacenamiento remoto
     session_manager = None
     selected_session_id = None
     
@@ -2137,7 +2226,6 @@ def main():
                 st.session_state.new_search_mode = True
             st.rerun()
         
-        # --- Mostrar sesiones disponibles y permitir selección para uso ---
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 📂 Seleccionar sesión para análisis")
         
@@ -2147,17 +2235,15 @@ def main():
             session_options = {}
             for _, session in user_sessions.iterrows():
                 session_id = session['session_id']
-                session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+                session_name = f"{session_id[:20]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
                 session_options[session_name] = session_id
             
-            # Valor por defecto para el selector
             session_names = ["[NUEVA BÚSQUEDA]"] + list(session_options.keys())
             
-            # Determinar índice por defecto basado en el modo
             if st.session_state.new_search_mode:
                 default_index = 0
             else:
-                default_index = 1  # Primera sesión guardada
+                default_index = 1
             
             selected_session_name = st.sidebar.selectbox(
                 "Sesiones guardadas:",
@@ -2169,7 +2255,6 @@ def main():
             if selected_session_name == "[NUEVA BÚSQUEDA]":
                 st.session_state.new_search_mode = True
                 selected_session_id = None
-                # Limpiar cualquier sesión guardada en el estado
                 if 'selected_session_id' in st.session_state:
                     del st.session_state.selected_session_id
                 st.sidebar.info("🆕 Modo nueva búsqueda activado")
@@ -2177,9 +2262,8 @@ def main():
                 st.session_state.new_search_mode = False
                 selected_session_id = session_options[selected_session_name]
                 st.session_state.selected_session_id = selected_session_id
-                st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:8]}...")
+                st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:20]}...")
                 
-                # Mostrar estadísticas de la sesión
                 stats = session_manager.get_session_stats(selected_session_id)
                 st.sidebar.markdown(f"""
                 **📊 Estadísticas:**
@@ -2189,11 +2273,9 @@ def main():
                 - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
                 """)
                 
-                # Botón para eliminar sesión (opcional)
                 if st.sidebar.button("🗑️ Eliminar esta sesión", key="delete_session"):
                     if session_manager.delete_session(selected_session_id):
                         st.sidebar.success("Sesión eliminada correctamente")
-                        # Limpiar estado después de eliminar
                         if 'selected_session_id' in st.session_state:
                             del st.session_state.selected_session_id
                         st.session_state.new_search_mode = True
@@ -2202,7 +2284,6 @@ def main():
             st.sidebar.info("No hay sesiones guardadas. Realiza una nueva búsqueda.")
             st.session_state.new_search_mode = True
         
-        # Mantener el exportador de sesiones existente
         display_session_exporter(session_manager)
         
     except Exception as e:
@@ -2212,11 +2293,9 @@ def main():
         selected_session_id = None
         st.session_state.new_search_mode = True
     
-    # Si estamos en modo nueva búsqueda, ignorar cualquier selected_session_id que pueda existir
     if st.session_state.new_search_mode:
         selected_session_id = None
     
-    # Display embedder status
     if USE_FALLBACK:
         st.warning("⚠️ BioBERT unavailable - Using SBERT (general model). Semantic quality may be slightly reduced.")
     elif AI_EMBEDDINGS_AVAILABLE:
@@ -2224,7 +2303,7 @@ def main():
     else:
         st.info("ℹ️ Using TF-IDF based methods (no embeddings). Quality still good for most use cases.")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | Block processing (1000 articles per block)")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -2243,6 +2322,7 @@ def main():
     - 📊 **CSV Export**: Download all article data as CSV for further analysis
     - 🚫 **No hardcoded examples**: All content generated from your data
     - 💾 **Remote storage**: Your articles are saved on remote server with your login
+    - 📦 **Block processing**: Articles processed in blocks of 1000 with independent checkpoints
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -2260,50 +2340,84 @@ def main():
     st.markdown("---")
     st.markdown("### 📝 Configuration")
     
-    # Si hay una sesión seleccionada y NO estamos en modo nueva búsqueda, mostrar la información de la sesión
     if selected_session_id and session_manager and not st.session_state.new_search_mode:
         session_info = session_manager.get_session_info(selected_session_id)
         if session_info:
             st.info(f"""
-            **📌 Usando sesión guardada:** {selected_session_id[:8]}...
+            **📌 Usando sesión guardada:** {selected_session_id[:20]}...
             - **Búsqueda original:** {session_info.get('query', 'N/A')[:200]}...
             - **Hipótesis:** {session_info.get('hypothesis', 'N/A')[:200]}...
             - **Threshold de relevancia:** {session_info.get('relevance_threshold', 0.35)}
             - **Artículos totales:** {session_info.get('total_processed', 0)}
             """)
             
-            # Mostrar campos de configuración pero deshabilitados (solo lectura)
-            query = st.text_area(
-                "**PubMed search strategy (from saved session):**",
-                value=session_info.get('query', ''),
-                height=100,
-                disabled=True
-            )
+            articles_df = session_manager.get_session_articles(selected_session_id)
+            total_articles = len(articles_df)
+            BLOCK_SIZE = 1000
+            num_blocks = (total_articles + BLOCK_SIZE - 1) // BLOCK_SIZE if total_articles > 0 else 0
             
-            relevance_threshold = st.slider(
-                "Relevance threshold (from saved session):",
-                min_value=0.0,
-                max_value=0.9,
-                value=float(session_info.get('relevance_threshold', 0.35)),
-                step=0.05,
-                disabled=True
-            )
-            
-            hypothesis = st.text_area(
-                "**📌 Hypothesis (from saved session):**",
-                value=session_info.get('hypothesis', ''),
-                height=100,
-                disabled=True
-            )
-            
-            generate_button = st.button("🚀 GENERATE FLAVORS FROM SAVED SESSION", type="primary", use_container_width=True)
-            
+            if num_blocks > 0:
+                st.markdown(f"### 📦 Bloques disponibles: {num_blocks} bloques de hasta {BLOCK_SIZE} artículos")
+                
+                block_options = ["TODA LA SESIÓN (todos los bloques juntos)"] + \
+                               [f"Bloque {i+1} (artículos {i*BLOCK_SIZE+1}-{min((i+1)*BLOCK_SIZE, total_articles)})" 
+                                for i in range(num_blocks)]
+                
+                selected_block_option = st.selectbox("Seleccionar bloque para generar flavors:", block_options)
+                
+                relevance_threshold_display = st.slider(
+                    "Relevance threshold:",
+                    min_value=0.0,
+                    max_value=0.9,
+                    value=float(session_info.get('relevance_threshold', 0.35)),
+                    step=0.05
+                )
+                
+                if st.button("🎨 GENERAR FLAVORS", type="primary"):
+                    if selected_block_option == "TODA LA SESIÓN (todos los bloques juntos)":
+                        flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
+                            session_manager, selected_session_id, relevance_threshold_display, block_number=None
+                        )
+                        block_label = "sesión_completa"
+                    else:
+                        block_num = int(selected_block_option.split()[1])
+                        flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
+                            session_manager, selected_session_id, relevance_threshold_display, block_number=block_num
+                        )
+                        block_label = f"bloque_{block_num}"
+                    
+                    if flavors:
+                        display_flavors_preview(flavors)
+                        
+                        query_terms = extract_key_terms_from_query(query)
+                        hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
+                        
+                        doc = create_document_with_flavors(flavors, hypothesis, query, len(filtered_articles),
+                                                          relevance_threshold_display, query_terms, hypothesis_terms)
+                        
+                        docx_bytes = BytesIO()
+                        doc.save(docx_bytes)
+                        docx_bytes.seek(0)
+                        
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        st.download_button(
+                            label="💾 DESCARGAR FLAVORS (DOCX)",
+                            data=docx_bytes,
+                            file_name=f"flavors_{block_label}_{timestamp}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            type="primary"
+                        )
+                        
+                        csv_data = export_articles_to_csv(filtered_articles)
+                        if csv_data:
+                            st.download_button(
+                                label="📊 DESCARGAR ARTÍCULOS (CSV)",
+                                data=csv_data,
+                                file_name=f"articles_{block_label}_{timestamp}.csv",
+                                mime="text/csv"
+                            )
     else:
-        # Configuración normal para nueva búsqueda (EDITABLE)
-        if st.session_state.new_search_mode:
-            st.info("🆕 **Modo Nueva Búsqueda** - Puedes ingresar una nueva estrategia de búsqueda")
-        else:
-            st.info("📝 **Configura tu búsqueda**")
+        st.info("🆕 **Modo Nueva Búsqueda** - Puedes ingresar una nueva estrategia de búsqueda")
         
         col1, col2 = st.columns([2, 1])
         
@@ -2353,95 +2467,8 @@ def main():
         )
         
         generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
-    
-    # Initialize session state
-    if 'results_generated' not in st.session_state:
-        st.session_state.results_generated = False
-        st.session_state.docx_data = None
-        st.session_state.csv_data = None
-        st.session_state.articles = None
-        st.session_state.total_articles = 0
-        st.session_state.total_processed = 0
-        st.session_state.n_flavors = 0
-        st.session_state.applied_threshold = 0.35
-        st.session_state.flavors = None
-        st.session_state.session_id = None
-    
-    if generate_button:
-        if selected_session_id and session_manager and not st.session_state.new_search_mode:
-            # --- Usar artículos de sesión existente ---
-            st.info(f"📂 Cargando artículos de la sesión guardada: {selected_session_id[:8]}...")
-            
-            # Cargar artículos de la sesión
-            articles_df = session_manager.get_session_articles(selected_session_id)
-            
-            if articles_df.empty:
-                st.error("❌ La sesión seleccionada no tiene artículos")
-                st.stop()
-            
-            # Convertir DataFrame a lista de diccionarios
-            articles = articles_df.to_dict('records')
-            
-            # Filtrar artículos None
-            articles = [a for a in articles if a is not None]
-            
-            # Reconstruir los términos de búsqueda e hipótesis desde la sesión
-            session_info = session_manager.get_session_info(selected_session_id)
-            query = session_info.get('query', '')
-            hypothesis = session_info.get('hypothesis', '')
-            relevance_threshold = float(session_info.get('relevance_threshold', 0.35))
-            
-            st.info(f"✅ Cargados {len(articles)} artículos de la sesión")
-            
-            # Extraer términos dinámicos
-            query_terms = extract_key_terms_from_query(query)
-            hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
-            
-            st.info(f"📝 Extraídos {len(query_terms)} términos de la búsqueda y {len(hypothesis_terms)} de la hipótesis")
-            
-            # Aplicar filtro de relevancia si es necesario
-            filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= relevance_threshold]
-            st.info(f"📊 Filtro de relevancia ({relevance_threshold}): {len(filtered_articles)} de {len(articles)} artículos")
-            articles = filtered_articles
-            
-            if len(articles) < 5:
-                st.error(f"❌ No hay suficientes artículos después del filtro (mínimo 5, hay {len(articles)})")
-                st.info("💡 Puedes intentar con otra sesión que tenga más artículos")
-                st.stop()
-            
-            # Generar flavors
-            with st.spinner("🔍 Generando flavors desde artículos guardados..."):
-                flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
-            
-            # Guardar en session_state
-            st.session_state.articles = articles
-            st.session_state.flavors = flavors
-            st.session_state.total_articles = len(articles)
-            st.session_state.total_processed = len(articles_df)
-            st.session_state.applied_threshold = relevance_threshold
-            
-            # Mostrar preview
-            total_flavors = display_flavors_preview(flavors)
-            st.session_state.n_flavors = total_flavors
-            
-            # Generar documento
-            with st.spinner("📄 Creando documento con flavors..."):
-                doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold, query_terms, hypothesis_terms)
-                docx_bytes = BytesIO()
-                doc.save(docx_bytes)
-                docx_bytes.seek(0)
-                st.session_state.docx_data = docx_bytes
-            
-            # Generar CSV
-            with st.spinner("📊 Creando archivo CSV..."):
-                csv_data = export_articles_to_csv(articles)
-                st.session_state.csv_data = csv_data
-            
-            st.session_state.results_generated = True
-            st.success("✅ Flavors generados exitosamente desde la sesión guardada!")
-            
-        else:
-            # --- Código para nueva búsqueda ---
+        
+        if generate_button:
             if not query.strip():
                 st.warning("⚠️ Please enter a search strategy")
             elif not hypothesis.strip():
@@ -2449,13 +2476,6 @@ def main():
             else:
                 start_time = time.time()
                 
-                # Reset state for new search
-                st.session_state.results_generated = False
-                st.session_state.docx_data = None
-                st.session_state.csv_data = None
-                st.session_state.applied_threshold = relevance_threshold
-                
-                # Extract dynamic terms from query and hypothesis
                 query_terms = extract_key_terms_from_query(query)
                 hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
                 
@@ -2467,20 +2487,20 @@ def main():
                     st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
                 
                 with st.spinner("🔍 Searching articles in PubMed..."):
-                    id_list, total_count = search_pubmed(query.strip(), retmax=1000)
+                    id_list, total_count = search_pubmed(query.strip(), retmax=100000)
                     
                     if not id_list:
                         st.error("❌ No articles found")
                         st.stop()
                     
-                    st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles...")
+                    st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles in blocks of 1000...")
                     
-                    # Crear sesión si hay almacenamiento remoto
                     if session_manager:
                         session_id = session_manager.create_session(query, hypothesis, relevance_threshold)
                         st.session_state.session_id = session_id
-                        articles = process_articles_in_blocks(id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis)
-                        session_manager.update_session(session_id, 'completed', total_found=total_count, total_processed=len(articles))
+                        articles = process_articles_in_independent_blocks(
+                            id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis
+                        )
                     else:
                         articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
                         st.session_state.session_id = None
@@ -2505,182 +2525,64 @@ def main():
                     st.info("💡 Try reducing the relevance threshold to include more articles.")
                     st.stop()
                 
-                st.session_state.articles = articles
-                
                 with st.spinner("🔍 Discovering and merging flavors (3-4 large groups)..."):
                     flavors = generate_all_flavors(articles, query_terms, hypothesis_terms)
-                    st.session_state.flavors = flavors
-                
-                total_flavors = sum(len(flavor_list) for flavor_list in flavors.values())
-                st.session_state.n_flavors = total_flavors
-                st.session_state.total_articles = len(articles)
-                st.session_state.total_processed = len(id_list) if id_list else 0
                 
                 display_flavors_preview(flavors)
                 
                 with st.spinner("📄 Creating document with extended summaries and embedded citations..."):
-                    doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), relevance_threshold, query_terms, hypothesis_terms)
+                    doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), 
+                                                      relevance_threshold, query_terms, hypothesis_terms)
                     
                     docx_bytes = BytesIO()
                     doc.save(docx_bytes)
                     docx_bytes.seek(0)
-                    
-                    st.session_state.docx_data = docx_bytes
                 
                 with st.spinner("📊 Creating CSV export..."):
                     csv_data = export_articles_to_csv(articles)
-                    st.session_state.csv_data = csv_data
                 
-                st.session_state.results_generated = True
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                st.markdown("---")
+                st.markdown("## 📥 Download Your Documents")
+                
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.download_button(
+                        label="💾 DOWNLOAD FLAVORS (DOCX)",
+                        data=docx_bytes,
+                        file_name=f"flavors_{timestamp}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary"
+                    )
+                with col_right:
+                    if csv_data:
+                        st.download_button(
+                            label="📊 DOWNLOAD ARTICLES (CSV)",
+                            data=csv_data,
+                            file_name=f"articles_{timestamp}.csv",
+                            mime="text/csv"
+                        )
+                
+                if session_manager and st.session_state.session_id:
+                    st.success(f"💾 Session saved: {st.session_state.session_id[:20]}...")
                 
                 elapsed_time = time.time() - start_time
                 st.info(f"⏱️ Total time: {elapsed_time/60:.1f} minutes")
-                
                 st.balloons()
-                st.success("🎉 Processing complete! Your documents are ready for download below.")
-    
-    if st.session_state.results_generated:
-        st.markdown("---")
-        st.markdown("## 📥 Download Your Documents")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Articles found", st.session_state.total_processed)
-        with col2:
-            st.metric("After filtering", st.session_state.total_articles)
-        with col3:
-            st.metric("Threshold used", f"{st.session_state.applied_threshold:.2f}")
-        with col4:
-            st.metric("Large flavors", st.session_state.n_flavors)
-        
-        col_left, col_right = st.columns(2)
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        with col_left:
-            st.markdown("### 📄 Flavors Document (DOCX)")
-            if st.session_state.docx_data is not None:
-                st.download_button(
-                    label="💾 DOWNLOAD FLAVORS (DOCX)",
-                    data=st.session_state.docx_data,
-                    file_name=f"flavors_{timestamp}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                    type="primary"
-                )
-                st.caption(f"📄 File: flavors_{timestamp}.docx")
-        
-        with col_right:
-            st.markdown("### 📊 Article Data (CSV)")
-            if st.session_state.csv_data is not None:
-                st.download_button(
-                    label="📊 DOWNLOAD ARTICLES (CSV)",
-                    data=st.session_state.csv_data,
-                    file_name=f"articles_{timestamp}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    type="secondary"
-                )
-                st.caption(f"📊 File: articles_{timestamp}.csv | Includes all article metadata, relevance scores, and outcomes")
-        
-        if st.session_state.articles:
-            st.info(f"📊 CSV contains {len(st.session_state.articles)} articles with analysis data")
-        
-        if st.session_state.session_id and session_manager:
-            st.success(f"💾 Session saved: {st.session_state.session_id[:8]}...")
-        
-        st.markdown("---")
-        col_reset1, col_reset2, col_reset3 = st.columns([1, 1, 1])
-        with col_reset2:
-            if st.button("🔄 Start New Search", use_container_width=True):
-                st.session_state.results_generated = False
-                st.session_state.docx_data = None
-                st.session_state.csv_data = None
-                st.session_state.articles = None
-                st.session_state.flavors = None
-                st.rerun()
-        
-        with st.expander("📖 Usage Guide"):
-            st.markdown(f"""
-            **Execution Summary:**
-            - Articles found in PubMed: {st.session_state.total_processed}
-            - Articles with relevance ≥ {st.session_state.applied_threshold:.2f}: {st.session_state.total_articles}
-            - Large flavors generated: {st.session_state.n_flavors}
-            
-            **Download Options:**
-            1. **FLAVORS (DOCX)**: Thematic paragraphs for Introduction and Discussion sections
-            2. **ARTICLES (CSV)**: Complete article data for further analysis
-            
-            **How to adjust results:**
-            - If you get **too few articles** (<15), **reduce the relevance threshold** (e.g., 0.25-0.30)
-            - If you get **too many articles** (>200), **increase the threshold** (e.g., 0.45-0.50)
-            - If processing is **too slow**, consider narrowing your search query
-            
-            **Embedding Status:**
-            - BioBERT: {'✅ Available' if not USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else '❌ Not available'}
-            - SBERT: {'✅ Available' if USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else '❌ Not available'}
-            - TF-IDF: {'✅ Available' if TFIDF_AVAILABLE else '❌ Not available'}
-            """)
     
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v20.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v21.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Fixed: TypeErrors handled with safe value conversions | Session loading working | New search mode fixed</strong>
+            <strong>✅ Block processing (1000 articles/block) | Independent checkpoints | Generate flavors per block</strong>
         </div>
         """,
         unsafe_allow_html=True
     )
-
-
-def display_session_exporter(session_manager):
-    """Mostrar opciones para exportar sesiones anteriores"""
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📤 Exportar sesión")
-    
-    user_sessions = session_manager.get_user_sessions()
-    if user_sessions.empty:
-        st.sidebar.info("No hay sesiones para exportar")
-        return
-    
-    session_options = {}
-    for _, session in user_sessions.iterrows():
-        session_id = session['session_id']
-        session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
-        session_options[session_name] = session_id
-    
-    selected_session_name = st.sidebar.selectbox(
-        "Seleccionar sesión para exportar:",
-        options=list(session_options.keys()),
-        key="exporter_selector"
-    )
-    
-    if selected_session_name:
-        selected_session_id = session_options[selected_session_name]
-        stats = session_manager.get_session_stats(selected_session_id)
-        
-        st.sidebar.markdown(f"""
-        **Estadísticas:**
-        - 📄 Artículos: {stats['total_articles']}
-        - ⭐ Calidad media: {stats['avg_quality']:.1f}
-        - 💪 Evidencia fuerte: {stats['strong_evidence']}
-        - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
-        """)
-        
-        if st.sidebar.button("📥 Exportar esta sesión a CSV", key="export_button"):
-            csv_data = session_manager.export_session_to_csv(selected_session_id)
-            if csv_data:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                st.sidebar.download_button(
-                    label="💾 DESCARGAR CSV",
-                    data=csv_data,
-                    file_name=f"session_{selected_session_id[:8]}_{timestamp}.csv",
-                    mime="text/csv",
-                    key="download_button"
-                )
 
 
 if __name__ == "__main__":
