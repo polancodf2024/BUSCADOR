@@ -2098,10 +2098,19 @@ def main():
         if st.button("✅ Continuar con este login", type="primary"):
             if login.strip():
                 st.session_state.user_login = login.strip().lower()
+                # Limpiar cualquier estado de sesión al iniciar nuevo login
+                if 'selected_session_id' in st.session_state:
+                    del st.session_state.selected_session_id
+                if 'new_search_mode' in st.session_state:
+                    st.session_state.new_search_mode = True
                 st.rerun()
             else:
                 st.warning("⚠️ Por favor ingrese un login válido")
         return
+    
+    # Inicializar estado de nueva búsqueda si no existe
+    if 'new_search_mode' not in st.session_state:
+        st.session_state.new_search_mode = True
     
     # Intentar conectar al almacenamiento remoto
     session_manager = None
@@ -2122,6 +2131,10 @@ def main():
         
         if st.sidebar.button("🔄 Cambiar usuario"):
             del st.session_state.user_login
+            if 'selected_session_id' in st.session_state:
+                del st.session_state.selected_session_id
+            if 'new_search_mode' in st.session_state:
+                st.session_state.new_search_mode = True
             st.rerun()
         
         # --- Mostrar sesiones disponibles y permitir selección para uso ---
@@ -2137,14 +2150,33 @@ def main():
                 session_name = f"{session_id[:8]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
                 session_options[session_name] = session_id
             
+            # Valor por defecto para el selector
+            session_names = ["[NUEVA BÚSQUEDA]"] + list(session_options.keys())
+            
+            # Determinar índice por defecto basado en el modo
+            if st.session_state.new_search_mode:
+                default_index = 0
+            else:
+                default_index = 1  # Primera sesión guardada
+            
             selected_session_name = st.sidebar.selectbox(
                 "Sesiones guardadas:",
-                options=["[NUEVA BÚSQUEDA]"] + list(session_options.keys()),
+                options=session_names,
+                index=default_index,
                 key="session_selector"
             )
             
-            if selected_session_name != "[NUEVA BÚSQUEDA]":
+            if selected_session_name == "[NUEVA BÚSQUEDA]":
+                st.session_state.new_search_mode = True
+                selected_session_id = None
+                # Limpiar cualquier sesión guardada en el estado
+                if 'selected_session_id' in st.session_state:
+                    del st.session_state.selected_session_id
+                st.sidebar.info("🆕 Modo nueva búsqueda activado")
+            else:
+                st.session_state.new_search_mode = False
                 selected_session_id = session_options[selected_session_name]
+                st.session_state.selected_session_id = selected_session_id
                 st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:8]}...")
                 
                 # Mostrar estadísticas de la sesión
@@ -2161,9 +2193,14 @@ def main():
                 if st.sidebar.button("🗑️ Eliminar esta sesión", key="delete_session"):
                     if session_manager.delete_session(selected_session_id):
                         st.sidebar.success("Sesión eliminada correctamente")
+                        # Limpiar estado después de eliminar
+                        if 'selected_session_id' in st.session_state:
+                            del st.session_state.selected_session_id
+                        st.session_state.new_search_mode = True
                         st.rerun()
         else:
             st.sidebar.info("No hay sesiones guardadas. Realiza una nueva búsqueda.")
+            st.session_state.new_search_mode = True
         
         # Mantener el exportador de sesiones existente
         display_session_exporter(session_manager)
@@ -2172,6 +2209,11 @@ def main():
         st.warning(f"⚠️ No se pudo conectar al almacenamiento remoto: {e}")
         st.info("💡 El programa funcionará sin guardado remoto.")
         session_manager = None
+        selected_session_id = None
+        st.session_state.new_search_mode = True
+    
+    # Si estamos en modo nueva búsqueda, ignorar cualquier selected_session_id que pueda existir
+    if st.session_state.new_search_mode:
         selected_session_id = None
     
     # Display embedder status
@@ -2218,8 +2260,8 @@ def main():
     st.markdown("---")
     st.markdown("### 📝 Configuration")
     
-    # Si hay una sesión seleccionada, mostrar la información de la sesión
-    if selected_session_id and session_manager:
+    # Si hay una sesión seleccionada y NO estamos en modo nueva búsqueda, mostrar la información de la sesión
+    if selected_session_id and session_manager and not st.session_state.new_search_mode:
         session_info = session_manager.get_session_info(selected_session_id)
         if session_info:
             st.info(f"""
@@ -2257,7 +2299,12 @@ def main():
             generate_button = st.button("🚀 GENERATE FLAVORS FROM SAVED SESSION", type="primary", use_container_width=True)
             
     else:
-        # Configuración normal para nueva búsqueda
+        # Configuración normal para nueva búsqueda (EDITABLE)
+        if st.session_state.new_search_mode:
+            st.info("🆕 **Modo Nueva Búsqueda** - Puedes ingresar una nueva estrategia de búsqueda")
+        else:
+            st.info("📝 **Configura tu búsqueda**")
+        
         col1, col2 = st.columns([2, 1])
         
         with col1:
@@ -2321,7 +2368,7 @@ def main():
         st.session_state.session_id = None
     
     if generate_button:
-        if selected_session_id and session_manager:
+        if selected_session_id and session_manager and not st.session_state.new_search_mode:
             # --- Usar artículos de sesión existente ---
             st.info(f"📂 Cargando artículos de la sesión guardada: {selected_session_id[:8]}...")
             
@@ -2582,7 +2629,7 @@ def main():
             🧠 PubMed AI Analyzer - Advanced Flavor Generator v20.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Fixed: TypeErrors handled with safe value conversions | Session loading working</strong>
+            <strong>✅ Fixed: TypeErrors handled with safe value conversions | Session loading working | New search mode fixed</strong>
         </div>
         """,
         unsafe_allow_html=True
