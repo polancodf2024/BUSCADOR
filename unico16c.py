@@ -19,6 +19,11 @@ import hashlib
 import paramiko
 import json
 from typing import List, Dict, Optional
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 warnings.filterwarnings('ignore')
 
 # ============================================================================
@@ -79,6 +84,48 @@ st.set_page_config(
     page_icon="🧠",
     layout="centered"
 )
+
+# ============================================================================
+# FUNCIONES DE CORREO ELECTRÓNICO
+# ============================================================================
+
+def send_docx_by_email(to_email, subject, body, docx_bytes, session_id):
+    """Enviar correo con archivo adjunto DOCX solamente"""
+    try:
+        # Configuración del servidor SMTP desde secrets
+        smtp_server = st.secrets["smtp_server"]
+        smtp_port = st.secrets["smtp_port"]
+        email_user = st.secrets["email_user"]
+        email_password = st.secrets["email_password"]
+        
+        # Crear mensaje
+        msg = MIMEMultipart()
+        msg['From'] = email_user
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        # Cuerpo del mensaje
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Adjuntar archivo DOCX
+        docx_part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
+        docx_part.set_payload(docx_bytes.getvalue())
+        encoders.encode_base64(docx_part)
+        docx_part.add_header('Content-Disposition', f'attachment; filename="flavors_{session_id}.docx"')
+        msg.attach(docx_part)
+        
+        # Enviar correo
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(email_user, email_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ Error al enviar correo: {e}")
+        return False
+
 
 # ============================================================================
 # CLASES PARA ALMACENAMIENTO REMOTO CON CSV
@@ -173,7 +220,6 @@ class RemoteCSVStorage:
             
             if existing_df is not None and not existing_df.empty:
                 df = pd.concat([existing_df, new_data], ignore_index=True)
-                # Eliminar duplicados por pmid Y session_id
                 if 'pmid' in df.columns and 'session_id' in df.columns:
                     df = df.drop_duplicates(subset=['pmid', 'session_id'], keep='last')
                 elif 'pmid' in df.columns:
@@ -210,7 +256,7 @@ class UserSessionManager:
         self.sessions_file = f"{login}_sessions.csv"
         self.checkpoints_file = f"{login}_checkpoints.csv"
     
-    def create_session(self, query: str, hypothesis: str, relevance_threshold: float) -> str:
+    def create_session(self, query: str, hypothesis: str, relevance_threshold: float, email: str) -> str:
         """Crear nueva sesión para el usuario con ID único basado en timestamp"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
@@ -228,7 +274,8 @@ class UserSessionManager:
             'start_time': datetime.now().isoformat(),
             'end_time': None,
             'status': 'running',
-            'flavors_generated': False
+            'flavors_generated': False,
+            'user_email': email
         }])
         
         self.remote.append_to_csv(self.sessions_file, session_data)
@@ -244,6 +291,18 @@ class UserSessionManager:
         df.loc[mask, 'flavors_generated'] = True
         
         self.remote.write_csv(self.sessions_file, df)
+    
+    def get_user_email(self, session_id: str) -> Optional[str]:
+        """Obtener el email del usuario para una sesión"""
+        df = self.remote.read_csv(self.sessions_file)
+        if df is None or df.empty:
+            return None
+        
+        session_data = df[df['session_id'] == session_id]
+        if session_data.empty:
+            return None
+        
+        return session_data.iloc[0].get('user_email', None)
     
     def save_articles_batch(self, articles: List[Dict], session_id: str):
         """Guardar lote de artículos con verificación mejorada"""
@@ -521,7 +580,6 @@ class UserSessionManager:
         if 'block_number' in articles_df.columns:
             return articles_df[articles_df['block_number'] == block_number]
         else:
-            # Fallback: inferir bloque por posición
             BLOCK_SIZE = 1000
             start_idx = (block_number - 1) * BLOCK_SIZE
             end_idx = block_number * BLOCK_SIZE
@@ -541,7 +599,7 @@ class UserSessionManager:
 
 
 # ============================================================================
-# FUNCIONES DE UTILIDAD PARA PubMed CON MANEJO DE RATE LIMITING
+# FUNCIONES DE UTILIDAD PARA PubMed CON MANEJO DE RATE LIMITING Y PAGINACIÓN
 # ============================================================================
 
 def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
@@ -567,6 +625,89 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
             time.sleep(delay)
     
     return None
+
+
+def search_pubmed_complete(query, batch_size=10000):
+    """Search articles in PubMed with COMPLETE pagination to get ALL results"""
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+    
+    # Primero, obtener el número total de artículos
+    search_url = f"{base_url}esearch.fcgi"
+    search_params = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": 1,
+        "retmode": "xml"
+    }
+    
+    try:
+        response = make_request_with_retry(search_url, search_params)
+        if response is None:
+            return [], 0
+            
+        root = ElementTree.fromstring(response.content)
+        total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
+        
+        st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+        
+        if total_count == 0:
+            return [], 0
+        
+        # Ahora recuperar TODOS los IDs con paginación
+        all_ids = []
+        total_batches = (total_count + batch_size - 1) // batch_size
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for batch_num in range(total_batches):
+            retstart = batch_num * batch_size
+            actual_batch_size = min(batch_size, total_count - retstart)
+            
+            status_text.text(f"📥 Descargando IDs: lote {batch_num + 1}/{total_batches} (artículos {retstart+1}-{retstart+actual_batch_size})")
+            
+            fetch_params = {
+                "db": "pubmed",
+                "term": query,
+                "retmax": batch_size,
+                "retstart": retstart,
+                "retmode": "xml",
+                "sort": "relevance"
+            }
+            
+            try:
+                fetch_response = make_request_with_retry(search_url, fetch_params)
+                if fetch_response is None:
+                    st.warning(f"⚠️ Error obteniendo lote {batch_num + 1}")
+                    continue
+                
+                fetch_root = ElementTree.fromstring(fetch_response.content)
+                batch_ids = [id_elem.text for id_elem in fetch_root.findall(".//Id")]
+                all_ids.extend(batch_ids)
+                
+                st.info(f"   ✅ Lote {batch_num + 1}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
+                
+                progress_bar.progress((batch_num + 1) / total_batches)
+                
+                time.sleep(0.5)
+                
+            except Exception as e:
+                st.error(f"Error en lote {batch_num + 1}: {e}")
+                continue
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        st.success(f"✅ Recuperados {len(all_ids)} de {total_count} IDs totales")
+        
+        if len(all_ids) < total_count:
+            st.warning(f"⚠️ Solo se recuperaron {len(all_ids)} de {total_count} IDs. Algunos artículos podrían faltar debido a límites de la API.")
+        
+        return all_ids, total_count
+        
+    except Exception as e:
+        st.error(f"Error en búsqueda: {e}")
+        return [], 0
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1053,34 +1194,6 @@ def extract_article_info(doc_sum):
     return article
 
 
-def search_pubmed(query, retmax=100000):
-    """Search articles in PubMed with rate limiting - increased retmax"""
-    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-    
-    search_url = f"{base_url}esearch.fcgi"
-    search_params = {
-        "db": "pubmed",
-        "term": query,
-        "retmax": retmax,
-        "retmode": "xml",
-        "sort": "relevance"
-    }
-    
-    try:
-        response = make_request_with_retry(search_url, search_params)
-        if response is None:
-            return [], 0
-            
-        root = ElementTree.fromstring(response.content)
-        id_list = [id_elem.text for id_elem in root.findall(".//Id")]
-        count = root.find(".//Count").text if root.find(".//Count") is not None else "0"
-        
-        return id_list, int(count)
-    except Exception as e:
-        st.error(f"Search error: {e}")
-        return [], 0
-
-
 def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=0):
     """Fetch article details and analyze them"""
     if not id_list:
@@ -1168,6 +1281,9 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
     BLOCK_SIZE = 1000
     total_to_process = len(id_list)
     total_blocks = (total_to_process + BLOCK_SIZE - 1) // BLOCK_SIZE
+    
+    st.info(f"📦 Total de artículos a procesar: {total_to_process}")
+    st.info(f"📦 Se procesarán en {total_blocks} bloques de {BLOCK_SIZE} artículos cada uno")
     
     all_articles = []
     
@@ -2086,7 +2202,7 @@ def generate_flavors_from_saved_session_only(session_manager, session_id, releva
 
 
 def generate_automatic_flavors(session_manager, session_id, relevance_threshold):
-    """Generar flavors automáticamente después del procesamiento"""
+    """Generar flavors automáticamente después del procesamiento y enviar por correo solo el DOCX"""
     
     st.markdown("---")
     st.markdown("## 🎨 GENERANDO FLAVORS AUTOMÁTICAMENTE...")
@@ -2137,6 +2253,41 @@ def generate_automatic_flavors(session_manager, session_id, relevance_threshold)
                     file_name=f"articles_automatic_{session_id[:20]}_{timestamp}.csv",
                     mime="text/csv"
                 )
+        
+        # Enviar por correo electrónico SOLO el archivo DOCX
+        user_email = session_manager.get_user_email(session_id)
+        if user_email:
+            st.info(f"📧 Enviando archivo DOCX a {user_email}...")
+            
+            # Crear cuerpo del correo
+            subject = f"[PubMed Analyzer] Flavors generados - {session_id[:20]}..."
+            body = f"""
+Estimado usuario,
+
+El procesamiento de su búsqueda en PubMed ha finalizado exitosamente.
+
+Detalles:
+- ID de sesión: {session_id}
+- Artículos procesados: {len(filtered_articles)}
+- Threshold de relevancia: {relevance_threshold}
+- Fecha de generación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Se adjunta el archivo flavors_{session_id[:20]}.docx con los flavors para las secciones de Introducción y Discusión de su artículo científico.
+
+El archivo CSV con los datos completos de los artículos está disponible para descarga en la aplicación.
+
+Saludos cordiales,
+PubMed AI Analyzer
+"""
+            
+            email_sent = send_docx_by_email(user_email, subject, body, docx_bytes, session_id[:20])
+            
+            if email_sent:
+                st.success(f"✅ Archivo DOCX enviado a {user_email}")
+            else:
+                st.warning(f"⚠️ No se pudo enviar el correo a {user_email}. El archivo está disponible para descarga.")
+        else:
+            st.warning("⚠️ No se encontró email asociado a la sesión. No se envió correo.")
         
         return True
     
@@ -2259,29 +2410,38 @@ def main():
     
     if 'user_login' not in st.session_state:
         st.markdown("### 🔐 Identificación de usuario")
-        st.markdown("Por favor, ingrese su login para guardar su progreso:")
+        st.markdown("Por favor, ingrese su login y email para guardar su progreso:")
         
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns(2)
         with col1:
             login = st.text_input("Login (identificador único):", 
                                   placeholder="ejemplo: juan_perez",
                                   help="Este login se usará para guardar sus artículos procesados")
         with col2:
-            st.markdown("---")
+            user_email = st.text_input("📧 Correo electrónico:", 
+                                       placeholder="ejemplo: usuario@dominio.com",
+                                       help="Los resultados se enviarán automáticamente a este correo")
+        
+        col3, col4 = st.columns([2, 1])
+        with col3:
             st.markdown("💡 **Nota:** Sus datos se guardarán en archivos remotos con su login")
         
-        if st.button("✅ Continuar con este login", type="primary"):
-            if login.strip():
-                st.session_state.user_login = login.strip().lower()
-                if 'selected_session_id' in st.session_state:
-                    del st.session_state.selected_session_id
-                if 'new_search_mode' in st.session_state:
-                    st.session_state.new_search_mode = True
-                if 'auto_generate_flavors' in st.session_state:
-                    st.session_state.auto_generate_flavors = False
-                st.rerun()
+        if st.button("✅ Continuar", type="primary"):
+            if login.strip() and user_email.strip():
+                if '@' in user_email and '.' in user_email:
+                    st.session_state.user_login = login.strip().lower()
+                    st.session_state.user_email = user_email.strip()
+                    if 'selected_session_id' in st.session_state:
+                        del st.session_state.selected_session_id
+                    if 'new_search_mode' in st.session_state:
+                        st.session_state.new_search_mode = True
+                    if 'auto_generate_flavors' in st.session_state:
+                        st.session_state.auto_generate_flavors = False
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Por favor ingrese un correo electrónico válido")
             else:
-                st.warning("⚠️ Por favor ingrese un login válido")
+                st.warning("⚠️ Por favor ingrese login y correo electrónico")
         return
     
     if 'new_search_mode' not in st.session_state:
@@ -2305,9 +2465,11 @@ def main():
         session_manager = UserSessionManager(remote_storage, st.session_state.user_login)
         
         st.sidebar.success(f"👤 Usuario: **{st.session_state.user_login}**")
+        st.sidebar.info(f"📧 Email: **{st.session_state.user_email}**")
         
         if st.sidebar.button("🔄 Cambiar usuario"):
             del st.session_state.user_login
+            del st.session_state.user_email
             if 'selected_session_id' in st.session_state:
                 del st.session_state.selected_session_id
             if 'new_search_mode' in st.session_state:
@@ -2355,7 +2517,6 @@ def main():
                 st.session_state.selected_session_id = selected_session_id
                 st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:25]}...")
                 
-                # Verificar si ya se generaron flavors para esta sesión
                 if session_manager.has_flavors_generated(selected_session_id):
                     st.sidebar.info("✅ Flavors ya generados para esta sesión")
                 else:
@@ -2400,7 +2561,7 @@ def main():
     else:
         st.info("ℹ️ Using TF-IDF based methods (no embeddings). Quality still good for most use cases.")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | Block processing (1000 articles per block) | AUTO FLAVOR GENERATION")
+    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | Block processing (1000 articles per block) | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
@@ -2421,6 +2582,7 @@ def main():
     - 💾 **Remote storage**: Your articles are saved on remote server with your login
     - 📦 **Block processing**: Articles processed in blocks of 1000 with independent checkpoints
     - 🤖 **Auto flavor generation**: Flavors generated automatically after processing completes
+    - 📧 **Email delivery**: DOCX file sent automatically to your email
     """)
     
     col_a, col_b, col_c = st.columns(3)
@@ -2569,7 +2731,7 @@ def main():
         auto_flavors = st.checkbox(
             "🤖 Generar flavors automáticamente después del procesamiento",
             value=True,
-            help="Si activas esta opción, después de procesar todos los artículos se generarán automáticamente los flavors y podrás descargarlos directamente."
+            help="Si activas esta opción, después de procesar todos los artículos se generarán automáticamente los flavors y se enviará el archivo DOCX a tu correo."
         )
         
         generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
@@ -2592,17 +2754,17 @@ def main():
                 if hypothesis_terms:
                     st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
                 
-                with st.spinner("🔍 Searching articles in PubMed..."):
-                    id_list, total_count = search_pubmed(query.strip(), retmax=100000)
+                with st.spinner("🔍 Searching articles in PubMed with COMPLETE pagination..."):
+                    id_list, total_count = search_pubmed_complete(query.strip())
                     
                     if not id_list:
                         st.error("❌ No articles found")
                         st.stop()
                     
-                    st.info(f"📊 Found {total_count} articles. Processing all {len(id_list)} articles in blocks of 1000...")
+                    st.info(f"📊 Encontrados {total_count} artículos. Procesando todos los {len(id_list)} artículos en bloques de 1000...")
                     
                     if session_manager:
-                        session_id = session_manager.create_session(query, hypothesis, relevance_threshold)
+                        session_id = session_manager.create_session(query, hypothesis, relevance_threshold, st.session_state.user_email)
                         st.session_state.session_id = session_id
                         articles, total_blocks = process_articles_in_independent_blocks(
                             id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis
@@ -2616,7 +2778,7 @@ def main():
                     st.error("❌ Could not process any articles")
                     st.stop()
                 
-                st.success(f"✅ Processed {len(articles)} articles from {total_blocks} blocks")
+                st.success(f"✅ Procesados {len(articles)} artículos de {total_blocks} bloques")
                 
                 with st.spinner("🧠 Calculating relevance with search and hypothesis (embeddings)..."):
                     articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
@@ -2628,22 +2790,21 @@ def main():
                     articles = filtered_articles
                 
                 if len(articles) < 5:
-                    st.error(f"❌ Not enough articles to generate flavors after filtering (minimum 5, got {len(articles)})")
-                    st.info("💡 Try reducing the relevance threshold to include more articles.")
+                    st.error(f"❌ No hay suficientes artículos después del filtro (mínimo 5, hay {len(articles)})")
+                    st.info("💡 Intenta reducir el threshold de relevancia para incluir más artículos.")
                     st.stop()
                 
                 elapsed_time = time.time() - start_time
-                st.info(f"⏱️ Processing time: {elapsed_time/60:.1f} minutes")
+                st.info(f"⏱️ Tiempo de procesamiento: {elapsed_time/60:.1f} minutos")
                 
                 # Generar flavors automáticamente si está activada la opción
                 if auto_flavors and session_manager and st.session_state.session_id:
                     st.balloons()
                     success = generate_automatic_flavors(session_manager, st.session_state.session_id, relevance_threshold)
                     if success:
-                        st.success("🎉 ¡Proceso completado! Los flavors se han generado y puedes descargarlos arriba.")
+                        st.success("🎉 ¡Proceso completado! Los flavors se han generado y el archivo DOCX se ha enviado a tu correo electrónico.")
                 else:
-                    # Si no se generan automáticamente, mostrar mensaje
-                    st.success(f"✅ Processing complete! Session saved: {st.session_state.session_id[:25]}...")
+                    st.success(f"✅ Procesamiento completo! Sesión guardada: {st.session_state.session_id[:25]}...")
                     st.info("💡 Ve a la sección de sesiones guardadas en el panel izquierdo para generar los flavors cuando lo necesites.")
                     st.balloons()
     
@@ -2651,10 +2812,10 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v22.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v24.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ Block processing (1000 articles/block) | Independent checkpoints | AUTO FLAVOR GENERATION</strong>
+            <strong>✅ COMPLETE PAGINATION | Block processing (1000 articles/block) | Independent checkpoints | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
         </div>
         """,
         unsafe_allow_html=True
