@@ -89,25 +89,115 @@ st.set_page_config(
 # FUNCIONES DE CORREO ELECTRÓNICO
 # ============================================================================
 
-def send_docx_by_email(to_email, subject, body, docx_bytes, session_id):
-    """Enviar correo con archivo adjunto DOCX solamente"""
+def send_status_email(to_email, session_id, block_num, total_blocks, articles_in_block, total_articles, status):
+    """Enviar correo de estado del procesamiento de un bloque"""
     try:
-        # Configuración del servidor SMTP desde secrets
         smtp_server = st.secrets["smtp_server"]
         smtp_port = st.secrets["smtp_port"]
         email_user = st.secrets["email_user"]
         email_password = st.secrets["email_password"]
         
-        # Crear mensaje
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = to_email
-        msg['Subject'] = subject
+        msg['Subject'] = f"[PubMed Analyzer] Progreso - Bloque {block_num}/{total_blocks}"
         
-        # Cuerpo del mensaje
+        if status == "completed":
+            body = f"""
+Estimado usuario,
+
+El bloque {block_num} de {total_blocks} ha sido procesado exitosamente.
+
+Detalles del procesamiento:
+- ID de sesión: {session_id[:30]}...
+- Bloque: {block_num}/{total_blocks}
+- Artículos en este bloque: {articles_in_block}
+- Total procesado hasta ahora: {total_articles}
+
+El procesamiento continúa. Recibirá una notificación cuando todos los bloques estén completados.
+
+Saludos cordiales,
+PubMed AI Analyzer
+"""
+        elif status == "started":
+            body = f"""
+Estimado usuario,
+
+El procesamiento de su búsqueda en PubMed ha comenzado.
+
+Detalles:
+- ID de sesión: {session_id[:30]}...
+- Total de bloques a procesar: {total_blocks}
+- Artículos totales encontrados: {total_articles}
+
+Recibirá notificaciones al completarse cada bloque.
+
+Saludos cordiales,
+PubMed AI Analyzer
+"""
+        else:
+            body = f"""
+Estimado usuario,
+
+El bloque {block_num} de {total_blocks} ha sido procesado con advertencias.
+
+Detalles:
+- ID de sesión: {session_id[:30]}...
+- Estado: {status}
+
+Saludos cordiales,
+PubMed AI Analyzer
+"""
+        
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
-        # Adjuntar archivo DOCX - asegurar que el puntero esté al inicio
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(email_user, email_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ No se pudo enviar correo de estado: {e}")
+        return False
+
+
+def send_final_email(to_email, session_id, total_articles, relevance_threshold, docx_bytes, session_id_short):
+    """Enviar correo final con el archivo DOCX adjunto"""
+    try:
+        smtp_server = st.secrets["smtp_server"]
+        smtp_port = st.secrets["smtp_port"]
+        email_user = st.secrets["email_user"]
+        email_password = st.secrets["email_password"]
+        
+        msg = MIMEMultipart()
+        msg['From'] = email_user
+        msg['To'] = to_email
+        msg['Subject'] = f"[PubMed Analyzer] ¡Proceso completado! - {session_id_short}..."
+        
+        body = f"""
+Estimado usuario,
+
+¡El procesamiento de su búsqueda en PubMed ha finalizado exitosamente!
+
+Detalles finales:
+- ID de sesión: {session_id}
+- Artículos procesados: {total_articles}
+- Threshold de relevancia: {relevance_threshold}
+- Fecha de finalización: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Se adjunta el archivo flavors_{session_id_short}.docx con los flavors generados para las secciones de Introducción y Discusión de su artículo científico.
+
+Puede acceder a los resultados completos desde la aplicación en cualquier momento.
+
+Saludos cordiales,
+PubMed AI Analyzer
+"""
+        
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Adjuntar DOCX
         if hasattr(docx_bytes, 'seek'):
             docx_bytes.seek(0)
             docx_data = docx_bytes.getvalue()
@@ -117,10 +207,9 @@ def send_docx_by_email(to_email, subject, body, docx_bytes, session_id):
         docx_part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
         docx_part.set_payload(docx_data)
         encoders.encode_base64(docx_part)
-        docx_part.add_header('Content-Disposition', f'attachment; filename="flavors_{session_id}.docx"')
+        docx_part.add_header('Content-Disposition', f'attachment; filename="flavors_{session_id_short}.docx"')
         msg.attach(docx_part)
         
-        # Enviar correo
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(email_user, email_password)
@@ -129,7 +218,7 @@ def send_docx_by_email(to_email, subject, body, docx_bytes, session_id):
         
         return True
     except Exception as e:
-        st.error(f"❌ Error al enviar correo: {e}")
+        st.error(f"❌ Error al enviar correo final: {e}")
         return False
 
 
@@ -469,7 +558,6 @@ class UserSessionManager:
         if df is None or df.empty:
             return
         
-        # Crear una copia para evitar problemas de vista
         df = df.copy()
         
         mask = df['session_id'] == session_id
@@ -612,7 +700,7 @@ class UserSessionManager:
 # FUNCIONES DE UTILIDAD PARA PubMed CON MANEJO DE RATE LIMITING Y PAGINACIÓN
 # ============================================================================
 
-def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
+def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
     """Make request with exponential backoff for rate limiting"""
     delay = initial_delay
     
@@ -637,87 +725,83 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=2):
     return None
 
 
-def search_pubmed_complete(query, batch_size=10000):
-    """Search articles in PubMed with COMPLETE pagination to get ALL results"""
+def search_pubmed_complete(query, batch_size=1000):
+    """Search articles in PubMed with COMPLETE pagination using while loop"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-    
-    # Primero, obtener el número total de artículos
     search_url = f"{base_url}esearch.fcgi"
-    search_params = {
-        "db": "pubmed",
-        "term": query,
-        "retmax": 1,
-        "retmode": "xml"
-    }
     
-    try:
-        response = make_request_with_retry(search_url, search_params)
-        if response is None:
-            return [], 0
+    all_ids = []
+    retstart = 0
+    total_count = None
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    batch_num = 1
+    
+    while True:
+        status_text.text(f"📥 Descargando IDs: lote {batch_num} (desde {retstart})")
+        
+        params = {
+            "db": "pubmed",
+            "term": query,
+            "retmax": batch_size,
+            "retstart": retstart,
+            "retmode": "xml",
+            "sort": "relevance"
+        }
+        
+        try:
+            response = make_request_with_retry(search_url, params)
+            if response is None:
+                st.warning(f"⚠️ Error obteniendo lote {batch_num}")
+                break
             
-        root = ElementTree.fromstring(response.content)
-        total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
-        
-        st.info(f"📊 PubMed encontró un total de {total_count} artículos")
-        
-        if total_count == 0:
-            return [], 0
-        
-        # Ahora recuperar TODOS los IDs con paginación
-        all_ids = []
-        total_batches = (total_count + batch_size - 1) // batch_size
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for batch_num in range(total_batches):
-            retstart = batch_num * batch_size
-            actual_batch_size = min(batch_size, total_count - retstart)
+            root = ElementTree.fromstring(response.content)
             
-            status_text.text(f"📥 Descargando IDs: lote {batch_num + 1}/{total_batches} (artículos {retstart+1}-{retstart+actual_batch_size})")
+            # Obtener total solo en la primera iteración
+            if total_count is None:
+                total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
+                st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+                
+                if total_count == 0:
+                    progress_bar.empty()
+                    status_text.empty()
+                    return [], 0
             
-            fetch_params = {
-                "db": "pubmed",
-                "term": query,
-                "retmax": batch_size,
-                "retstart": retstart,
-                "retmode": "xml",
-                "sort": "relevance"
-            }
+            # Obtener IDs de este lote
+            batch_ids = [id_elem.text for id_elem in root.findall(".//Id")]
             
-            try:
-                fetch_response = make_request_with_retry(search_url, fetch_params)
-                if fetch_response is None:
-                    st.warning(f"⚠️ Error obteniendo lote {batch_num + 1}")
-                    continue
-                
-                fetch_root = ElementTree.fromstring(fetch_response.content)
-                batch_ids = [id_elem.text for id_elem in fetch_root.findall(".//Id")]
-                all_ids.extend(batch_ids)
-                
-                st.info(f"   ✅ Lote {batch_num + 1}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
-                
-                progress_bar.progress((batch_num + 1) / total_batches)
-                
-                time.sleep(0.5)
-                
-            except Exception as e:
-                st.error(f"Error en lote {batch_num + 1}: {e}")
-                continue
-        
-        progress_bar.empty()
-        status_text.empty()
-        
+            if not batch_ids:
+                break
+            
+            all_ids.extend(batch_ids)
+            st.info(f"   ✅ Lote {batch_num}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
+            
+            # Actualizar progreso
+            if total_count:
+                progress_bar.progress(min(len(all_ids) / total_count, 1.0))
+            
+            # Si obtenemos menos de batch_size, es el último lote
+            if len(batch_ids) < batch_size:
+                break
+            
+            retstart += batch_size
+            batch_num += 1
+            
+            time.sleep(1.0)  # Pausa entre lotes para evitar rate limiting
+            
+        except Exception as e:
+            st.error(f"Error en lote {batch_num}: {e}")
+            break
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    if total_count:
         st.success(f"✅ Recuperados {len(all_ids)} de {total_count} IDs totales")
-        
-        if len(all_ids) < total_count:
-            st.warning(f"⚠️ Solo se recuperaron {len(all_ids)} de {total_count} IDs. Algunos artículos podrían faltar debido a límites de la API.")
-        
-        return all_ids, total_count
-        
-    except Exception as e:
-        st.error(f"Error en búsqueda: {e}")
-        return [], 0
+    
+    return all_ids, total_count if total_count else 0
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1255,7 +1339,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
                     
                     article = extract_article_info(doc_sum)
                     
-                    time.sleep(0.3)
+                    time.sleep(0.5)
                     
                     abstract = get_abstract(article["pmid"])
                     article["abstract"] = abstract if abstract else "Not available"
@@ -1285,7 +1369,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
 
 
 def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_terms, 
-                                           session_manager, session_id, query, hypothesis):
+                                           session_manager, session_id, query, hypothesis, user_email):
     """Procesar artículos en bloques de 1000 con checkpoint independiente por bloque"""
     
     BLOCK_SIZE = 1000
@@ -1294,6 +1378,10 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
     
     st.info(f"📦 Total de artículos a procesar: {total_to_process}")
     st.info(f"📦 Se procesarán en {total_blocks} bloques de {BLOCK_SIZE} artículos cada uno")
+    
+    # Enviar correo de inicio
+    if user_email:
+        send_status_email(user_email, session_id, 0, total_blocks, 0, total_to_process, "started")
     
     all_articles = []
     
@@ -1362,13 +1450,18 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
             )
             
             st.success(f"✅ BLOQUE {block_num} COMPLETADO y guardado. {len(block_articles)} artículos añadidos.")
+            
+            # Enviar correo de progreso por cada bloque completado
+            if user_email:
+                send_status_email(user_email, session_id, block_num, total_blocks, 
+                                len(block_articles), len(all_articles) + len(block_articles), "completed")
         
         all_articles.extend(block_articles)
         
         progress_bar.progress(block_num / total_blocks)
         
         if block_num < total_blocks:
-            time.sleep(2)
+            time.sleep(3)  # Pausa más larga entre bloques
     
     progress_bar.empty()
     status_text.empty()
@@ -1440,14 +1533,12 @@ def filter_articles_by_relevance(articles, relevance_threshold):
 
 
 # ============================================================================
-# FUNCIONES DE CLUSTERING
+# FUNCIONES DE CLUSTERING (ACORTADAS POR ESPACIO - MISMO CÓDIGO QUE ANTES)
 # ============================================================================
 
 def extract_topic_keywords_tfidf(articles, n_keywords=5):
-    """Extract topic keywords using TF-IDF"""
     if not articles or len(articles) < 2:
         return []
-    
     texts = []
     for a in articles[:20]:
         title = a.get('title', '')
@@ -1455,18 +1546,14 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
         text = f"{title} {outcomes}"
         if text:
             texts.append(text)
-    
     if len(texts) < 2:
         return []
-    
     try:
         vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
         tfidf_matrix = vectorizer.fit_transform(texts)
-        
         feature_names = vectorizer.get_feature_names_out()
         scores = np.array(tfidf_matrix.sum(axis=0)).flatten()
         top_indices = scores.argsort()[-n_keywords:][::-1]
-        
         top_keywords = [feature_names[i] for i in top_indices if scores[i] > 0]
         return top_keywords[:n_keywords]
     except Exception as e:
@@ -1474,25 +1561,19 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
 
 
 def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms):
-    """Determine aspect and difference based on actual article content"""
     if not articles:
         return "Clinical analysis", "Integrative approach"
-    
     all_outcomes = []
     all_methods = []
     all_populations = []
     all_entities = []
-    
     for a in articles:
         if not a:
             continue
-            
         outcomes = a.get('all_outcomes', [])
         if outcomes:
             all_outcomes.extend(outcomes)
-        
         text = f"{a.get('title', '')} {a.get('abstract', '')}".lower()
-        
         if 'cohort' in text:
             all_methods.append('cohort study')
         if 'registry' in text:
@@ -1501,23 +1582,18 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
             all_methods.append('meta-analysis')
         if 'retrospective' in text:
             all_methods.append('retrospective analysis')
-        
         pop = a.get('population', '')
         if pop and pop != 'Not specified':
             all_populations.extend(pop.split(', '))
-        
         entities = a.get('entities', [])
         if entities:
             for entity, etype, score in entities:
                 all_entities.append(entity)
-    
     outcome_counts = Counter(all_outcomes)
     method_counts = Counter(all_methods)
     population_counts = Counter(all_populations)
     entity_counts = Counter(all_entities)
-    
     aspect = ""
-    
     if entity_counts:
         top_entity = entity_counts.most_common(1)[0][0]
         aspect = f"Clinical Analysis of {top_entity.title()}"
@@ -1529,9 +1605,7 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
         aspect = f"Methodological Approach: {top_method.capitalize()}"
     else:
         aspect = "Clinical Outcomes Analysis"
-    
     difference = ""
-    
     if method_counts.get('meta-analysis', 0) > len(articles) * 0.3:
         difference = "Synthesizes evidence from multiple studies through meta-analytic methods"
     elif method_counts.get('registry analysis', 0) > len(articles) * 0.4:
@@ -1548,20 +1622,16 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
             difference = f"Explores emerging themes including {', '.join(tfidf_keywords[:3])}"
         else:
             difference = "Integrates diverse clinical studies with heterogeneous methodologies"
-    
     return aspect, difference
 
 
 def get_text_embeddings(texts):
-    """Get embeddings with fallback to TF-IDF if needed"""
     embedder = get_embedder()
-    
     if embedder and AI_EMBEDDINGS_AVAILABLE:
         try:
             return embedder.encode(texts)
         except:
             pass
-    
     try:
         vectorizer = TfidfVectorizer(max_features=500, stop_words='english')
         tfidf_matrix = vectorizer.fit_transform(texts)
@@ -1569,45 +1639,35 @@ def get_text_embeddings(texts):
         return svd.fit_transform(tfidf_matrix)
     except:
         pass
-    
     return None
 
 
 def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms):
-    """Discover flavors using HDBSCAN with embedding fallback"""
     if len(articles) < 3:
         return []
-    
     try:
         texts = [f"{a.get('title', '')} {' '.join(a.get('all_outcomes', []))}" for a in articles if a]
         embeddings = get_text_embeddings(texts)
-        
         if embeddings is None:
             return []
-        
         n_components = min(50, embeddings.shape[1], len(embeddings) - 1)
         if n_components > 1:
             pca = PCA(n_components=n_components)
             embeddings_reduced = pca.fit_transform(embeddings)
         else:
             embeddings_reduced = embeddings
-        
         clusterer = HDBSCAN(min_cluster_size=3, min_samples=2, metric='euclidean')
         cluster_labels = clusterer.fit_predict(embeddings_reduced)
-        
         flavors = []
         for cluster_id in set(cluster_labels):
             if cluster_id == -1:
                 continue
-            
             cluster_indices = [i for i, label in enumerate(cluster_labels) if label == cluster_id]
             if len(cluster_indices) < 3:
                 continue
-            
             cluster_articles = [articles[i] for i in cluster_indices]
             name = generate_descriptive_name(cluster_articles, query_terms, hypothesis_terms)
             representative = sorted(cluster_articles, key=lambda x: x.get('quality_score', 0), reverse=True)[:5]
-            
             flavors.append({
                 'type': 'semantic',
                 'id': f"semantic_cluster_{cluster_id}",
@@ -1616,7 +1676,6 @@ def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_ter
                 'n_articles': len(cluster_articles),
                 'representative_articles': representative
             })
-        
         return flavors
     except Exception as e:
         st.warning(f"Error in HDBSCAN clustering: {e}")
@@ -1624,10 +1683,8 @@ def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_ter
 
 
 def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
-    """Group articles by shared outcomes"""
     if len(articles) < 3:
         return []
-    
     try:
         all_outcomes = set()
         for article in articles:
@@ -1635,10 +1692,8 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
                 outcomes = article.get('all_outcomes', [])
                 if outcomes:
                     all_outcomes.update(outcomes)
-        
         if len(all_outcomes) < 2:
             return []
-        
         all_outcomes_list = list(all_outcomes)
         outcome_matrix = []
         for article in articles:
@@ -1646,30 +1701,24 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
                 outcomes = set(article.get('all_outcomes', []))
                 row = [1 if o in outcomes else 0 for o in all_outcomes_list]
                 outcome_matrix.append(row)
-        
         n_clusters = min(max(3, len(articles) // 15), 4)
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         clusters = kmeans.fit_predict(outcome_matrix)
-        
         flavors = []
         for cluster_id in range(n_clusters):
             cluster_indices = [i for i, c in enumerate(clusters) if c == cluster_id]
             if len(cluster_indices) < 3:
                 continue
-            
             cluster_articles = [articles[i] for i in cluster_indices]
-            
             outcome_counts = Counter()
             for article in cluster_articles:
                 if article:
                     outcomes = article.get('all_outcomes', [])
                     if outcomes:
                         outcome_counts.update(outcomes)
-            
             top_outcomes = [o for o, _ in outcome_counts.most_common(3)]
             name = f"Studies on {', '.join(top_outcomes)}"
             representative = sorted(cluster_articles, key=lambda x: x.get('quality_score', 0) if x else 0, reverse=True)[:5]
-            
             flavors.append({
                 'type': 'outcome_based',
                 'id': f"outcome_cluster_{cluster_id}",
@@ -1678,7 +1727,6 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
                 'n_articles': len(cluster_articles),
                 'representative_articles': representative
             })
-        
         return flavors
     except Exception as e:
         st.warning(f"Error in outcome clustering: {e}")
@@ -1686,24 +1734,17 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
 
 
 def merge_small_clusters(flavors, target_count=4):
-    """Merge small clusters to achieve approximately target_count large flavors"""
     if not flavors:
         return []
-    
     if len(flavors) <= target_count:
         return flavors
-    
     flavors_sorted = sorted(flavors, key=lambda x: x['n_articles'], reverse=True)
-    
     merged_flavors = flavors_sorted[:target_count-1]
-    
     remaining_articles = []
     for flavor in flavors_sorted[target_count-1:]:
         remaining_articles.extend(flavor['articles'])
-    
     if remaining_articles:
         name = "Additional Clinical Studies"
-        
         all_outcomes = []
         for article in remaining_articles:
             if article:
@@ -1715,9 +1756,7 @@ def merge_small_clusters(flavors, target_count=4):
             top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
             if top_outcomes:
                 name += f": {', '.join(top_outcomes)}"
-        
         representative = sorted(remaining_articles, key=lambda x: x.get('quality_score', 0) if x else 0, reverse=True)[:5]
-        
         merged_flavors.append({
             'type': 'merged',
             'id': 'merged_cluster',
@@ -1726,37 +1765,29 @@ def merge_small_clusters(flavors, target_count=4):
             'n_articles': len(remaining_articles),
             'representative_articles': representative
         })
-    
     return merged_flavors
 
 
 def assign_articles_to_best_flavor(flavors):
-    """Assign each article to the most relevant flavor (exclusive assignment)"""
     if not flavors:
         return []
-    
     article_to_flavor = {}
     article_scores = {}
-    
     for flavor in flavors:
         flavor_id = flavor['id']
         flavor_articles = flavor['articles']
-        
         for article in flavor_articles:
             if not article:
                 continue
             article_id = article.get('pmid', id(article))
             score = article.get('quality_score', 50) / 100.0
-            
             flavor_name_lower = flavor['name'].lower()
             title_lower = article.get('title', '').lower()
             if any(keyword in title_lower for keyword in flavor_name_lower.split()[:3]):
                 score += 0.2
-            
             if article_id not in article_scores or score > article_scores[article_id]:
                 article_scores[article_id] = score
                 article_to_flavor[article_id] = flavor_id
-    
     flavor_article_map = {flavor['id']: [] for flavor in flavors}
     for article in [a for flavor in flavors for a in flavor['articles'] if a]:
         article_id = article.get('pmid', id(article))
@@ -1764,7 +1795,6 @@ def assign_articles_to_best_flavor(flavors):
             assigned_flavor = article_to_flavor[article_id]
             if article not in flavor_article_map[assigned_flavor]:
                 flavor_article_map[assigned_flavor].append(article)
-    
     for flavor in flavors:
         flavor['articles'] = flavor_article_map.get(flavor['id'], [])
         flavor['n_articles'] = len(flavor['articles'])
@@ -1773,21 +1803,16 @@ def assign_articles_to_best_flavor(flavors):
             key=lambda x: x.get('quality_score', 0) if x else 0, 
             reverse=True
         )[:5]
-    
     flavors = [f for f in flavors if f['n_articles'] >= 2]
-    
     return flavors
 
 
 def generate_descriptive_name(articles, query_terms, hypothesis_terms):
-    """Generate a descriptive name based on actual content"""
     if not articles:
         return "Clinical Studies"
-    
     all_keywords = []
     all_outcomes = []
     all_entities = []
-    
     for a in articles:
         if not a:
             continue
@@ -1797,54 +1822,40 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
         outcomes = a.get('all_outcomes', [])
         if outcomes:
             all_outcomes.extend(outcomes)
-        
         entities = a.get('entities', [])
         if entities:
             for entity, etype, score in entities:
                 all_entities.append(entity)
-    
     outcome_counts = Counter(all_outcomes)
     entity_counts = Counter(all_entities)
-    
     name = ""
-    
     if entity_counts:
         top_entity = entity_counts.most_common(1)[0][0]
         if len(top_entity) > 3:
             name = top_entity.title()
-    
     if not name and outcome_counts:
         top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
         name = f"Studies on {', '.join(top_outcomes)}"
-    
     if not name and all_keywords:
         name = all_keywords[0].title() if all_keywords else "Research"
-    
     if not name:
         name = "Clinical Studies"
-    
     return name
 
 
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
-    """Generate all flavors from multiple perspectives"""
     if not articles:
         return {}
-    
     articles = [a for a in articles if a is not None]
     if not articles:
         return {}
-    
     all_flavors = []
-    
     if len(articles) >= 5:
         semantic_flavors = discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_terms)
         all_flavors.extend(semantic_flavors)
-    
     if len(articles) >= 5:
         outcome_flavors = discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms)
         all_flavors.extend(outcome_flavors)
-    
     if not all_flavors:
         name = generate_descriptive_name(articles, query_terms, hypothesis_terms)
         all_flavors = [{
@@ -1855,17 +1866,13 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
             'n_articles': len(articles),
             'representative_articles': articles[:5]
         }]
-    
     all_flavors = assign_articles_to_best_flavor(all_flavors)
-    
     merged_flavors = merge_small_clusters(all_flavors, target_count=4)
-    
     flavors_by_category = {
         'semantic_clusters': [],
         'outcome_clusters': [],
         'merged_clusters': []
     }
-    
     for flavor in merged_flavors:
         category = flavor.get('type', 'semantic')
         if category == 'semantic':
@@ -1874,166 +1881,113 @@ def generate_all_flavors(articles, query_terms, hypothesis_terms):
             flavors_by_category['outcome_clusters'].append(flavor)
         else:
             flavors_by_category['merged_clusters'].append(flavor)
-    
     return flavors_by_category
 
 
 def generate_citation_text(article, index):
-    """Generate citation text"""
     if not article:
         return f"{index}. [No article data]"
-    
     authors = str(article.get('authors', 'Author'))
     year = str(article.get('pubdate', 'n.d.'))[:4] if article.get('pubdate') else 'n.d.'
     title = str(article.get('title', 'No title'))
     journal = str(article.get('journal', 'Journal'))
     pmid = str(article.get('pmid', ''))
-    
     citation = f"{index}. {authors}. {title}. {journal}. {year}"
     if pmid and pmid != 'N/A':
         citation += f"; PMID: {pmid}"
-    
     return citation
 
 
 def generate_flavor_summary_with_citations(articles, flavor_name, section, query_terms, hypothesis_terms):
-    """Generate a summary paragraph with citations"""
     if not articles:
         return "No articles available for this flavor.", []
-    
     articles = [a for a in articles if a is not None]
     if not articles:
         return "No articles available for this flavor.", []
-    
     aspect, difference = determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, hypothesis_terms)
-    
     main_outcomes = []
     key_findings = []
     study_types = []
     key_articles = []
-    
     for idx, a in enumerate(articles[:10], 1):
         if not a:
             continue
-            
-        outcomes = a.get('all_outcomes', [])
-        if outcomes is None:
-            outcomes = []
-            
-        study_type = a.get('study_types', '')
-        if study_type is None:
-            study_type = ''
-            
-        numeric = a.get('numeric_results_str', '')
-        if numeric is None:
-            numeric = ''
-            
-        authors = a.get('authors', '')
-        if authors is None:
-            authors = 'Author'
+        outcomes = a.get('all_outcomes', []) or []
+        study_type = a.get('study_types', '') or ''
+        numeric = a.get('numeric_results_str', '') or ''
+        authors = a.get('authors', 'Author') or 'Author'
         authors = authors.split(',')[0] if authors else 'Author'
-        
         main_outcomes.extend(outcomes[:2])
-        
         if numeric:
             key_findings.append((idx, authors, numeric))
-        
         if study_type and study_type != 'Not specified':
             study_types.append(study_type)
-        
         key_articles.append((idx, authors))
-    
     outcome_counts = Counter(main_outcomes)
     study_type_counts = Counter(study_types)
-    
     top_outcomes = [o for o, _ in outcome_counts.most_common(3)]
     top_study_types = [st for st, _ in study_type_counts.most_common(2)]
-    
-    header = f"### {flavor_name}\n\n"
-    header += f"**🎯 Aspect:** {aspect}\n\n"
-    header += f"**🔍 Difference:** {difference}\n\n"
-    header += "---\n\n"
-    
+    header = f"### {flavor_name}\n\n**🎯 Aspect:** {aspect}\n\n**🔍 Difference:** {difference}\n\n---\n\n"
     if section == 'introduction':
         summary = header
-        
         summary += f"This flavor groups {len(articles)} clinical studies "
         if top_outcomes:
             summary += f"investigating {', '.join(top_outcomes[:2])} "
         summary += f"in the context of the research topic. "
-        
         if top_study_types:
             summary += f"Methodological approaches include {', '.join(top_study_types[:2])}, "
         else:
             summary += f"Methodological approaches include clinical registries, cohort studies, and observational analyses, "
-        
         summary += f"providing comprehensive insights into clinical outcomes and management strategies. "
-        
         if top_outcomes:
             summary += f"Primary outcomes examined include {', '.join(top_outcomes[:3])}, "
             summary += f"reflecting a focus on clinically relevant endpoints. "
-        
         if key_articles:
             refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3] if auth]
             if refs:
                 summary += f"Key contributions from {', '.join(refs)} have advanced understanding of clinical outcomes. "
-        
         if key_findings:
             find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3] if auth]
             if find_refs:
                 summary += f"Notable findings from {', '.join(find_refs)} include {key_findings[0][2] if key_findings else 'significant clinical associations'}, "
                 summary += f"establishing foundations for risk stratification and treatment optimization."
-        
         summary += f" The convergence of these {len(articles)} studies demonstrates the clinical importance of this research area."
-    
     else:
         summary = header
-        
         summary += f"Our analysis aligns with findings from {len(articles)} clinical studies. "
-        
         if top_study_types:
             summary += f"The observed methodological convergence across {', '.join(top_study_types[:2])} has enabled identification of consistent risk factors and outcomes. "
-        
         if key_articles:
             refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3] if auth]
             if refs:
                 summary += f"Specifically, {', '.join(refs)} reported results that are consistent with our analysis. "
-        
         if key_findings:
             find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3] if auth]
             if find_refs:
                 summary += f"Quantitative findings from {', '.join(find_refs)} provide additional evidence supporting our conclusions. "
-        
         summary += f"Heterogeneity in management approaches across these {len(articles)} studies highlights the need for standardized protocols. "
         summary += f"Integration of these findings with clinical and pathological data will be crucial for improving outcomes."
-    
     citations = []
     for i, article in enumerate(articles[:15], 1):
         if article:
             citations.append(generate_citation_text(article, i))
-    
     return summary, citations
 
 
 def create_document_with_flavors(flavors, hypothesis, query, total_articles, relevance_threshold, query_terms, hypothesis_terms):
-    """Create a DOCX document with flavors"""
     doc = Document()
-    
     for section in doc.sections:
         section.top_margin = Inches(0.8)
         section.bottom_margin = Inches(0.8)
         section.left_margin = Inches(0.8)
         section.right_margin = Inches(0.8)
-    
     title = doc.add_heading('Thematic Flavors for Scientific Article', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
     doc.add_paragraph(f'Search strategy: {str(query)[:200]}...')
     doc.add_paragraph(f'Hypothesis: "{str(hypothesis)[:200]}..."')
     doc.add_paragraph(f'Total articles analyzed: {total_articles}')
     doc.add_paragraph(f'Relevance threshold applied: {relevance_threshold}')
     doc.add_paragraph(f'Generation date: {datetime.now().strftime("%Y-%m-%d %H:%M")}')
-    
     if USE_FALLBACK:
         doc.add_paragraph(f'Embedding model: SBERT (fallback - BioBERT unavailable)')
     elif AI_EMBEDDINGS_AVAILABLE:
@@ -2041,18 +1995,14 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     else:
         doc.add_paragraph(f'Embedding model: TF-IDF + LSA (fallback)')
     doc.add_paragraph()
-    
     doc.add_heading('FLAVORS FOR INTRODUCTION', level=1)
     doc.add_paragraph('The following paragraphs are designed for the Introduction section. They present the state of the art and justify the research.')
     doc.add_paragraph()
-    
     for category_name, flavor_list in flavors.items():
         if not flavor_list:
             continue
-        
         category_title = category_name.replace('_', ' ').title()
         doc.add_heading(category_title, level=2)
-        
         for flavor in flavor_list:
             intro_summary, intro_citations = generate_flavor_summary_with_citations(
                 flavor.get('representative_articles', flavor['articles'][:10]), 
@@ -2061,27 +2011,21 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
                 query_terms=query_terms,
                 hypothesis_terms=hypothesis_terms
             )
-            
             doc.add_paragraph(intro_summary)
             doc.add_paragraph()
             doc.add_paragraph('References:', style='List Bullet')
             for citation in intro_citations:
                 doc.add_paragraph(citation, style='List Bullet')
             doc.add_paragraph()
-    
     doc.add_page_break()
-    
     doc.add_heading('FLAVORS FOR DISCUSSION', level=1)
     doc.add_paragraph('The following paragraphs are designed for the Discussion section. They compare results with the literature and contextualize findings.')
     doc.add_paragraph()
-    
     for category_name, flavor_list in flavors.items():
         if not flavor_list:
             continue
-        
         category_title = category_name.replace('_', ' ').title()
         doc.add_heading(category_title, level=2)
-        
         for flavor in flavor_list:
             disc_summary, disc_citations = generate_flavor_summary_with_citations(
                 flavor.get('representative_articles', flavor['articles'][:10]), 
@@ -2090,47 +2034,27 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
                 query_terms=query_terms,
                 hypothesis_terms=hypothesis_terms
             )
-            
             doc.add_paragraph(disc_summary)
             doc.add_paragraph()
             doc.add_paragraph('References:', style='List Bullet')
             for citation in disc_citations:
                 doc.add_paragraph(citation, style='List Bullet')
             doc.add_paragraph()
-    
     return doc
 
 
 def export_articles_to_csv(articles):
-    """Export articles data to CSV format"""
     if not articles:
         return None
-    
     data = []
     for article in articles:
         if not article:
             continue
-            
-        abstract = article.get('abstract', '')
-        if abstract is None:
-            abstract = ''
-        
-        outcomes = article.get('all_outcomes', [])
-        if outcomes is None:
-            outcomes = []
-        
-        relevance_score = article.get('relevance_score', 0)
-        if relevance_score is None:
-            relevance_score = 0
-        
-        search_relevance = article.get('search_relevance', 0)
-        if search_relevance is None:
-            search_relevance = 0
-            
-        hypothesis_relevance = article.get('hypothesis_relevance', 0)
-        if hypothesis_relevance is None:
-            hypothesis_relevance = 0
-        
+        abstract = article.get('abstract', '') or ''
+        outcomes = article.get('all_outcomes', []) or []
+        relevance_score = article.get('relevance_score', 0) or 0
+        search_relevance = article.get('search_relevance', 0) or 0
+        hypothesis_relevance = article.get('hypothesis_relevance', 0) or 0
         row = {
             'PMID': str(article.get('pmid', '')),
             'Title': str(article.get('title', '')),
@@ -2152,67 +2076,50 @@ def export_articles_to_csv(articles):
             'Abstract (first 500 chars)': str(abstract)[:500] if abstract else ''
         }
         data.append(row)
-    
     if not data:
         return None
-        
     df = pd.DataFrame(data)
-    
     csv_buffer = StringIO()
     df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
     csv_buffer.seek(0)
-    
     return csv_buffer.getvalue().encode('utf-8-sig')
 
 
 def generate_flavors_from_saved_session_only(session_manager, session_id, relevance_threshold, block_number=None):
-    """Función separada: SOLO genera flavors desde archivos guardados de un bloque específico"""
-    
     if block_number is not None:
         articles_df = session_manager.get_articles_by_block(session_id, block_number)
         block_label = f"bloque {block_number}"
     else:
         articles_df = session_manager.get_session_articles(session_id)
         block_label = "sesión completa"
-    
     if articles_df.empty:
         st.error(f"❌ No hay artículos en {block_label}")
         return None, None, None, None
-    
     session_info = session_manager.get_session_info(session_id)
     if session_info is None:
         st.error("❌ No se pudo obtener información de la sesión")
         return None, None, None, None
-    
     query = session_info.get('query', '')
     hypothesis = session_info.get('hypothesis', '')
-    
     articles = articles_df.to_dict('records')
     articles = [a for a in articles if a is not None]
-    
     st.info(f"✅ Cargados {len(articles)} artículos de {block_label}")
-    
     threshold = relevance_threshold if relevance_threshold is not None else float(session_info.get('relevance_threshold', 0.35))
     filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= threshold]
     st.info(f"📊 Filtro de relevancia ({threshold}): {len(filtered_articles)} de {len(articles)} artículos")
-    
     if len(filtered_articles) < 5:
         st.error(f"❌ No hay suficientes artículos después del filtro (mínimo 5, hay {len(filtered_articles)})")
         return None, None, None, None
-    
     query_terms = extract_key_terms_from_query(query)
     hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
-    
     st.info(f"📝 Extraídos {len(query_terms)} términos de búsqueda y {len(hypothesis_terms)} de hipótesis")
-    
     with st.spinner("🔍 Generando flavors desde artículos guardados..."):
         flavors = generate_all_flavors(filtered_articles, query_terms, hypothesis_terms)
-    
     return flavors, filtered_articles, query, hypothesis
 
 
-def generate_automatic_flavors(session_manager, session_id, relevance_threshold):
-    """Generar flavors automáticamente después del procesamiento y enviar por correo solo el DOCX"""
+def generate_automatic_flavors(session_manager, session_id, relevance_threshold, user_email):
+    """Generar flavors automáticamente después del procesamiento y enviar por correo"""
     
     st.markdown("---")
     st.markdown("## 🎨 GENERANDO FLAVORS AUTOMÁTICAMENTE...")
@@ -2233,9 +2140,14 @@ def generate_automatic_flavors(session_manager, session_id, relevance_threshold)
         doc = create_document_with_flavors(flavors, hypothesis, query, len(filtered_articles),
                                           relevance_threshold, query_terms, hypothesis_terms)
         
-        docx_bytes = BytesIO()
-        doc.save(docx_bytes)
-        docx_bytes.seek(0)
+        # Crear COPIA para descarga y otra para email
+        docx_bytes_for_download = BytesIO()
+        doc.save(docx_bytes_for_download)
+        docx_bytes_for_download.seek(0)
+        
+        docx_bytes_for_email = BytesIO()
+        doc.save(docx_bytes_for_email)
+        docx_bytes_for_email.seek(0)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
@@ -2248,7 +2160,7 @@ def generate_automatic_flavors(session_manager, session_id, relevance_threshold)
         with col_left:
             st.download_button(
                 label="💾 DESCARGAR FLAVORS (DOCX)",
-                data=docx_bytes,
+                data=docx_bytes_for_download,
                 file_name=f"flavors_automatic_{session_id[:20]}_{timestamp}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 type="primary"
@@ -2264,42 +2176,15 @@ def generate_automatic_flavors(session_manager, session_id, relevance_threshold)
                     mime="text/csv"
                 )
         
-        # Enviar por correo electrónico SOLO el archivo DOCX
-        user_email = session_manager.get_user_email(session_id)
+        # Enviar correo final con el DOCX
         if user_email:
             st.info(f"📧 Enviando archivo DOCX a {user_email}...")
-            
-            # Crear cuerpo del correo
-            subject = f"[PubMed Analyzer] Flavors generados - {session_id[:20]}..."
-            body = f"""
-Estimado usuario,
-
-El procesamiento de su búsqueda en PubMed ha finalizado exitosamente.
-
-Detalles:
-- ID de sesión: {session_id}
-- Artículos procesados: {len(filtered_articles)}
-- Threshold de relevancia: {relevance_threshold}
-- Fecha de generación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-Se adjunta el archivo flavors_{session_id[:20]}.docx con los flavors para las secciones de Introducción y Discusión de su artículo científico.
-
-El archivo CSV con los datos completos de los artículos está disponible para descarga en la aplicación.
-
-Saludos cordiales,
-PubMed AI Analyzer
-"""
-            
-            # Asegurar que docx_bytes está en posición 0 antes de enviar
-            docx_bytes.seek(0)
-            email_sent = send_docx_by_email(user_email, subject, body, docx_bytes, session_id[:20])
-            
+            email_sent = send_final_email(user_email, session_id, len(filtered_articles), 
+                                         relevance_threshold, docx_bytes_for_email, session_id[:20])
             if email_sent:
                 st.success(f"✅ Archivo DOCX enviado a {user_email}")
             else:
-                st.warning(f"⚠️ No se pudo enviar el correo a {user_email}. El archivo está disponible para descarga.")
-        else:
-            st.warning("⚠️ No se encontró email asociado a la sesión. No se envió correo.")
+                st.warning(f"⚠️ No se pudo enviar el correo a {user_email}.")
         
         return True
     
@@ -2307,21 +2192,16 @@ PubMed AI Analyzer
 
 
 def display_flavors_preview(flavors):
-    """Display a preview of the generated flavors"""
     st.markdown("---")
     st.markdown("## 🎨 Generated Flavors")
     st.markdown("Below are the thematic groups (flavors) discovered from your articles:")
-    
     total_flavors = 0
     for category_name, flavor_list in flavors.items():
         if not flavor_list:
             continue
-        
         total_flavors += len(flavor_list)
-        
         category_title = category_name.replace('_', ' ').title()
         st.markdown(f"### 📂 {category_title}")
-        
         for i, flavor in enumerate(flavor_list, 1):
             with st.expander(f"🔹 Flavor {i}: {flavor.get('name', 'Unnamed')} ({flavor.get('n_articles', 0)} articles)", expanded=(i==1)):
                 col1, col2 = st.columns(2)
@@ -2329,7 +2209,6 @@ def display_flavors_preview(flavors):
                     rep_articles = flavor.get('representative_articles', [])
                     if not rep_articles:
                         rep_articles = flavor.get('articles', [])[:5]
-                    
                     aspect, difference = determine_flavor_aspect_and_difference(
                         rep_articles[:5],
                         flavor.get('name', 'Clinical Studies'),
@@ -2338,7 +2217,6 @@ def display_flavors_preview(flavors):
                     )
                     st.markdown(f"**🎯 Aspect:** {aspect}")
                     st.markdown(f"**🔍 Difference:** {difference}")
-                
                 with col2:
                     st.markdown(f"**📊 Articles in this flavor:** {flavor.get('n_articles', 0)}")
                     st.markdown(f"**📚 Representative articles:**")
@@ -2346,7 +2224,6 @@ def display_flavors_preview(flavors):
                         if article:
                             title = str(article.get('title', 'No title'))[:80]
                             st.markdown(f"   {j}. {title}...")
-                
                 st.markdown("**📄 Sample articles in this flavor:**")
                 sample_data = []
                 for article in flavor.get('articles', [])[:5]:
@@ -2360,38 +2237,31 @@ def display_flavors_preview(flavors):
                 if sample_data:
                     df_sample = pd.DataFrame(sample_data)
                     st.dataframe(df_sample, use_container_width=True)
-    
     st.info(f"✅ Total flavors generated: {total_flavors}")
     return total_flavors
 
 
 def display_session_exporter(session_manager):
-    """Mostrar opciones para exportar sesiones anteriores"""
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📤 Exportar sesión")
-    
     user_sessions = session_manager.get_user_sessions()
     if user_sessions.empty:
         st.sidebar.info("No hay sesiones para exportar")
         return
-    
     session_options = {}
     for _, session in user_sessions.iterrows():
         session_id = session['session_id']
         flavors_status = "✅" if session.get('flavors_generated', False) else "⏳"
         session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
         session_options[session_name] = session_id
-    
     selected_session_name = st.sidebar.selectbox(
         "Seleccionar sesión para exportar:",
         options=list(session_options.keys()),
         key="exporter_selector"
     )
-    
     if selected_session_name:
         selected_session_id = session_options[selected_session_name]
         stats = session_manager.get_session_stats(selected_session_id)
-        
         st.sidebar.markdown(f"""
         **Estadísticas:**
         - 📄 Artículos: {stats['total_articles']}
@@ -2399,7 +2269,6 @@ def display_session_exporter(session_manager):
         - 💪 Evidencia fuerte: {stats['strong_evidence']}
         - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
         """)
-        
         if st.sidebar.button("📥 Exportar esta sesión a CSV", key="export_button"):
             csv_data = session_manager.export_session_to_csv(selected_session_id)
             if csv_data:
@@ -2779,7 +2648,7 @@ def main():
                         session_id = session_manager.create_session(query, hypothesis, relevance_threshold, st.session_state.user_email)
                         st.session_state.session_id = session_id
                         articles, total_blocks = process_articles_in_independent_blocks(
-                            id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis
+                            id_list, query_terms, hypothesis_terms, session_manager, session_id, query, hypothesis, st.session_state.user_email
                         )
                     else:
                         articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
@@ -2812,7 +2681,7 @@ def main():
                 # Generar flavors automáticamente si está activada la opción
                 if auto_flavors and session_manager and st.session_state.session_id:
                     st.balloons()
-                    success = generate_automatic_flavors(session_manager, st.session_state.session_id, relevance_threshold)
+                    success = generate_automatic_flavors(session_manager, st.session_state.session_id, relevance_threshold, st.session_state.user_email)
                     if success:
                         st.success("🎉 ¡Proceso completado! Los flavors se han generado y el archivo DOCX se ha enviado a tu correo electrónico.")
                 else:
@@ -2824,10 +2693,10 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v24.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v25.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ COMPLETE PAGINATION | Block processing (1000 articles/block) | Independent checkpoints | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
+            <strong>✅ COMPLETE PAGINATION (while loop) | Block processing (1000 articles/block) | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
         </div>
         """,
         unsafe_allow_html=True
