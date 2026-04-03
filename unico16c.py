@@ -102,7 +102,7 @@ def send_status_email(to_email, session_id, block_num, total_blocks, articles_in
         msg['To'] = to_email
         msg['Subject'] = f"[PubMed Analyzer] Progreso - Bloque {block_num}/{total_blocks}"
         
-        if status == "completed":
+        if status == "completed" and block_num > 0:
             body = f"""
 Estimado usuario,
 
@@ -553,7 +553,7 @@ class UserSessionManager:
         return set(session_articles['pmid'].tolist())
     
     def update_session(self, session_id: str, status: str, total_found: int = None, total_processed: int = None):
-        """Actualizar información de la sesión - CORREGIDO para Python 3.14"""
+        """Actualizar información de la sesión"""
         df = self.remote.read_csv(self.sessions_file)
         if df is None or df.empty:
             return
@@ -725,83 +725,107 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
     return None
 
 
-def search_pubmed_complete(query, batch_size=1000):
-    """Search articles in PubMed with COMPLETE pagination using while loop"""
+def search_pubmed_complete(query):
+    """Search articles in PubMed using WebEnv for COMPLETE pagination"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+    
+    # Primera consulta: obtener WebEnv y query_key
     search_url = f"{base_url}esearch.fcgi"
+    initial_params = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": 10000,
+        "retmode": "xml",
+        "usehistory": "y"  # Clave: activar historial
+    }
     
-    all_ids = []
-    retstart = 0
-    total_count = None
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    batch_num = 1
-    
-    while True:
-        status_text.text(f"📥 Descargando IDs: lote {batch_num} (desde {retstart})")
+    try:
+        st.info("🔍 Realizando búsqueda inicial en PubMed...")
+        response = make_request_with_retry(search_url, initial_params)
+        if response is None:
+            return [], 0
         
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "retmax": batch_size,
-            "retstart": retstart,
-            "retmode": "xml",
-            "sort": "relevance"
-        }
+        root = ElementTree.fromstring(response.content)
         
-        try:
-            response = make_request_with_retry(search_url, params)
-            if response is None:
-                st.warning(f"⚠️ Error obteniendo lote {batch_num}")
-                break
+        # Obtener total y parámetros de historial
+        total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
+        webenv = root.find(".//WebEnv").text if root.find(".//WebEnv") is not None else ""
+        query_key = root.find(".//QueryKey").text if root.find(".//QueryKey") is not None else ""
+        
+        st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+        
+        if total_count == 0:
+            return [], 0
+        
+        # Ahora recuperar TODOS los IDs usando WebEnv
+        all_ids = []
+        retstart = 0
+        batch_size = 10000
+        batch_num = 1
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Usar efetch para obtener los IDs
+        fetch_url = f"{base_url}efetch.fcgi"
+        
+        while retstart < total_count:
+            status_text.text(f"📥 Descargando IDs: lote {batch_num} (artículos {retstart+1}-{min(retstart+batch_size, total_count)})")
             
-            root = ElementTree.fromstring(response.content)
+            fetch_params = {
+                "db": "pubmed",
+                "query_key": query_key,
+                "WebEnv": webenv,
+                "retstart": retstart,
+                "retmax": batch_size,
+                "retmode": "xml"
+            }
             
-            # Obtener total solo en la primera iteración
-            if total_count is None:
-                total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
-                st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+            try:
+                fetch_response = make_request_with_retry(fetch_url, fetch_params)
+                if fetch_response is None:
+                    st.warning(f"⚠️ Error obteniendo lote {batch_num}")
+                    break
                 
-                if total_count == 0:
-                    progress_bar.empty()
-                    status_text.empty()
-                    return [], 0
-            
-            # Obtener IDs de este lote
-            batch_ids = [id_elem.text for id_elem in root.findall(".//Id")]
-            
-            if not batch_ids:
-                break
-            
-            all_ids.extend(batch_ids)
-            st.info(f"   ✅ Lote {batch_num}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
-            
-            # Actualizar progreso
-            if total_count:
+                fetch_root = ElementTree.fromstring(fetch_response.content)
+                
+                # Extraer IDs de los resultados
+                batch_ids = []
+                for doc_sum in fetch_root.findall(".//DocSum"):
+                    id_elem = doc_sum.find("Id")
+                    if id_elem is not None and id_elem.text:
+                        batch_ids.append(id_elem.text)
+                
+                if not batch_ids:
+                    break
+                
+                all_ids.extend(batch_ids)
+                st.info(f"   ✅ Lote {batch_num}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
+                
                 progress_bar.progress(min(len(all_ids) / total_count, 1.0))
-            
-            # Si obtenemos menos de batch_size, es el último lote
-            if len(batch_ids) < batch_size:
+                
+                retstart += batch_size
+                batch_num += 1
+                
+                time.sleep(1.0)
+                
+            except Exception as e:
+                st.error(f"Error en lote {batch_num}: {e}")
                 break
-            
-            retstart += batch_size
-            batch_num += 1
-            
-            time.sleep(1.0)  # Pausa entre lotes para evitar rate limiting
-            
-        except Exception as e:
-            st.error(f"Error en lote {batch_num}: {e}")
-            break
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    if total_count:
+        
+        progress_bar.empty()
+        status_text.empty()
+        
         st.success(f"✅ Recuperados {len(all_ids)} de {total_count} IDs totales")
-    
-    return all_ids, total_count if total_count else 0
+        
+        if len(all_ids) < total_count:
+            st.warning(f"⚠️ Solo se recuperaron {len(all_ids)} de {total_count} IDs. Verifica la conexión.")
+        
+        return all_ids, total_count
+        
+    except Exception as e:
+        st.error(f"Error en búsqueda: {e}")
+        return [], 0
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1461,7 +1485,7 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
         progress_bar.progress(block_num / total_blocks)
         
         if block_num < total_blocks:
-            time.sleep(3)  # Pausa más larga entre bloques
+            time.sleep(3)
     
     progress_bar.empty()
     status_text.empty()
@@ -1533,7 +1557,7 @@ def filter_articles_by_relevance(articles, relevance_threshold):
 
 
 # ============================================================================
-# FUNCIONES DE CLUSTERING (ACORTADAS POR ESPACIO - MISMO CÓDIGO QUE ANTES)
+# FUNCIONES DE CLUSTERING (COMPLETAS)
 # ============================================================================
 
 def extract_topic_keywords_tfidf(articles, n_keywords=5):
@@ -2635,7 +2659,7 @@ def main():
                 if hypothesis_terms:
                     st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
                 
-                with st.spinner("🔍 Searching articles in PubMed with COMPLETE pagination..."):
+                with st.spinner("🔍 Searching articles in PubMed with COMPLETE pagination (WebEnv)..."):
                     id_list, total_count = search_pubmed_complete(query.strip())
                     
                     if not id_list:
@@ -2693,10 +2717,10 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v25.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v26.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ COMPLETE PAGINATION (while loop) | Block processing (1000 articles/block) | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
+            <strong>✅ COMPLETE PAGINATION (WebEnv) | Block processing (1000 articles/block) | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
         </div>
         """,
         unsafe_allow_html=True
