@@ -107,9 +107,15 @@ def send_docx_by_email(to_email, subject, body, docx_bytes, session_id):
         # Cuerpo del mensaje
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
-        # Adjuntar archivo DOCX
+        # Adjuntar archivo DOCX - asegurar que el puntero esté al inicio
+        if hasattr(docx_bytes, 'seek'):
+            docx_bytes.seek(0)
+            docx_data = docx_bytes.getvalue()
+        else:
+            docx_data = docx_bytes
+        
         docx_part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
-        docx_part.set_payload(docx_bytes.getvalue())
+        docx_part.set_payload(docx_data)
         encoders.encode_base64(docx_part)
         docx_part.add_header('Content-Disposition', f'attachment; filename="flavors_{session_id}.docx"')
         msg.attach(docx_part)
@@ -272,7 +278,7 @@ class UserSessionManager:
             'total_found': 0,
             'total_processed': 0,
             'start_time': datetime.now().isoformat(),
-            'end_time': None,
+            'end_time': '',
             'status': 'running',
             'flavors_generated': False,
             'user_email': email
@@ -287,6 +293,7 @@ class UserSessionManager:
         if df is None or df.empty:
             return
         
+        df = df.copy()
         mask = df['session_id'] == session_id
         df.loc[mask, 'flavors_generated'] = True
         
@@ -340,8 +347,8 @@ class UserSessionManager:
             
             record = {
                 'pmid': str(pmid),
-                'session_id': session_id,
-                'login': self.login,
+                'session_id': str(session_id),
+                'login': str(self.login),
                 'title': str(article.get('title', ''))[:1000],
                 'authors': str(article.get('authors', ''))[:500],
                 'journal': str(article.get('journal', ''))[:200],
@@ -349,7 +356,7 @@ class UserSessionManager:
                 'doi': str(article.get('doi', ''))[:100],
                 'abstract': str(article.get('abstract', ''))[:5000],
                 'study_types': str(article.get('study_types', 'Not specified')),
-                'quality_score': float(article.get('quality_score', 0)),
+                'quality_score': float(article.get('quality_score', 0) or 0),
                 'evidence_strength': str(article.get('evidence_strength', 'No data')),
                 'top_keywords': str(article.get('top_keywords', '')),
                 'population': str(article.get('population', 'Not specified')),
@@ -360,7 +367,7 @@ class UserSessionManager:
                 'hypothesis_relevance': float(hypothesis_relevance),
                 'embedding_used': 'BioBERT' if not USE_FALLBACK and AI_EMBEDDINGS_AVAILABLE else ('SBERT' if USE_FALLBACK else 'TF-IDF'),
                 'processed_date': datetime.now().isoformat(),
-                'block_number': article.get('block_number', 0)
+                'block_number': int(article.get('block_number', 0) or 0)
             }
             records.append(record)
         
@@ -405,14 +412,14 @@ class UserSessionManager:
                         start_idx: int, end_idx: int, articles_processed: int):
         """Guardar checkpoint para un bloque específico (1-indexed)"""
         checkpoint_data = pd.DataFrame([{
-            'session_id': session_id,
-            'login': self.login,
-            'batch_number': block_num,
-            'batch_size': batch_size,
-            'start_idx': start_idx,
-            'end_idx': end_idx,
-            'articles_processed': articles_processed,
-            'checkpoint_time': datetime.now().isoformat(),
+            'session_id': str(session_id),
+            'login': str(self.login),
+            'batch_number': int(block_num),
+            'batch_size': int(batch_size),
+            'start_idx': int(start_idx),
+            'end_idx': int(end_idx),
+            'articles_processed': int(articles_processed),
+            'checkpoint_time': str(datetime.now().isoformat()),
             'status': 'completed'
         }])
         
@@ -457,18 +464,21 @@ class UserSessionManager:
         return set(session_articles['pmid'].tolist())
     
     def update_session(self, session_id: str, status: str, total_found: int = None, total_processed: int = None):
-        """Actualizar información de la sesión"""
+        """Actualizar información de la sesión - CORREGIDO para Python 3.14"""
         df = self.remote.read_csv(self.sessions_file)
         if df is None or df.empty:
             return
         
+        # Crear una copia para evitar problemas de vista
+        df = df.copy()
+        
         mask = df['session_id'] == session_id
         if total_found is not None:
-            df.loc[mask, 'total_found'] = total_found
+            df.loc[mask, 'total_found'] = int(total_found)
         if total_processed is not None:
-            df.loc[mask, 'total_processed'] = total_processed
-        df.loc[mask, 'status'] = status
-        df.loc[mask, 'end_time'] = datetime.now().isoformat()
+            df.loc[mask, 'total_processed'] = int(total_processed)
+        df.loc[mask, 'status'] = str(status)
+        df.loc[mask, 'end_time'] = str(datetime.now().isoformat())
         
         self.remote.write_csv(self.sessions_file, df)
     
@@ -2280,6 +2290,8 @@ Saludos cordiales,
 PubMed AI Analyzer
 """
             
+            # Asegurar que docx_bytes está en posición 0 antes de enviar
+            docx_bytes.seek(0)
             email_sent = send_docx_by_email(user_email, subject, body, docx_bytes, session_id[:20])
             
             if email_sent:
