@@ -726,82 +726,114 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
 
 
 def search_pubmed_complete(query):
-    """Search articles in PubMed with COMPLETE pagination"""
+    """Search articles in PubMed using WebEnv for COMPLETE pagination"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
-    all_ids = []
-    retstart = 0
-    batch_size = 10000
-    total_count = None
-    batch_num = 1
+    # Primera consulta: obtener WebEnv, query_key y total_count
+    initial_params = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": 0,
+        "retmode": "xml",
+        "usehistory": "y"
+    }
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    while True:
-        status_text.text(f"📥 Descargando IDs: lote {batch_num} (desde {retstart})")
+    try:
+        st.info("🔍 Realizando búsqueda inicial en PubMed...")
+        response = make_request_with_retry(search_url, initial_params)
+        if response is None:
+            return [], 0
         
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "retmax": batch_size,
-            "retstart": retstart,
-            "retmode": "xml",
-            "sort": "relevance"
-        }
+        root = ElementTree.fromstring(response.content)
         
-        try:
-            response = make_request_with_retry(search_url, params)
-            if response is None:
-                st.warning(f"⚠️ Error obteniendo lote {batch_num}")
-                break
+        # Obtener total y parámetros de historial
+        total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
+        webenv = root.find(".//WebEnv").text if root.find(".//WebEnv") is not None else ""
+        query_key = root.find(".//QueryKey").text if root.find(".//QueryKey") is not None else ""
+        
+        st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+        
+        if total_count == 0:
+            return [], 0
+        
+        # Ahora recuperar TODOS los IDs usando WebEnv con efetch
+        all_ids = []
+        retstart = 0
+        batch_size = 10000
+        batch_num = 1
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        fetch_url = f"{base_url}efetch.fcgi"
+        
+        while retstart < total_count:
+            status_text.text(f"📥 Descargando IDs: lote {batch_num} (artículos {retstart+1}-{min(retstart+batch_size, total_count)})")
             
-            root = ElementTree.fromstring(response.content)
+            fetch_params = {
+                "db": "pubmed",
+                "query_key": query_key,
+                "WebEnv": webenv,
+                "retstart": retstart,
+                "retmax": batch_size,
+                "retmode": "xml"
+            }
             
-            # Obtener total solo en la primera iteración
-            if total_count is None:
-                total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
-                st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+            try:
+                fetch_response = make_request_with_retry(fetch_url, fetch_params)
+                if fetch_response is None:
+                    st.warning(f"⚠️ Error obteniendo lote {batch_num}")
+                    break
                 
-                if total_count == 0:
-                    progress_bar.empty()
-                    status_text.empty()
-                    return [], 0
-            
-            # Obtener IDs de este lote
-            batch_ids = [id_elem.text for id_elem in root.findall(".//Id")]
-            
-            if not batch_ids:
-                break
-            
-            all_ids.extend(batch_ids)
-            st.info(f"   ✅ Lote {batch_num}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
-            
-            # Actualizar progreso
-            if total_count:
+                fetch_root = ElementTree.fromstring(fetch_response.content)
+                
+                # Extraer IDs de los resultados
+                batch_ids = []
+                
+                # Buscar en PubmedArticleSet -> PubmedArticle -> MedlineCitation -> PMID
+                for article in fetch_root.findall(".//PubmedArticle"):
+                    pmid_elem = article.find(".//PMID")
+                    if pmid_elem is not None and pmid_elem.text:
+                        batch_ids.append(pmid_elem.text)
+                
+                # También buscar en IdList (formato alternativo)
+                if not batch_ids:
+                    for id_elem in fetch_root.findall(".//Id"):
+                        if id_elem.text:
+                            batch_ids.append(id_elem.text)
+                
+                if not batch_ids:
+                    st.warning(f"⚠️ No se encontraron IDs en el lote {batch_num}")
+                    break
+                
+                all_ids.extend(batch_ids)
+                st.info(f"   ✅ Lote {batch_num}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
+                
                 progress_bar.progress(min(len(all_ids) / total_count, 1.0))
-            
-            # Si obtenemos menos de batch_size, es el último lote
-            if len(batch_ids) < batch_size:
+                
+                retstart += batch_size
+                batch_num += 1
+                
+                time.sleep(1.0)
+                
+            except Exception as e:
+                st.error(f"Error en lote {batch_num}: {e}")
                 break
-            
-            retstart += batch_size
-            batch_num += 1
-            
-            time.sleep(1.0)
-            
-        except Exception as e:
-            st.error(f"Error en lote {batch_num}: {e}")
-            break
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    if total_count:
+        
+        progress_bar.empty()
+        status_text.empty()
+        
         st.success(f"✅ Recuperados {len(all_ids)} de {total_count} IDs totales")
-    
-    return all_ids, total_count if total_count else 0
+        
+        if len(all_ids) < total_count:
+            st.warning(f"⚠️ Solo se recuperaron {len(all_ids)} de {total_count} IDs. Verifica la conexión.")
+        
+        return all_ids, total_count
+        
+    except Exception as e:
+        st.error(f"Error en búsqueda: {e}")
+        return [], 0
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -2635,7 +2667,7 @@ def main():
                 if hypothesis_terms:
                     st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
                 
-                with st.spinner("🔍 Searching articles in PubMed with COMPLETE pagination..."):
+                with st.spinner("🔍 Searching articles in PubMed with COMPLETE pagination (WebEnv)..."):
                     id_list, total_count = search_pubmed_complete(query.strip())
                     
                     if not id_list:
@@ -2696,7 +2728,7 @@ def main():
             🧠 PubMed AI Analyzer - Advanced Flavor Generator v27.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ COMPLETE PAGINATION | Block processing (1000 articles/block) | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
+            <strong>✅ COMPLETE PAGINATION (WebEnv) | Block processing (1000 articles/block) | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
         </div>
         """,
         unsafe_allow_html=True
