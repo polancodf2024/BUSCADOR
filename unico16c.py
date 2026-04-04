@@ -35,7 +35,6 @@ BIOMED_EMBEDDER = None
 FALLBACK_EMBEDDER = None
 USE_FALLBACK = False
 
-# Intentar cargar embeddings solo si es posible (no crítico)
 try:
     from sklearn.metrics.pairwise import cosine_similarity
     from sklearn.cluster import HDBSCAN, KMeans, AgglomerativeClustering
@@ -43,12 +42,11 @@ try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.preprocessing import normalize
     
-    # Intentar cargar sentence-transformers (opcional)
     try:
         from sentence_transformers import SentenceTransformer
         import torch
         
-        with st.spinner("🔄 Loading embeddings model (optional)..."):
+        with st.spinner("🔄 Loading embeddings model..."):
             try:
                 BIOMED_EMBEDDER = SentenceTransformer(
                     'pritamdeka/S-Biomed-Roberta-snli-multinli-stsb',
@@ -65,7 +63,7 @@ try:
                     )
                     AI_EMBEDDINGS_AVAILABLE = True
                     USE_FALLBACK = True
-                    st.warning("⚠️ BioBERT unavailable, using SBERT (general model)")
+                    st.warning("⚠️ BioBERT unavailable, using SBERT")
                 except:
                     AI_EMBEDDINGS_AVAILABLE = False
     except ImportError:
@@ -96,7 +94,7 @@ def send_status_email(to_email, session_id, block_num, total_blocks, articles_in
         email_password = st.secrets["email_password"]
         
         if not email_user or not email_password:
-            st.warning("⚠️ Credenciales de email no configuradas en secrets.toml")
+            st.warning("⚠️ Credenciales de email no configuradas")
             return False
         
         msg = MIMEMultipart()
@@ -104,19 +102,33 @@ def send_status_email(to_email, session_id, block_num, total_blocks, articles_in
         msg['To'] = to_email
         msg['Subject'] = f"[PubMed Analyzer] Progreso - Bloque {block_num}/{total_blocks}"
         
-        if status == "completed" and block_num > 0:
+        if status == "started_block":
+            body = f"""
+Estimado usuario,
+
+El bloque {block_num} de {total_blocks} ha comenzado su procesamiento.
+
+Detalles:
+- ID de sesión: {session_id[:30]}...
+- Bloque: {block_num}/{total_blocks}
+- Artículos en este bloque: {articles_in_block}
+
+Recibirá una notificación cuando este bloque se complete.
+
+Saludos cordiales,
+PubMed AI Analyzer
+"""
+        elif status == "completed" and block_num > 0:
             body = f"""
 Estimado usuario,
 
 El bloque {block_num} de {total_blocks} ha sido procesado exitosamente.
 
-Detalles del procesamiento:
+Detalles:
 - ID de sesión: {session_id[:30]}...
 - Bloque: {block_num}/{total_blocks}
 - Artículos en este bloque: {articles_in_block}
 - Total procesado hasta ahora: {total_articles}
-
-El procesamiento continúa. Recibirá una notificación cuando todos los bloques estén completados.
 
 Saludos cordiales,
 PubMed AI Analyzer
@@ -129,10 +141,10 @@ El procesamiento de su búsqueda en PubMed ha comenzado.
 
 Detalles:
 - ID de sesión: {session_id[:30]}...
-- Total de bloques a procesar: {total_blocks}
-- Artículos totales encontrados: {total_articles}
+- Total de bloques: {total_blocks}
+- Artículos totales: {total_articles}
 
-Recibirá notificaciones al completarse cada bloque.
+Recibirá notificaciones al iniciar y completar cada bloque.
 
 Saludos cordiales,
 PubMed AI Analyzer
@@ -141,11 +153,7 @@ PubMed AI Analyzer
             body = f"""
 Estimado usuario,
 
-El bloque {block_num} de {total_blocks} ha sido procesado con advertencias.
-
-Detalles:
-- ID de sesión: {session_id[:30]}...
-- Estado: {status}
+El bloque {block_num} de {total_blocks} ha sido procesado.
 
 Saludos cordiales,
 PubMed AI Analyzer
@@ -159,10 +167,10 @@ PubMed AI Analyzer
         server.send_message(msg)
         server.quit()
         
-        st.success(f"📧 Correo de estado enviado: Bloque {block_num}/{total_blocks}")
+        st.success(f"📧 Correo enviado: {'Inicio' if status == 'started_block' else 'Completado'} Bloque {block_num}")
         return True
     except Exception as e:
-        st.error(f"❌ Error al enviar correo de estado: {e}")
+        st.error(f"❌ Error en correo: {e}")
         return False
 
 
@@ -175,7 +183,7 @@ def send_final_email(to_email, session_id, total_articles, relevance_threshold, 
         email_password = st.secrets["email_password"]
         
         if not email_user or not email_password:
-            st.warning("⚠️ Credenciales de email no configuradas en secrets.toml")
+            st.warning("⚠️ Credenciales de email no configuradas")
             return False
         
         msg = MIMEMultipart()
@@ -220,7 +228,7 @@ PubMed AI Analyzer
         server.send_message(msg)
         server.quit()
         
-        st.success(f"📧 Correo final enviado a {to_email}")
+        st.success(f"📧 Correo final enviado a {to_email} con DOCX adjunto")
         return True
     except Exception as e:
         st.error(f"❌ Error al enviar correo final: {e}")
@@ -232,8 +240,6 @@ PubMed AI Analyzer
 # ============================================================================
 
 class RemoteCSVStorage:
-    """Gestor de almacenamiento remoto vía SFTP usando CSV"""
-    
     def __init__(self, host, port, username, password, remote_dir):
         self.host = host
         self.port = port
@@ -283,8 +289,7 @@ class RemoteCSVStorage:
                 content = f.read().decode('utf-8')
                 if content.strip():
                     return pd.read_csv(StringIO(content))
-                else:
-                    return None
+                return None
         except FileNotFoundError:
             return None
         except Exception as e:
@@ -312,8 +317,6 @@ class RemoteCSVStorage:
                 df = pd.concat([existing_df, new_data], ignore_index=True)
                 if 'pmid' in df.columns and 'session_id' in df.columns:
                     df = df.drop_duplicates(subset=['pmid', 'session_id'], keep='last')
-                elif 'pmid' in df.columns:
-                    df = df.drop_duplicates(subset=['pmid'], keep='last')
             else:
                 df = new_data
             return self.write_csv(filename, df)
@@ -335,8 +338,6 @@ class RemoteCSVStorage:
 
 
 class UserSessionManager:
-    """Gestor de sesiones por usuario usando CSV remoto"""
-    
     def __init__(self, remote_storage, login):
         self.remote = remote_storage
         self.login = login
@@ -364,7 +365,6 @@ class UserSessionManager:
             'flavors_generated': False,
             'user_email': email
         }])
-        
         self.remote.append_to_csv(self.sessions_file, session_data)
         return session_id
     
@@ -388,10 +388,7 @@ class UserSessionManager:
     
     def save_articles_batch(self, articles: List[Dict], session_id: str):
         if not articles:
-            st.warning("⚠️ No hay artículos para guardar")
             return
-        
-        st.info(f"💾 Guardando {len(articles)} artículos en la sesión {session_id[:20]}...")
         
         records = []
         for i, article in enumerate(articles):
@@ -401,11 +398,6 @@ class UserSessionManager:
             pmid = article.get('pmid', '')
             if not pmid:
                 continue
-            
-            relevance_score = article.get('relevance_score', 0.5) or 0.5
-            search_relevance = article.get('search_relevance', 0.5) or 0.5
-            hypothesis_relevance = article.get('hypothesis_relevance', 0.5) or 0.5
-            outcomes = article.get('all_outcomes', []) or []
             
             record = {
                 'pmid': str(pmid),
@@ -422,11 +414,11 @@ class UserSessionManager:
                 'evidence_strength': str(article.get('evidence_strength', 'No data')),
                 'top_keywords': str(article.get('top_keywords', '')),
                 'population': str(article.get('population', 'Not specified')),
-                'outcomes': ','.join(str(o) for o in outcomes if o),
+                'outcomes': ','.join(str(o) for o in (article.get('all_outcomes', []) or []) if o),
                 'numeric_results': str(article.get('numeric_results_str', '')),
-                'relevance_score': float(relevance_score),
-                'search_relevance': float(search_relevance),
-                'hypothesis_relevance': float(hypothesis_relevance),
+                'relevance_score': float(article.get('relevance_score', 0.5) or 0.5),
+                'search_relevance': float(article.get('search_relevance', 0.5) or 0.5),
+                'hypothesis_relevance': float(article.get('hypothesis_relevance', 0.5) or 0.5),
                 'embedding_used': 'TF-IDF',
                 'processed_date': datetime.now().isoformat(),
                 'block_number': int(article.get('block_number', 0) or 0)
@@ -434,7 +426,6 @@ class UserSessionManager:
             records.append(record)
         
         if not records:
-            st.error("❌ Error: No se pudieron crear registros válidos")
             return
         
         df_new = pd.DataFrame(records)
@@ -446,11 +437,8 @@ class UserSessionManager:
         else:
             df = df_new
         
-        success = self.remote.write_csv(self.articles_file, df)
-        if success:
-            st.success(f"✅ Guardados {len(df_new)} artículos correctamente")
-        else:
-            st.error("❌ Error al guardar artículos")
+        self.remote.write_csv(self.articles_file, df)
+        st.success(f"✅ Guardados {len(df_new)} artículos")
     
     def save_checkpoint(self, session_id: str, block_num: int, batch_size: int,
                         start_idx: int, end_idx: int, articles_processed: int):
@@ -513,13 +501,12 @@ class UserSessionManager:
             return {'total_articles': 0, 'avg_quality': 0, 'strong_evidence': 0, 'avg_relevance': 0}
         
         avg_quality = articles_df['quality_score'].mean() if 'quality_score' in articles_df.columns else 0
-        strong_evidence = len(articles_df[articles_df['evidence_strength'].str.contains('STRONG', na=False)]) if 'evidence_strength' in articles_df.columns else 0
         avg_relevance = articles_df['relevance_score'].mean() if 'relevance_score' in articles_df.columns else 0
         
         return {
             'total_articles': len(articles_df),
             'avg_quality': avg_quality,
-            'strong_evidence': strong_evidence,
+            'strong_evidence': 0,
             'avg_relevance': avg_relevance
         }
     
@@ -601,60 +588,53 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
             response = requests.get(url, params=params, timeout=30)
             if response.status_code == 429:
                 wait_time = delay * (2 ** attempt)
-                st.warning(f"⚠️ Rate limit reached. Waiting {wait_time} seconds before retry...")
+                st.warning(f"⚠️ Rate limit. Waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             response.raise_for_status()
             return response
-        except requests.exceptions.RequestException as e:
+        except:
             if attempt == max_retries - 1:
-                raise e
+                raise
             time.sleep(delay)
     return None
 
 
 def search_pubmed_complete(query, max_articles=3000):
-    """Search articles in PubMed - limitado a max_articles (3000 = 2 bloques de 1500)"""
+    """Search articles - limitado a max_articles (3000 = 2 bloques de 1500)"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
     try:
-        st.info("🔍 Realizando búsqueda en PubMed...")
+        st.info("🔍 Buscando artículos en PubMed...")
         
-        all_ids = []
-        retstart = 0
-        batch_size = 10000
-        
-        # Obtener el total primero
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "retmax": 1,
-            "retmode": "xml"
-        }
+        # Primero obtener el total
+        params = {"db": "pubmed", "term": query, "retmax": 1, "retmode": "xml"}
         response = make_request_with_retry(search_url, params)
         if response is None:
             return [], 0
         
         root = ElementTree.fromstring(response.content)
         total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
-        st.info(f"📊 PubMed encontró un total de {total_count} artículos")
+        st.info(f"📊 PubMed encontró {total_count} artículos")
         
         if total_count == 0:
             return [], 0
         
         # Limitar a max_articles
         articles_to_fetch = min(total_count, max_articles)
-        st.info(f"📊 Se procesarán {articles_to_fetch} artículos ({articles_to_fetch//1500} bloques de 1500 c/u)")
+        st.info(f"📊 Se procesarán {articles_to_fetch} artículos ({articles_to_fetch//1500} bloques de 1500)")
+        
+        # Obtener todos los IDs
+        all_ids = []
+        retstart = 0
+        batch_size = 10000
         
         progress_bar = st.progress(0)
-        status_text = st.empty()
         
         while retstart < articles_to_fetch:
             remaining = articles_to_fetch - retstart
             current_batch = min(batch_size, remaining)
-            
-            status_text.text(f"📥 Descargando IDs: lote {retstart//batch_size + 1} (artículos {retstart+1}-{retstart+current_batch})")
             
             fetch_params = {
                 "db": "pubmed",
@@ -667,7 +647,6 @@ def search_pubmed_complete(query, max_articles=3000):
             try:
                 fetch_response = make_request_with_retry(search_url, fetch_params)
                 if fetch_response is None:
-                    st.warning(f"⚠️ Error obteniendo lote")
                     break
                 
                 fetch_root = ElementTree.fromstring(fetch_response.content)
@@ -677,29 +656,27 @@ def search_pubmed_complete(query, max_articles=3000):
                     break
                 
                 all_ids.extend(batch_ids)
-                st.info(f"   ✅ Lote: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
+                st.info(f"   ✅ Descargados {len(batch_ids)} IDs (total: {len(all_ids)})")
                 
                 progress_bar.progress(min(len(all_ids) / articles_to_fetch, 1.0))
                 retstart += current_batch
-                time.sleep(1.0)
+                time.sleep(0.5)
                 
             except Exception as e:
                 st.error(f"Error: {e}")
                 break
         
         progress_bar.empty()
-        status_text.empty()
-        
         st.success(f"✅ Recuperados {len(all_ids)} IDs")
         
         if len(all_ids) < 1500:
-            st.error(f"❌ No hay suficientes artículos (mínimo 1500, se tienen {len(all_ids)})")
+            st.error(f"❌ No hay suficientes artículos (mínimo 1500, hay {len(all_ids)})")
             return [], 0
         
         return all_ids, len(all_ids)
         
     except Exception as e:
-        st.error(f"Error en búsqueda: {e}")
+        st.error(f"Error: {e}")
         return [], 0
 
 
@@ -718,7 +695,7 @@ def get_abstract(pmid):
             if abstract.text:
                 abstract_texts.append(abstract.text)
         return " ".join(abstract_texts) if abstract_texts else None
-    except Exception as e:
+    except:
         return None
 
 
@@ -728,8 +705,7 @@ def preprocess_text(text):
     text = text.lower()
     text = text.translate(str.maketrans('', '', string.punctuation))
     text = re.sub(r'\d+', '', text)
-    text = ' '.join(text.split())
-    return text
+    return ' '.join(text.split())
 
 
 # ============================================================================
@@ -739,22 +715,15 @@ def preprocess_text(text):
 def extract_key_terms_from_query(query):
     terms = set()
     mesh_pattern = r'"([^"]+)"\[Mesh\]'
-    mesh_terms = re.findall(mesh_pattern, query, re.IGNORECASE)
-    for term in mesh_terms:
+    for term in re.findall(mesh_pattern, query, re.IGNORECASE):
         terms.add(term.lower())
     tiab_pattern = r'"([^"]+)"\[tiab\]'
-    tiab_terms = re.findall(tiab_pattern, query, re.IGNORECASE)
-    for term in tiab_terms:
+    for term in re.findall(tiab_pattern, query, re.IGNORECASE):
         terms.add(term.lower())
     quoted_pattern = r'"([^"]+)"'
-    quoted_terms = re.findall(quoted_pattern, query)
-    for term in quoted_terms:
+    for term in re.findall(quoted_pattern, query):
         if len(term) > 3 and not term.lower().endswith('mesh') and not term.lower().endswith('tiab'):
             terms.add(term.lower())
-    bracket_pattern = r'([a-zA-Z\s]+)\[Mesh\]'
-    bracket_terms = re.findall(bracket_pattern, query, re.IGNORECASE)
-    for term in bracket_terms:
-        terms.add(term.lower().strip())
     return list(terms)
 
 
@@ -770,8 +739,7 @@ def extract_key_terms_from_hypothesis(hypothesis):
         if len(words[i]) > 3:
             terms.add(words[i])
     pattern = r'\b([a-z]+(?:\s+[a-z]+){1,3})\b'
-    matches = re.findall(pattern, hypothesis_lower)
-    for match in matches:
+    for match in re.findall(pattern, hypothesis_lower):
         if len(match.split()) >= 2:
             terms.add(match)
     return list(terms)
@@ -786,8 +754,7 @@ def get_embedder():
         return BIOMED_EMBEDDER
     elif FALLBACK_EMBEDDER is not None:
         return FALLBACK_EMBEDDER
-    else:
-        return None
+    return None
 
 
 def extract_entities_with_embeddings(text, dynamic_terms):
@@ -804,7 +771,7 @@ def extract_entities_with_embeddings(text, dynamic_terms):
             if sim > threshold:
                 entities.append((dynamic_terms[i], 'semantic', sim))
         return entities
-    except Exception as e:
+    except:
         return []
 
 
@@ -862,10 +829,10 @@ def extract_all_outcomes(text):
         return []
     text_lower = text.lower()
     outcomes = set()
-    outcome_indicators = ['mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage', 
-                          'stroke', 'reinfarction', 'complication', 'risk', 'rate', 'incidence', 
-                          'outcome', 'endpoint', 'recovery', 'improvement', 'efficacy', 'safety']
-    for indicator in outcome_indicators:
+    indicators = ['mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage', 
+                  'stroke', 'reinfarction', 'complication', 'risk', 'rate', 'incidence', 
+                  'outcome', 'endpoint', 'recovery', 'improvement', 'efficacy', 'safety']
+    for indicator in indicators:
         if indicator in text_lower:
             outcomes.add(indicator)
     return list(outcomes)
@@ -877,7 +844,7 @@ def analyze_sentiment_by_outcome(text):
     text_lower = text.lower()
     outcomes_sentiment = {}
     all_outcomes = extract_all_outcomes(text)
-    negation_words = ['no', 'not', 'without', 'lack', 'failed', 'non-significant', 'did not', 'does not']
+    negation_words = ['no', 'not', 'without', 'lack', 'failed', 'non-significant']
     intensifiers = ['significantly', 'markedly', 'dramatically', 'strongly']
     for outcome in all_outcomes:
         outcome_index = text_lower.find(outcome)
@@ -965,15 +932,12 @@ def get_effect_direction(result_value, ci_lower=None, ci_upper=None):
         if value < 1:
             if ci_upper and float(ci_upper) < 1:
                 return "PROTECTIVE"
-            else:
-                return "PROTECTIVE (trend)"
+            return "PROTECTIVE (trend)"
         elif value > 1:
             if ci_lower and float(ci_lower) > 1:
                 return "HARMFUL"
-            else:
-                return "HARMFUL (trend)"
-        else:
-            return "NO EFFECT"
+            return "HARMFUL (trend)"
+        return "NO EFFECT"
     except:
         return "NOT DETERMINED"
 
@@ -1018,6 +982,7 @@ def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
     full_text = f"{title} {abstract if abstract else ''}"
     processed_text = preprocess_text(full_text)
     entities = extract_medical_entities_enhanced(full_text, query_terms, hypothesis_terms)
+    
     study_types = []
     study_keywords = {
         'RCT': ['randomized', 'rct', 'randomised', 'trial', 'double-blind'],
@@ -1029,9 +994,11 @@ def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
     for study_type, keywords in study_keywords.items():
         if any(keyword in processed_text for keyword in keywords):
             study_types.append(study_type)
+    
     words = processed_text.split()
     word_freq = Counter(words)
     top_keywords = [word for word, _ in word_freq.most_common(20) if len(word) > 3][:10]
+    
     population_patterns = {
         'adults': r'\badults?\b|\bpatients?\b',
         'elderly': r'\belderly\b|\baged\b|\bolder\b',
@@ -1041,12 +1008,14 @@ def analyze_article_with_ai(title, abstract, query_terms, hypothesis_terms):
         'hypertension': r'\bhypertension\b|\bhypertensive\b'
     }
     population = [pop for pop, pattern in population_patterns.items() if re.search(pattern, processed_text)]
+    
     numeric_results = extract_numeric_results(full_text)
     all_outcomes = extract_all_outcomes(full_text)
     quality_score, quality_factors = enhanced_quality_scoring(study_types, full_text)
     evidence_strength, evidence_score, directions = calculate_evidence_strength(numeric_results, quality_score)
     sentiment = analyze_sentiment_by_outcome(full_text)
     numeric_results_str = ' | '.join([f"{r['type']}={r['value']}" for r in numeric_results[:3]])
+    
     return {
         'entities': entities,
         'study_types': ', '.join(study_types) if study_types else 'Not specified',
@@ -1091,49 +1060,52 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     articles = []
     progress_bar = st.progress(0)
-    status_text = st.empty()
+    
     for batch_num in range(num_batches):
         start_idx = batch_num * batch_size
         end_idx = min((batch_num + 1) * batch_size, total_to_process)
         batch_ids = id_list[start_idx:end_idx]
-        status_text.text(f"📦 Processing batch {batch_num + 1} of {num_batches} ({len(batch_ids)} articles)...")
+        
+        st.write(f"   📦 Lote {batch_num + 1}/{num_batches} ({len(batch_ids)} artículos)...")
+        
         summary_params = {"db": "pubmed", "id": ",".join(batch_ids), "retmode": "xml"}
-        max_retries = 3
-        retry_delay = 5
-        for retry in range(max_retries):
+        
+        for retry in range(3):
             try:
                 summary_response = make_request_with_retry(f"{base_url}esummary.fcgi", summary_params)
                 if summary_response is None:
-                    if retry < max_retries - 1:
-                        wait_time = retry_delay * (2 ** retry)
-                        status_text.text(f"⚠️ Rate limit. Waiting {wait_time}s before retry...")
-                        time.sleep(wait_time)
+                    if retry < 2:
+                        time.sleep(5)
                         continue
                     else:
                         raise Exception("Max retries exceeded")
+                
                 summary_root = ElementTree.fromstring(summary_response.content)
+                
                 for j, doc_sum in enumerate(summary_root.findall(".//DocSum")):
                     overall_idx = start_idx + j
                     progress_bar.progress((overall_idx + 1) / total_to_process)
+                    
                     article = extract_article_info(doc_sum)
-                    time.sleep(0.8)
+                    time.sleep(0.5)
                     abstract = get_abstract(article["pmid"])
                     article["abstract"] = abstract if abstract else "Not available"
                     ai_analysis = analyze_article_with_ai(article["title"], abstract, query_terms, hypothesis_terms)
                     article.update(ai_analysis)
                     article["block_number"] = block_number
                     articles.append(article)
+                
                 break
+                
             except Exception as e:
-                if retry < max_retries - 1:
-                    status_text.text(f"⚠️ Error in batch {batch_num + 1}: {str(e)[:50]}. Retrying...")
-                    time.sleep(retry_delay * (2 ** retry))
-                    continue
+                if retry == 2:
+                    st.warning(f"Error en lote {batch_num + 1}: {str(e)[:50]}")
                 else:
-                    st.warning(f"Error in batch {batch_num + 1}: {str(e)[:100]}")
-        time.sleep(1.5)
+                    time.sleep(5)
+        
+        time.sleep(1)
+    
     progress_bar.empty()
-    status_text.empty()
     return articles
 
 
@@ -1146,6 +1118,7 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
     st.info(f"📦 Total de artículos a procesar: {total_to_process}")
     st.info(f"📦 Se procesarán en {total_blocks} bloques de {BLOCK_SIZE} artículos cada uno")
     
+    # Email de inicio del proceso general
     if user_email:
         st.info(f"📧 Enviando correo de inicio a {user_email}...")
         send_status_email(user_email, session_id, 0, total_blocks, 0, total_to_process, "started")
@@ -1160,20 +1133,16 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
         if not existing_df.empty:
             all_articles = existing_df.to_dict('records')
             processed_pmids = set(existing_df['pmid'].tolist())
-            st.info(f"📊 {len(processed_pmids)} artículos ya procesados encontrados")
+            st.info(f"📊 {len(processed_pmids)} artículos ya procesados")
         else:
             processed_pmids = set()
     else:
         completed_blocks = set()
         processed_pmids = set()
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
     for block_num in range(1, total_blocks + 1):
         if block_num in completed_blocks:
-            status_text.text(f"⏭️ Bloque {block_num}/{total_blocks} ya completado. Saltando...")
-            progress_bar.progress(block_num / total_blocks)
+            st.info(f"⏭️ Bloque {block_num}/{total_blocks} ya completado. Saltando...")
             continue
         
         start_idx = (block_num - 1) * BLOCK_SIZE
@@ -1182,18 +1151,23 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
         new_ids = [pid for pid in block_ids if pid not in processed_pmids]
         
         if not new_ids:
-            status_text.text(f"⏭️ Bloque {block_num} sin nuevos IDs. Marcando como completado...")
+            st.info(f"⏭️ Bloque {block_num} sin nuevos IDs. Marcando como completado...")
             if session_manager:
                 session_manager.save_checkpoint(session_id, block_num, BLOCK_SIZE, start_idx, end_idx, len(all_articles))
-            progress_bar.progress(block_num / total_blocks)
             continue
         
-        status_text.text(f"📦 PROCESANDO BLOQUE {block_num}/{total_blocks} (artículos {start_idx+1}-{end_idx}, {len(new_ids)} nuevos)")
+        # EMAIL: INICIO DEL BLOQUE
+        if user_email:
+            st.info(f"📧 Enviando correo de INICIO del bloque {block_num}...")
+            send_status_email(user_email, session_id, block_num, total_blocks, len(new_ids), 0, "started_block")
+        
+        st.markdown(f"## 📦 PROCESANDO BLOQUE {block_num}/{total_blocks}")
+        st.info(f"Artículos {start_idx+1}-{end_idx} ({len(new_ids)} nuevos)")
         
         block_articles = fetch_articles_details(new_ids, query_terms, hypothesis_terms, block_num)
         
         if block_articles:
-            st.info(f"🧠 Calculando relevancia para {len(block_articles)} artículos del bloque {block_num}...")
+            st.info(f"🧠 Calculando relevancia para {len(block_articles)} artículos...")
             block_articles = calculate_relevance_to_search_and_hypothesis(block_articles, query, hypothesis)
         
         if session_manager and block_articles:
@@ -1201,22 +1175,24 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
             for article in block_articles:
                 processed_pmids.add(article.get('pmid', ''))
             session_manager.save_checkpoint(session_id, block_num, BLOCK_SIZE, start_idx, end_idx, len(all_articles) + len(block_articles))
-            st.success(f"✅ BLOQUE {block_num} COMPLETADO y guardado. {len(block_articles)} artículos añadidos.")
+            
+            st.success(f"✅ BLOQUE {block_num} COMPLETADO. {len(block_articles)} artículos guardados.")
+            
+            # EMAIL: COMPLETACIÓN DEL BLOQUE
             if user_email:
+                st.info(f"📧 Enviando correo de COMPLETACIÓN del bloque {block_num}...")
                 send_status_email(user_email, session_id, block_num, total_blocks, len(block_articles), len(all_articles) + len(block_articles), "completed")
         
         all_articles.extend(block_articles)
-        progress_bar.progress(block_num / total_blocks)
         
         if block_num < total_blocks:
-            time.sleep(3)
-    
-    progress_bar.empty()
-    status_text.empty()
+            st.info("⏳ Esperando 5 segundos antes del siguiente bloque...")
+            time.sleep(5)
     
     if session_manager:
         session_manager.update_session(session_id, 'completed', total_found=total_to_process, total_processed=len(all_articles))
     
+    st.success(f"🎉 PROCESO COMPLETADO. Total: {len(all_articles)} artículos en {total_blocks} bloques")
     return all_articles, total_blocks
 
 
@@ -1247,7 +1223,7 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
                 article['hypothesis_relevance'] = 0.0
         articles.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
     except Exception as e:
-        st.warning(f"Error calculating relevance: {e}")
+        st.warning(f"Error en relevancia: {e}")
         for article in articles:
             article['relevance_score'] = 0.5
     return articles
@@ -1256,10 +1232,10 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
 def filter_articles_by_relevance(articles, relevance_threshold):
     filtered = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
     if articles:
-        st.write(f"**📊 Relevance Filter:**")
+        st.write(f"**📊 Filtro:**")
         st.write(f"   - Threshold: {relevance_threshold}")
-        st.write(f"   - Articles before: {len(articles)}")
-        st.write(f"   - Articles after: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
+        st.write(f"   - Antes: {len(articles)}")
+        st.write(f"   - Después: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
     return filtered
 
 
@@ -1285,8 +1261,7 @@ def extract_topic_keywords_tfidf(articles, n_keywords=5):
         feature_names = vectorizer.get_feature_names_out()
         scores = np.array(tfidf_matrix.sum(axis=0)).flatten()
         top_indices = scores.argsort()[-n_keywords:][::-1]
-        top_keywords = [feature_names[i] for i in top_indices if scores[i] > 0]
-        return top_keywords[:n_keywords]
+        return [feature_names[i] for i in top_indices if scores[i] > 0][:n_keywords]
     except:
         return []
 
@@ -1309,10 +1284,8 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
             all_methods.append('cohort study')
         if 'registry' in text:
             all_methods.append('registry analysis')
-        if 'meta-analysis' in text or 'systematic review' in text:
+        if 'meta-analysis' in text:
             all_methods.append('meta-analysis')
-        if 'retrospective' in text:
-            all_methods.append('retrospective analysis')
         pop = a.get('population', '')
         if pop and pop != 'Not specified':
             all_populations.extend(pop.split(', '))
@@ -1322,37 +1295,26 @@ def determine_flavor_aspect_and_difference(articles, flavor_name, query_terms, h
                 all_entities.append(entity)
     outcome_counts = Counter(all_outcomes)
     method_counts = Counter(all_methods)
-    population_counts = Counter(all_populations)
     entity_counts = Counter(all_entities)
+    
     aspect = ""
     if entity_counts:
-        top_entity = entity_counts.most_common(1)[0][0]
-        aspect = f"Clinical Analysis of {top_entity.title()}"
+        aspect = f"Clinical Analysis of {entity_counts.most_common(1)[0][0].title()}"
     elif outcome_counts:
-        top_outcome = outcome_counts.most_common(1)[0][0]
-        aspect = f"Evaluation of {top_outcome.capitalize()} Outcomes"
-    elif method_counts:
-        top_method = method_counts.most_common(1)[0][0]
-        aspect = f"Methodological Approach: {top_method.capitalize()}"
+        aspect = f"Evaluation of {outcome_counts.most_common(1)[0][0].capitalize()} Outcomes"
     else:
         aspect = "Clinical Outcomes Analysis"
+    
     difference = ""
     if method_counts.get('meta-analysis', 0) > len(articles) * 0.3:
-        difference = "Synthesizes evidence from multiple studies through meta-analytic methods"
+        difference = "Synthesizes evidence through meta-analytic methods"
     elif method_counts.get('registry analysis', 0) > len(articles) * 0.4:
-        difference = "Leverages large-scale registry data for population-level insights"
+        difference = "Leverages large-scale registry data"
     elif method_counts.get('cohort study', 0) > len(articles) * 0.5:
-        difference = "Longitudinal cohort design enabling temporal outcome assessment"
-    elif population_counts.get('elderly', 0) > len(articles) * 0.3:
-        difference = "Focuses on elderly population with age-specific risk assessment"
-    elif population_counts.get('women', 0) > len(articles) * 0.2:
-        difference = "Gender-specific analysis of outcomes"
+        difference = "Longitudinal cohort design"
     else:
-        tfidf_keywords = extract_topic_keywords_tfidf(articles, n_keywords=3)
-        if tfidf_keywords:
-            difference = f"Explores emerging themes including {', '.join(tfidf_keywords[:3])}"
-        else:
-            difference = "Integrates diverse clinical studies with heterogeneous methodologies"
+        difference = "Integrates diverse clinical studies"
+    
     return aspect, difference
 
 
@@ -1408,8 +1370,7 @@ def discover_flavors_by_embeddings_hdbscan(articles, query_terms, hypothesis_ter
                 'representative_articles': representative
             })
         return flavors
-    except Exception as e:
-        st.warning(f"Error in HDBSCAN clustering: {e}")
+    except:
         return []
 
 
@@ -1459,8 +1420,7 @@ def discover_flavors_by_outcomes(articles, query_terms, hypothesis_terms):
                 'representative_articles': representative
             })
         return flavors
-    except Exception as e:
-        st.warning(f"Error in outcome clustering: {e}")
+    except:
         return []
 
 
@@ -1534,8 +1494,7 @@ def assign_articles_to_best_flavor(flavors):
             key=lambda x: x.get('quality_score', 0) if x else 0, 
             reverse=True
         )[:5]
-    flavors = [f for f in flavors if f['n_articles'] >= 2]
-    return flavors
+    return [f for f in flavors if f['n_articles'] >= 2]
 
 
 def generate_descriptive_name(articles, query_terms, hypothesis_terms):
@@ -1559,19 +1518,16 @@ def generate_descriptive_name(articles, query_terms, hypothesis_terms):
                 all_entities.append(entity)
     outcome_counts = Counter(all_outcomes)
     entity_counts = Counter(all_entities)
-    name = ""
     if entity_counts:
         top_entity = entity_counts.most_common(1)[0][0]
         if len(top_entity) > 3:
-            name = top_entity.title()
-    if not name and outcome_counts:
+            return top_entity.title()
+    if outcome_counts:
         top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
-        name = f"Studies on {', '.join(top_outcomes)}"
-    if not name and all_keywords:
-        name = all_keywords[0].title() if all_keywords else "Research"
-    if not name:
-        name = "Clinical Studies"
-    return name
+        return f"Studies on {', '.join(top_outcomes)}"
+    if all_keywords:
+        return all_keywords[0].title()
+    return "Clinical Studies"
 
 
 def generate_all_flavors(articles, query_terms, hypothesis_terms):
@@ -1667,37 +1623,32 @@ def generate_flavor_summary_with_citations(articles, flavor_name, section, query
         summary += f"in the context of the research topic. "
         if top_study_types:
             summary += f"Methodological approaches include {', '.join(top_study_types[:2])}, "
-        else:
-            summary += f"Methodological approaches include clinical registries, cohort studies, and observational analyses, "
-        summary += f"providing comprehensive insights into clinical outcomes and management strategies. "
+        summary += f"providing comprehensive insights into clinical outcomes. "
         if top_outcomes:
-            summary += f"Primary outcomes examined include {', '.join(top_outcomes[:3])}, "
-            summary += f"reflecting a focus on clinically relevant endpoints. "
+            summary += f"Primary outcomes examined include {', '.join(top_outcomes[:3])}. "
         if key_articles:
             refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3] if auth]
             if refs:
-                summary += f"Key contributions from {', '.join(refs)} have advanced understanding of clinical outcomes. "
+                summary += f"Key contributions from {', '.join(refs)} have advanced understanding. "
         if key_findings:
             find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3] if auth]
             if find_refs:
-                summary += f"Notable findings from {', '.join(find_refs)} include {key_findings[0][2] if key_findings else 'significant clinical associations'}, "
-                summary += f"establishing foundations for risk stratification and treatment optimization."
-        summary += f" The convergence of these {len(articles)} studies demonstrates the clinical importance of this research area."
+                summary += f"Notable findings from {', '.join(find_refs)} include {key_findings[0][2] if key_findings else 'significant associations'}. "
+        summary += f"The convergence of these {len(articles)} studies demonstrates clinical importance."
     else:
         summary = header
         summary += f"Our analysis aligns with findings from {len(articles)} clinical studies. "
         if top_study_types:
-            summary += f"The observed methodological convergence across {', '.join(top_study_types[:2])} has enabled identification of consistent risk factors and outcomes. "
+            summary += f"The methodological convergence across {', '.join(top_study_types[:2])} has enabled identification of consistent risk factors. "
         if key_articles:
             refs = [f"{auth} ({idx})" for idx, auth in key_articles[:3] if auth]
             if refs:
-                summary += f"Specifically, {', '.join(refs)} reported results that are consistent with our analysis. "
+                summary += f"Specifically, {', '.join(refs)} reported consistent results. "
         if key_findings:
             find_refs = [f"{auth} ({idx})" for idx, auth, _ in key_findings[:3] if auth]
             if find_refs:
-                summary += f"Quantitative findings from {', '.join(find_refs)} provide additional evidence supporting our conclusions. "
-        summary += f"Heterogeneity in management approaches across these {len(articles)} studies highlights the need for standardized protocols. "
-        summary += f"Integration of these findings with clinical and pathological data will be crucial for improving outcomes."
+                summary += f"Quantitative findings from {', '.join(find_refs)} support our conclusions. "
+        summary += f"Heterogeneity in approaches across these studies highlights the need for standardized protocols."
     citations = []
     for i, article in enumerate(articles[:15], 1):
         if article:
@@ -1733,9 +1684,9 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
             intro_summary, intro_citations = generate_flavor_summary_with_citations(
                 flavor.get('representative_articles', flavor['articles'][:10]), 
                 flavor['name'], 
-                section='introduction',
-                query_terms=query_terms,
-                hypothesis_terms=hypothesis_terms
+                'introduction',
+                query_terms,
+                hypothesis_terms
             )
             doc.add_paragraph(intro_summary)
             doc.add_paragraph()
@@ -1756,9 +1707,9 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
             disc_summary, disc_citations = generate_flavor_summary_with_citations(
                 flavor.get('representative_articles', flavor['articles'][:10]), 
                 flavor['name'], 
-                section='discussion',
-                query_terms=query_terms,
-                hypothesis_terms=hypothesis_terms
+                'discussion',
+                query_terms,
+                hypothesis_terms
             )
             doc.add_paragraph(disc_summary)
             doc.add_paragraph()
@@ -1778,7 +1729,6 @@ def export_articles_to_csv(articles):
             continue
         abstract = article.get('abstract', '') or ''
         outcomes = article.get('all_outcomes', []) or []
-        relevance_score = article.get('relevance_score', 0) or 0
         row = {
             'PMID': str(article.get('pmid', '')),
             'Title': str(article.get('title', '')),
@@ -1792,7 +1742,7 @@ def export_articles_to_csv(articles):
             'Top Keywords': str(article.get('top_keywords', '')),
             'Population': str(article.get('population', '')),
             'Numeric Results': str(article.get('numeric_results_str', '')),
-            'Relevance Score': float(relevance_score),
+            'Relevance Score': float(article.get('relevance_score', 0)),
             'Outcomes': ', '.join(str(o) for o in outcomes if o) if outcomes else '',
             'Block Number': int(article.get('block_number', 0)),
             'Abstract (first 500 chars)': str(abstract)[:500] if abstract else ''
@@ -1828,14 +1778,13 @@ def generate_flavors_from_saved_session_only(session_manager, session_id, releva
     st.info(f"✅ Cargados {len(articles)} artículos de {block_label}")
     threshold = relevance_threshold if relevance_threshold is not None else float(session_info.get('relevance_threshold', 0.35))
     filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= threshold]
-    st.info(f"📊 Filtro de relevancia ({threshold}): {len(filtered_articles)} de {len(articles)} artículos")
+    st.info(f"📊 Filtro ({threshold}): {len(filtered_articles)} de {len(articles)} artículos")
     if len(filtered_articles) < 5:
-        st.error(f"❌ No hay suficientes artículos después del filtro (mínimo 5, hay {len(filtered_articles)})")
+        st.error(f"❌ No hay suficientes artículos (mínimo 5, hay {len(filtered_articles)})")
         return None, None, None, None
     query_terms = extract_key_terms_from_query(query)
     hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
-    st.info(f"📝 Extraídos {len(query_terms)} términos de búsqueda y {len(hypothesis_terms)} de hipótesis")
-    with st.spinner("🔍 Generando flavors desde artículos guardados..."):
+    with st.spinner("🔍 Generando flavors..."):
         flavors = generate_all_flavors(filtered_articles, query_terms, hypothesis_terms)
     return flavors, filtered_articles, query, hypothesis
 
@@ -1843,7 +1792,7 @@ def generate_flavors_from_saved_session_only(session_manager, session_id, releva
 def generate_automatic_flavors(session_manager, session_id, relevance_threshold, user_email):
     st.markdown("---")
     st.markdown("## 🎨 GENERANDO FLAVORS AUTOMÁTICAMENTE...")
-    st.info("El procesamiento de artículos ha finalizado. Ahora generando los flavors...")
+    st.info("Generando flavors desde los artículos procesados...")
     
     flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
         session_manager, session_id, relevance_threshold, block_number=None
@@ -1874,35 +1823,25 @@ def generate_automatic_flavors(session_manager, session_id, relevance_threshold,
         st.success("✅ ¡Flavors generados exitosamente!")
         
         col_left, col_right = st.columns(2)
-        
         with col_left:
-            st.download_button(
-                label="💾 DESCARGAR FLAVORS (DOCX)",
-                data=docx_bytes_for_download,
-                file_name=f"flavors_automatic_{session_id[:20]}_{timestamp}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary"
-            )
-        
+            st.download_button("💾 DESCARGAR FLAVORS (DOCX)", data=docx_bytes_for_download,
+                              file_name=f"flavors_{session_id[:20]}_{timestamp}.docx",
+                              mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                              type="primary")
         with col_right:
             csv_data = export_articles_to_csv(filtered_articles)
             if csv_data:
-                st.download_button(
-                    label="📊 DESCARGAR ARTÍCULOS (CSV)",
-                    data=csv_data,
-                    file_name=f"articles_automatic_{session_id[:20]}_{timestamp}.csv",
-                    mime="text/csv"
-                )
+                st.download_button("📊 DESCARGAR ARTÍCULOS (CSV)", data=csv_data,
+                                  file_name=f"articles_{session_id[:20]}_{timestamp}.csv", mime="text/csv")
         
         if user_email:
             st.info(f"📧 Enviando archivo DOCX a {user_email}...")
             email_sent = send_final_email(user_email, session_id, len(filtered_articles), 
                                          relevance_threshold, docx_bytes_for_email, session_id[:20])
             if email_sent:
-                st.success(f"✅ Archivo DOCX enviado a {user_email}")
+                st.success(f"✅ DOCX enviado a {user_email}")
             else:
-                st.warning(f"⚠️ No se pudo enviar el correo a {user_email}.")
-        
+                st.warning(f"⚠️ No se pudo enviar el correo")
         return True
     return False
 
@@ -1921,37 +1860,20 @@ def display_flavors_preview(flavors):
             with st.expander(f"🔹 Flavor {i}: {flavor.get('name', 'Unnamed')} ({flavor.get('n_articles', 0)} articles)", expanded=(i==1)):
                 col1, col2 = st.columns(2)
                 with col1:
-                    rep_articles = flavor.get('representative_articles', [])
-                    if not rep_articles:
-                        rep_articles = flavor.get('articles', [])[:5]
+                    rep_articles = flavor.get('representative_articles', []) or flavor.get('articles', [])[:5]
                     aspect, difference = determine_flavor_aspect_and_difference(
-                        rep_articles[:5],
-                        flavor.get('name', 'Clinical Studies'),
-                        [],
-                        []
+                        rep_articles[:5], flavor.get('name', 'Clinical Studies'), [], []
                     )
                     st.markdown(f"**🎯 Aspect:** {aspect}")
                     st.markdown(f"**🔍 Difference:** {difference}")
                 with col2:
-                    st.markdown(f"**📊 Articles in this flavor:** {flavor.get('n_articles', 0)}")
+                    st.markdown(f"**📊 Articles:** {flavor.get('n_articles', 0)}")
                     st.markdown(f"**📚 Representative articles:**")
                     for j, article in enumerate(flavor.get('representative_articles', [])[:3], 1):
                         if article:
                             title = str(article.get('title', 'No title'))[:80]
                             st.markdown(f"   {j}. {title}...")
-                st.markdown("**📄 Sample articles:**")
-                sample_data = []
-                for article in flavor.get('articles', [])[:5]:
-                    if article:
-                        sample_data.append({
-                            'Title': str(article.get('title', 'No title'))[:100],
-                            'Study Type': str(article.get('study_types', 'N/A')),
-                            'Quality Score': float(article.get('quality_score', 0)),
-                            'PMID': str(article.get('pmid', 'N/A'))
-                        })
-                if sample_data:
-                    st.dataframe(pd.DataFrame(sample_data), use_container_width=True)
-    st.info(f"✅ Total flavors generated: {total_flavors}")
+    st.info(f"✅ Total flavors: {total_flavors}")
     return total_flavors
 
 
@@ -1960,7 +1882,7 @@ def display_session_exporter(session_manager):
     st.sidebar.markdown("### 📤 Exportar sesión")
     user_sessions = session_manager.get_user_sessions()
     if user_sessions.empty:
-        st.sidebar.info("No hay sesiones para exportar")
+        st.sidebar.info("No hay sesiones")
         return
     session_options = {}
     for _, session in user_sessions.iterrows():
@@ -1968,32 +1890,17 @@ def display_session_exporter(session_manager):
         flavors_status = "✅" if session.get('flavors_generated', False) else "⏳"
         session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
         session_options[session_name] = session_id
-    selected_session_name = st.sidebar.selectbox(
-        "Seleccionar sesión para exportar:",
-        options=list(session_options.keys()),
-        key="exporter_selector"
-    )
-    if selected_session_name:
-        selected_session_id = session_options[selected_session_name]
-        stats = session_manager.get_session_stats(selected_session_id)
-        st.sidebar.markdown(f"""
-        **Estadísticas:**
-        - 📄 Artículos: {stats['total_articles']}
-        - ⭐ Calidad media: {stats['avg_quality']:.1f}
-        - 💪 Evidencia fuerte: {stats['strong_evidence']}
-        - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
-        """)
-        if st.sidebar.button("📥 Exportar esta sesión a CSV", key="export_button"):
-            csv_data = session_manager.export_session_to_csv(selected_session_id)
+    selected = st.sidebar.selectbox("Seleccionar sesión:", list(session_options.keys()))
+    if selected:
+        sid = session_options[selected]
+        stats = session_manager.get_session_stats(sid)
+        st.sidebar.markdown(f"📄 Artículos: {stats['total_articles']} | ⭐ Calidad: {stats['avg_quality']:.1f}")
+        if st.sidebar.button("📥 Exportar CSV"):
+            csv_data = session_manager.export_session_to_csv(sid)
             if csv_data:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                st.sidebar.download_button(
-                    label="💾 DESCARGAR CSV",
-                    data=csv_data,
-                    file_name=f"session_{selected_session_id[:8]}_{timestamp}.csv",
-                    mime="text/csv",
-                    key="download_button"
-                )
+                st.sidebar.download_button("💾 DESCARGAR CSV", data=csv_data,
+                                          file_name=f"session_{sid[:8]}_{timestamp}.csv", mime="text/csv")
 
 
 # ============================================================================
@@ -2005,25 +1912,20 @@ def main():
     
     if 'user_login' not in st.session_state:
         st.markdown("### 🔐 Identificación de usuario")
-        st.markdown("Por favor, ingrese su login y email:")
-        
         col1, col2 = st.columns(2)
         with col1:
-            login = st.text_input("Login (identificador único):", placeholder="ejemplo: juan_perez")
+            login = st.text_input("Login:", placeholder="ejemplo: juan_perez")
         with col2:
-            user_email = st.text_input("📧 Correo electrónico:", placeholder="ejemplo: usuario@dominio.com")
+            user_email = st.text_input("📧 Correo electrónico:", placeholder="usuario@dominio.com")
         
         if st.button("✅ Continuar", type="primary"):
-            if login.strip() and user_email.strip():
-                if '@' in user_email and '.' in user_email:
-                    st.session_state.user_login = login.strip().lower()
-                    st.session_state.user_email = user_email.strip()
-                    st.session_state.new_search_mode = True
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Correo electrónico inválido")
+            if login.strip() and user_email.strip() and '@' in user_email:
+                st.session_state.user_login = login.strip().lower()
+                st.session_state.user_email = user_email.strip()
+                st.session_state.new_search_mode = True
+                st.rerun()
             else:
-                st.warning("⚠️ Complete ambos campos")
+                st.warning("⚠️ Complete ambos campos correctamente")
         return
     
     if 'new_search_mode' not in st.session_state:
@@ -2042,47 +1944,31 @@ def main():
         )
         session_manager = UserSessionManager(remote_storage, st.session_state.user_login)
         
-        st.sidebar.success(f"👤 Usuario: **{st.session_state.user_login}**")
-        st.sidebar.info(f"📧 Email: **{st.session_state.user_email}**")
+        st.sidebar.success(f"👤 Usuario: {st.session_state.user_login}")
+        st.sidebar.info(f"📧 Email: {st.session_state.user_email}")
         
         if st.sidebar.button("🔄 Cambiar usuario"):
             del st.session_state.user_login
             del st.session_state.user_email
-            st.session_state.new_search_mode = True
             st.rerun()
         
         st.sidebar.markdown("---")
-        st.sidebar.markdown("### 📂 Seleccionar sesión")
-        
         user_sessions = session_manager.get_user_sessions()
         if not user_sessions.empty:
             session_options = {}
             for _, session in user_sessions.iterrows():
-                session_id = session['session_id']
-                flavors_status = "✅" if session.get('flavors_generated', False) else "⏳"
-                session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
-                session_options[session_name] = session_id
-            
-            session_names = ["[NUEVA BÚSQUEDA]"] + list(session_options.keys())
-            selected_session_name = st.sidebar.selectbox("Sesiones guardadas:", options=session_names, index=0)
-            
-            if selected_session_name == "[NUEVA BÚSQUEDA]":
+                sid = session['session_id']
+                status = "✅" if session.get('flavors_generated', False) else "⏳"
+                name = f"{status} {sid[:25]}... ({session.get('total_processed', 0)} artículos)"
+                session_options[name] = sid
+            selected = st.sidebar.selectbox("Sesiones guardadas:", ["[NUEVA BÚSQUEDA]"] + list(session_options.keys()))
+            if selected == "[NUEVA BÚSQUEDA]":
                 st.session_state.new_search_mode = True
                 selected_session_id = None
             else:
                 st.session_state.new_search_mode = False
-                selected_session_id = session_options[selected_session_name]
-                st.sidebar.success(f"✅ Usando sesión: {selected_session_id[:25]}...")
-                
-                stats = session_manager.get_session_stats(selected_session_id)
-                st.sidebar.markdown(f"""
-                **📊 Estadísticas:**
-                - 📄 Artículos: {stats['total_articles']}
-                - ⭐ Calidad media: {stats['avg_quality']:.1f}
-                - 🎯 Relevancia media: {stats['avg_relevance']:.2f}
-                """)
+                selected_session_id = session_options[selected]
         else:
-            st.sidebar.info("No hay sesiones guardadas")
             st.session_state.new_search_mode = True
         
         display_session_exporter(session_manager)
@@ -2092,19 +1978,13 @@ def main():
         session_manager = None
         st.session_state.new_search_mode = True
     
-    st.info("⚡ 2 BLOQUES DE 1500 ARTÍCULOS | 3000 artículos máximos | Envío de emails por bloque | DOCX final por email")
-    
+    st.info("⚡ 2 BLOQUES DE 1500 ARTÍCULOS | Emails de inicio y fin por bloque | DOCX final por email")
     st.markdown("---")
-    st.markdown("### 📝 Configuración")
     
     if selected_session_id and session_manager and not st.session_state.new_search_mode:
         session_info = session_manager.get_session_info(selected_session_id)
         if session_info:
-            st.info(f"""
-            **📌 Usando sesión guardada:** {selected_session_id[:25]}...
-            - Artículos totales: {session_info.get('total_processed', 0)}
-            - Flavors generados: {'✅ Sí' if session_manager.has_flavors_generated(selected_session_id) else '⏳ No'}
-            """)
+            st.info(f"📌 Usando sesión: {selected_session_id[:25]}... | Artículos: {session_info.get('total_processed', 0)} | Flavors: {'✅' if session_manager.has_flavors_generated(selected_session_id) else '⏳'}")
             
             articles_df = session_manager.get_session_articles(selected_session_id)
             total_articles = len(articles_df)
@@ -2114,124 +1994,96 @@ def main():
             if num_blocks > 0:
                 block_options = ["TODA LA SESIÓN"] + [f"Bloque {i+1}" for i in range(num_blocks)]
                 selected_block = st.selectbox("Seleccionar:", block_options)
-                
                 threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
                 
                 if st.button("🎨 GENERAR FLAVORS", type="primary"):
                     if selected_block == "TODA LA SESIÓN":
                         flavors, articles, query, hypothesis = generate_flavors_from_saved_session_only(
                             session_manager, selected_session_id, threshold, None)
-                        block_label = "sesion_completa"
+                        label = "sesion_completa"
                     else:
                         block_num = int(selected_block.split()[1])
                         flavors, articles, query, hypothesis = generate_flavors_from_saved_session_only(
                             session_manager, selected_session_id, threshold, block_num)
-                        block_label = f"bloque_{block_num}"
+                        label = f"bloque_{block_num}"
                     
                     if flavors:
                         session_manager.mark_flavors_generated(selected_session_id)
                         display_flavors_preview(flavors)
-                        
                         qt = extract_key_terms_from_query(query)
                         ht = extract_key_terms_from_hypothesis(hypothesis)
                         doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), threshold, qt, ht)
                         docx_bytes = BytesIO()
                         doc.save(docx_bytes)
                         docx_bytes.seek(0)
-                        
-                        st.download_button("💾 DESCARGAR DOCX", data=docx_bytes, 
-                                          file_name=f"flavors_{block_label}.docx",
+                        st.download_button("💾 DESCARGAR DOCX", data=docx_bytes, file_name=f"flavors_{label}.docx",
                                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                        
                         csv_data = export_articles_to_csv(articles)
                         if csv_data:
-                            st.download_button("📊 DESCARGAR CSV", data=csv_data,
-                                              file_name=f"articles_{block_label}.csv", mime="text/csv")
+                            st.download_button("📊 DESCARGAR CSV", data=csv_data, file_name=f"articles_{label}.csv", mime="text/csv")
     else:
         st.info("🆕 **Nueva Búsqueda**")
         
-        query = st.text_area(
-            "**PubMed search strategy:**",
+        query = st.text_area("**PubMed search strategy:**",
             value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab])",
-            height=100
-        )
+            height=100)
         
-        col_rel1, col_rel2 = st.columns(2)
-        with col_rel1:
-            relevance_threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
+        threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
         
-        hypothesis = st.text_area(
-            "**📌 Hypothesis:**",
+        hypothesis = st.text_area("**📌 Hypothesis:**",
             value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes, with distinct patterns based on timing of presentation and location within the ventricular wall.",
-            height=100
-        )
+            height=100)
         
         auto_flavors = st.checkbox("🤖 Generar flavors automáticamente", value=True)
         
-        if st.button("🚀 GENERATE FLAVORS (2 BLOQUES DE 1500)", type="primary"):
-            if not query.strip():
-                st.warning("⚠️ Ingrese una estrategia de búsqueda")
-            elif not hypothesis.strip():
-                st.warning("⚠️ Ingrese una hipótesis")
+        if st.button("🚀 GENERATE (2 BLOQUES DE 1500)", type="primary"):
+            if not query.strip() or not hypothesis.strip():
+                st.warning("⚠️ Complete los campos")
             else:
-                start_time = time.time()
-                
+                start = time.time()
                 qt = extract_key_terms_from_query(query)
                 ht = extract_key_terms_from_hypothesis(hypothesis)
-                
-                st.info(f"📝 Extraídos {len(qt)} términos de búsqueda y {len(ht)} de hipótesis")
+                st.info(f"📝 Términos: {len(qt)} de búsqueda, {len(ht)} de hipótesis")
                 
                 with st.spinner("🔍 Buscando artículos (máximo 3000 = 2 bloques de 1500)..."):
-                    id_list, total_count = search_pubmed_complete(query.strip(), max_articles=3000)
-                    
+                    id_list, total = search_pubmed_complete(query.strip(), max_articles=3000)
                     if not id_list:
                         st.error("❌ No se encontraron artículos")
                         st.stop()
-                    
-                    st.info(f"📊 Se procesarán {len(id_list)} artículos (2 bloques de 1500 c/u)")
+                    st.info(f"📊 Se procesarán {len(id_list)} artículos (2 bloques de 1500)")
                     
                     if session_manager:
-                        session_id = session_manager.create_session(query, hypothesis, relevance_threshold, st.session_state.user_email)
-                        articles, total_blocks = process_articles_in_independent_blocks(
-                            id_list, qt, ht, session_manager, session_id, query, hypothesis, st.session_state.user_email
-                        )
+                        sid = session_manager.create_session(query, hypothesis, threshold, st.session_state.user_email)
+                        articles, blocks = process_articles_in_independent_blocks(
+                            id_list, qt, ht, session_manager, sid, query, hypothesis, st.session_state.user_email)
                     else:
                         articles = fetch_articles_details(id_list, qt, ht)
-                        total_blocks = 2
+                        blocks = 2
                 
                 if not articles:
-                    st.error("❌ No se pudieron procesar artículos")
+                    st.error("❌ No se procesaron artículos")
                     st.stop()
                 
-                st.success(f"✅ Procesados {len(articles)} artículos de {total_blocks} bloques")
+                st.success(f"✅ Procesados {len(articles)} artículos de {blocks} bloques")
                 
                 with st.spinner("🧠 Calculando relevancia..."):
                     articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
-                    filtered = filter_articles_by_relevance(articles, relevance_threshold)
+                    filtered = filter_articles_by_relevance(articles, threshold)
                     articles = filtered
                 
                 if len(articles) < 5:
                     st.error(f"❌ Pocos artículos después del filtro ({len(articles)})")
                     st.stop()
                 
-                elapsed = time.time() - start_time
-                st.info(f"⏱️ Tiempo: {elapsed/60:.1f} minutos")
+                st.info(f"⏱️ Tiempo: {(time.time()-start)/60:.1f} minutos")
                 
-                if auto_flavors and session_manager and 'session_id' in st.session_state:
-                    success = generate_automatic_flavors(session_manager, st.session_state.session_id, relevance_threshold, st.session_state.user_email)
+                if auto_flavors and session_manager and 'sid' in locals():
+                    success = generate_automatic_flavors(session_manager, sid, threshold, st.session_state.user_email)
                     if success:
                         st.success("🎉 ¡Proceso completado! DOCX enviado a tu correo.")
     
     st.markdown("---")
-    st.markdown(
-        """
-        <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer v29.0<br>
-            ✅ 2 BLOQUES DE 1500 ARTÍCULOS | Email por bloque | DOCX final por email
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v30.0 | ✅ 2 BLOQUES DE 1500 | Emails de inicio y fin por bloque</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
