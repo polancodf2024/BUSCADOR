@@ -346,6 +346,7 @@ class UserSessionManager:
         self.checkpoints_file = f"{login}_checkpoints.csv"
     
     def create_session(self, query: str, hypothesis: str, relevance_threshold: float, email: str) -> str:
+        """Crear nueva sesión para el usuario con ID único basado en timestamp"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
         session_id = f"{timestamp}_{query_hash}"
@@ -360,11 +361,12 @@ class UserSessionManager:
             'total_found': 0,
             'total_processed': 0,
             'start_time': datetime.now().isoformat(),
-            'end_time': '',
+            'end_time': '',  # ← Vacío como string, no None
             'status': 'running',
             'flavors_generated': False,
             'user_email': email
         }])
+        
         self.remote.append_to_csv(self.sessions_file, session_data)
         return session_id
     
@@ -442,6 +444,7 @@ class UserSessionManager:
     
     def save_checkpoint(self, session_id: str, block_num: int, batch_size: int,
                         start_idx: int, end_idx: int, articles_processed: int):
+        """Guardar checkpoint para un bloque específico - CORREGIDO"""
         checkpoint_data = pd.DataFrame([{
             'session_id': str(session_id),
             'login': str(self.login),
@@ -450,9 +453,10 @@ class UserSessionManager:
             'start_idx': int(start_idx),
             'end_idx': int(end_idx),
             'articles_processed': int(articles_processed),
-            'checkpoint_time': str(datetime.now().isoformat()),
+            'checkpoint_time': datetime.now().isoformat(),
             'status': 'completed'
         }])
+        
         self.remote.append_to_csv(self.checkpoints_file, checkpoint_data)
     
     def get_completed_blocks(self, session_id: str) -> set:
@@ -470,17 +474,29 @@ class UserSessionManager:
         return set(session_articles['pmid'].tolist())
     
     def update_session(self, session_id: str, status: str, total_found: int = None, total_processed: int = None):
+        """Actualizar información de la sesión - CORREGIDO para Python 3.14"""
         df = self.remote.read_csv(self.sessions_file)
         if df is None or df.empty:
             return
+        
+        # Crear una copia para evitar problemas de vista
         df = df.copy()
+        
+        # Asegurar que la columna end_time existe y es de tipo object (string)
+        if 'end_time' not in df.columns:
+            df['end_time'] = ''
+        
+        # Convertir la columna a tipo string para evitar problemas
+        df['end_time'] = df['end_time'].astype(str)
+        
         mask = df['session_id'] == session_id
         if total_found is not None:
             df.loc[mask, 'total_found'] = int(total_found)
         if total_processed is not None:
             df.loc[mask, 'total_processed'] = int(total_processed)
         df.loc[mask, 'status'] = str(status)
-        df.loc[mask, 'end_time'] = str(datetime.now().isoformat())
+        df.loc[mask, 'end_time'] = datetime.now().isoformat()
+        
         self.remote.write_csv(self.sessions_file, df)
     
     def get_user_sessions(self) -> pd.DataFrame:
