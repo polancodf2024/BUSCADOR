@@ -678,7 +678,7 @@ class UserSessionManager:
         if 'block_number' in articles_df.columns:
             return articles_df[articles_df['block_number'] == block_number]
         else:
-            BLOCK_SIZE = 1000
+            BLOCK_SIZE = 1500  # MODIFICADO: Ahora 1500 artículos por bloque
             start_idx = (block_number - 1) * BLOCK_SIZE
             end_idx = block_number * BLOCK_SIZE
             return articles_df.iloc[start_idx:end_idx] if len(articles_df) > start_idx else pd.DataFrame()
@@ -725,8 +725,8 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
     return None
 
 
-def search_pubmed_complete(query):
-    """Search articles in PubMed using WebEnv for COMPLETE pagination"""
+def search_pubmed_complete(query, max_articles=3000):
+    """Search articles in PubMed and limit to max_articles (default 3000 = 2 bloques de 1500)"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
@@ -757,26 +757,33 @@ def search_pubmed_complete(query):
         if total_count == 0:
             return [], 0
         
-        # Ahora recuperar TODOS los IDs usando WebEnv con efetch
+        # Limitar a max_articles (3000 = 2 bloques de 1500)
+        articles_to_fetch = min(total_count, max_articles)
+        st.info(f"📊 Se procesarán los primeros {articles_to_fetch} artículos (2 bloques de 1500 c/u)")
+        
+        # Ahora recuperar los IDs limitados
         all_ids = []
         retstart = 0
-        batch_size = 10000
-        batch_num = 1
+        batch_size = min(10000, articles_to_fetch)
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         fetch_url = f"{base_url}efetch.fcgi"
+        batch_num = 1
         
-        while retstart < total_count:
-            status_text.text(f"📥 Descargando IDs: lote {batch_num} (artículos {retstart+1}-{min(retstart+batch_size, total_count)})")
+        while retstart < articles_to_fetch:
+            remaining = articles_to_fetch - retstart
+            current_batch = min(batch_size, remaining)
+            
+            status_text.text(f"📥 Descargando IDs: lote {batch_num} (artículos {retstart+1}-{retstart+current_batch})")
             
             fetch_params = {
                 "db": "pubmed",
                 "query_key": query_key,
                 "WebEnv": webenv,
                 "retstart": retstart,
-                "retmax": batch_size,
+                "retmax": current_batch,
                 "retmode": "xml"
             }
             
@@ -790,14 +797,11 @@ def search_pubmed_complete(query):
                 
                 # Extraer IDs de los resultados
                 batch_ids = []
-                
-                # Buscar en PubmedArticleSet -> PubmedArticle -> MedlineCitation -> PMID
                 for article in fetch_root.findall(".//PubmedArticle"):
                     pmid_elem = article.find(".//PMID")
                     if pmid_elem is not None and pmid_elem.text:
                         batch_ids.append(pmid_elem.text)
                 
-                # También buscar en IdList (formato alternativo)
                 if not batch_ids:
                     for id_elem in fetch_root.findall(".//Id"):
                         if id_elem.text:
@@ -810,9 +814,9 @@ def search_pubmed_complete(query):
                 all_ids.extend(batch_ids)
                 st.info(f"   ✅ Lote {batch_num}: {len(batch_ids)} IDs (total acumulado: {len(all_ids)})")
                 
-                progress_bar.progress(min(len(all_ids) / total_count, 1.0))
+                progress_bar.progress(min(len(all_ids) / articles_to_fetch, 1.0))
                 
-                retstart += batch_size
+                retstart += current_batch
                 batch_num += 1
                 
                 time.sleep(1.0)
@@ -824,12 +828,9 @@ def search_pubmed_complete(query):
         progress_bar.empty()
         status_text.empty()
         
-        st.success(f"✅ Recuperados {len(all_ids)} de {total_count} IDs totales")
+        st.success(f"✅ Recuperados {len(all_ids)} de {articles_to_fetch} IDs (limitado a {max_articles} artículos)")
         
-        if len(all_ids) < total_count:
-            st.warning(f"⚠️ Solo se recuperaron {len(all_ids)} de {total_count} IDs. Verifica la conexión.")
-        
-        return all_ids, total_count
+        return all_ids, articles_to_fetch
         
     except Exception as e:
         st.error(f"Error en búsqueda: {e}")
@@ -1371,7 +1372,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
                     
                     article = extract_article_info(doc_sum)
                     
-                    time.sleep(0.5)
+                    time.sleep(0.8)  # Pausa aumentada para evitar rate limiting
                     
                     abstract = get_abstract(article["pmid"])
                     article["abstract"] = abstract if abstract else "Not available"
@@ -1392,7 +1393,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
                 else:
                     st.warning(f"Error in batch {batch_num + 1}: {str(e)[:100]}")
         
-        time.sleep(1.0)
+        time.sleep(1.5)  # Pausa más larga entre batches
     
     progress_bar.empty()
     status_text.empty()
@@ -1402,9 +1403,9 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
 
 def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_terms, 
                                            session_manager, session_id, query, hypothesis, user_email):
-    """Procesar artículos en bloques de 1000 con checkpoint independiente por bloque"""
+    """Procesar artículos en bloques de 1500 con checkpoint independiente por bloque"""
     
-    BLOCK_SIZE = 1000
+    BLOCK_SIZE = 1500  # MODIFICADO: Ahora 1500 artículos por bloque
     total_to_process = len(id_list)
     total_blocks = (total_to_process + BLOCK_SIZE - 1) // BLOCK_SIZE
     
@@ -2474,13 +2475,13 @@ def main():
     else:
         st.info("ℹ️ Using TF-IDF based methods (no embeddings). Quality still good for most use cases.")
     
-    st.info("⚡ Enhanced version: All articles found | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | Block processing (1000 articles per block) | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)")
+    st.info("⚡ Enhanced version: 2 bloques de 1500 artículos cada uno | Merged flavors (3-4 large groups) | Exclusive article assignment | Aspect + Difference per flavor | CSV Export Available | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)")
     
     st.markdown("""
     ### Generate thematic paragraphs (flavors) for your scientific article
     
     **Features:**
-    - 🔍 PubMed search with embedding-based filtering (30% search + 70% hypothesis)
+    - 🔍 PubMed3 search with embedding-based filtering (30% search + 70% hypothesis)
     - 🧬 **Dynamic entity extraction**: Terms extracted from your search and hypothesis
     - 📊 **Clustering + merging**: Generates 3-4 large flavors with 10-15 references each
     - 📝 **Extended summaries with embedded citations**: Paragraphs of 5-7+ lines
@@ -2488,12 +2489,12 @@ def main():
     - 📚 **Introduction/Discussion separation**: Section-specific paragraphs
     - ⚙️ **Configurable relevance threshold**: Adjust filtering sensitivity (REAL-TIME EFFECT)
     - 🔄 **Exclusive article assignment**: No article appears in multiple flavors
-    - 📈 **All articles found**: No artificial limit, processes complete search results
+    - 📈 **2 bloques de 1500 artículos**: Procesa hasta 3000 artículos por sesión
     - 🌐 **English output**: All content generated in English
     - 📊 **CSV Export**: Download all article data as CSV for further analysis
     - 🚫 **No hardcoded examples**: All content generated from your data
     - 💾 **Remote storage**: Your articles are saved on remote server with your login
-    - 📦 **Block processing**: Articles processed in blocks of 1000 with independent checkpoints
+    - 📦 **Block processing**: 2 bloques de 1500 artículos con checkpoints independientes
     - 🤖 **Auto flavor generation**: Flavors generated automatically after processing completes
     - 📧 **Email delivery**: DOCX file sent automatically to your email
     """)
@@ -2508,7 +2509,7 @@ def main():
     with col_b:
         st.info("📄 Output: DOCX + CSV")
     with col_c:
-        st.success("📈 Max: All articles found")
+        st.success("📈 Max: 3000 artículos (2 bloques de 1500)")
     
     st.markdown("---")
     st.markdown("### 📝 Configuration")
@@ -2527,7 +2528,7 @@ def main():
             
             articles_df = session_manager.get_session_articles(selected_session_id)
             total_articles = len(articles_df)
-            BLOCK_SIZE = 1000
+            BLOCK_SIZE = 1500
             num_blocks = (total_articles + BLOCK_SIZE - 1) // BLOCK_SIZE if total_articles > 0 else 0
             
             if num_blocks > 0:
@@ -2606,10 +2607,10 @@ def main():
         
         with col2:
             st.info("""
-            **Article limit:**
-            - All articles found in PubMed will be processed
-            - No maximum limit set
-            - Processing time depends on result size
+            **Límite de artículos:**
+            - Se procesarán SOLO los primeros 3000 artículos
+            - Equivalente a 2 bloques de 1500 artículos cada uno
+            - El tiempo de procesamiento es aproximadamente 2 horas
             """)
         
         st.markdown("### ⚙️ Relevance filtering")
@@ -2647,7 +2648,7 @@ def main():
             help="Si activas esta opción, después de procesar todos los artículos se generarán automáticamente los flavors y se enviará el archivo DOCX a tu correo."
         )
         
-        generate_button = st.button("🚀 GENERATE FLAVORS", type="primary", use_container_width=True)
+        generate_button = st.button("🚀 GENERATE FLAVORS (2 BLOQUES DE 1500)", type="primary", use_container_width=True)
         
         if generate_button:
             if not query.strip():
@@ -2667,14 +2668,14 @@ def main():
                 if hypothesis_terms:
                     st.write(f"   Hypothesis terms: {', '.join(hypothesis_terms[:10])}")
                 
-                with st.spinner("🔍 Searching articles in PubMed with COMPLETE pagination (WebEnv)..."):
-                    id_list, total_count = search_pubmed_complete(query.strip())
+                with st.spinner("🔍 Searching articles in PubMed (limitado a 3000 artículos = 2 bloques de 1500)..."):
+                    id_list, total_count = search_pubmed_complete(query.strip(), max_articles=3000)
                     
                     if not id_list:
                         st.error("❌ No articles found")
                         st.stop()
                     
-                    st.info(f"📊 Encontrados {total_count} artículos. Procesando todos los {len(id_list)} artículos en bloques de 1000...")
+                    st.info(f"📊 Se procesarán {len(id_list)} artículos (2 bloques de 1500 c/u)")
                     
                     if session_manager:
                         session_id = session_manager.create_session(query, hypothesis, relevance_threshold, st.session_state.user_email)
@@ -2685,7 +2686,7 @@ def main():
                     else:
                         articles = fetch_articles_details(id_list, query_terms, hypothesis_terms)
                         st.session_state.session_id = None
-                        total_blocks = 1
+                        total_blocks = 2
                 
                 if not articles:
                     st.error("❌ Could not process any articles")
@@ -2725,10 +2726,10 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
-            🧠 PubMed AI Analyzer - Advanced Flavor Generator v27.0<br>
+            🧠 PubMed AI Analyzer - Advanced Flavor Generator v28.0<br>
             Dynamic Entity Extraction | No Hardcoded Examples | TF-IDF Always Available<br>
             BioBERT → SBERT → TF-IDF Fallback | CSV Export | English Output<br>
-            <strong>✅ COMPLETE PAGINATION (WebEnv) | Block processing (1000 articles/block) | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
+            <strong>✅ 2 BLOQUES DE 1500 ARTÍCULOS | Block processing | EMAIL NOTIFICATIONS POR BLOQUE | AUTO FLAVOR GENERATION | EMAIL DELIVERY (DOCX only)</strong>
         </div>
         """,
         unsafe_allow_html=True
