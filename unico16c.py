@@ -27,7 +27,7 @@ from email import encoders
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# CONFIGURACIÓN DE EMBEDDINGS CON FALLBACK ROBUSTO
+# EMBEDDINGS CONFIGURATION WITH ROBUST FALLBACK
 # ============================================================================
 
 AI_EMBEDDINGS_AVAILABLE = False
@@ -82,11 +82,11 @@ st.set_page_config(
 )
 
 # ============================================================================
-# FUNCIONES DE CORREO ELECTRÓNICO
+# EMAIL FUNCTIONS
 # ============================================================================
 
 def send_status_email(to_email, session_id, block_num, total_blocks, articles_in_block, total_articles, status):
-    """Enviar correo de estado del procesamiento de un bloque"""
+    """Send status email about block processing"""
     try:
         smtp_server = st.secrets["smtp_server"]
         smtp_port = st.secrets["smtp_port"]
@@ -94,68 +94,68 @@ def send_status_email(to_email, session_id, block_num, total_blocks, articles_in
         email_password = st.secrets["email_password"]
         
         if not email_user or not email_password:
-            st.warning("⚠️ Credenciales de email no configuradas")
+            st.warning("⚠️ Email credentials not configured in secrets.toml")
             return False
         
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = to_email
-        msg['Subject'] = f"[PubMed Analyzer] Progreso - Bloque {block_num}/{total_blocks}"
+        msg['Subject'] = f"[PubMed Analyzer] Progress - Block {block_num}/{total_blocks}"
         
         if status == "started_block":
             body = f"""
-Estimado usuario,
+Dear user,
 
-El bloque {block_num} de {total_blocks} ha comenzado su procesamiento.
+Block {block_num} of {total_blocks} has started processing.
 
-Detalles:
-- ID de sesión: {session_id[:30]}...
-- Bloque: {block_num}/{total_blocks}
-- Artículos en este bloque: {articles_in_block}
+Details:
+- Session ID: {session_id[:30]}...
+- Block: {block_num}/{total_blocks}
+- Articles in this block: {articles_in_block}
 
-Recibirá una notificación cuando este bloque se complete.
+You will receive a notification when this block is completed.
 
-Saludos cordiales,
+Best regards,
 PubMed AI Analyzer
 """
         elif status == "completed" and block_num > 0:
             body = f"""
-Estimado usuario,
+Dear user,
 
-El bloque {block_num} de {total_blocks} ha sido procesado exitosamente.
+Block {block_num} of {total_blocks} has been successfully processed.
 
-Detalles:
-- ID de sesión: {session_id[:30]}...
-- Bloque: {block_num}/{total_blocks}
-- Artículos en este bloque: {articles_in_block}
-- Total procesado hasta ahora: {total_articles}
+Details:
+- Session ID: {session_id[:30]}...
+- Block: {block_num}/{total_blocks}
+- Articles in this block: {articles_in_block}
+- Total processed so far: {total_articles}
 
-Saludos cordiales,
+Best regards,
 PubMed AI Analyzer
 """
         elif status == "started":
             body = f"""
-Estimado usuario,
+Dear user,
 
-El procesamiento de su búsqueda en PubMed ha comenzado.
+Your PubMed search processing has begun.
 
-Detalles:
-- ID de sesión: {session_id[:30]}...
-- Total de bloques: {total_blocks}
-- Artículos totales: {total_articles}
+Details:
+- Session ID: {session_id[:30]}...
+- Total blocks to process: {total_blocks}
+- Total articles found: {total_articles}
 
-Recibirá notificaciones al iniciar y completar cada bloque.
+You will receive notifications when each block starts and completes.
 
-Saludos cordiales,
+Best regards,
 PubMed AI Analyzer
 """
         else:
             body = f"""
-Estimado usuario,
+Dear user,
 
-El bloque {block_num} de {total_blocks} ha sido procesado.
+Block {block_num} of {total_blocks} has been processed.
 
-Saludos cordiales,
+Best regards,
 PubMed AI Analyzer
 """
         
@@ -167,15 +167,15 @@ PubMed AI Analyzer
         server.send_message(msg)
         server.quit()
         
-        st.success(f"📧 Correo enviado: {'Inicio' if status == 'started_block' else 'Completado'} Bloque {block_num}")
+        st.success(f"📧 Status email sent: {'Started' if status == 'started_block' else 'Completed'} Block {block_num}")
         return True
     except Exception as e:
-        st.error(f"❌ Error en correo: {e}")
+        st.error(f"❌ Email error: {e}")
         return False
 
 
 def send_final_email(to_email, session_id, total_articles, relevance_threshold, docx_bytes, session_id_short):
-    """Enviar correo final con el archivo DOCX adjunto"""
+    """Send final email with DOCX file attached"""
     try:
         smtp_server = st.secrets["smtp_server"]
         smtp_port = st.secrets["smtp_port"]
@@ -183,28 +183,28 @@ def send_final_email(to_email, session_id, total_articles, relevance_threshold, 
         email_password = st.secrets["email_password"]
         
         if not email_user or not email_password:
-            st.warning("⚠️ Credenciales de email no configuradas")
+            st.warning("⚠️ Email credentials not configured in secrets.toml")
             return False
         
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = to_email
-        msg['Subject'] = f"[PubMed Analyzer] ¡Proceso completado! - {session_id_short}..."
+        msg['Subject'] = f"[PubMed Analyzer] Process Completed! - {session_id_short}..."
         
         body = f"""
-Estimado usuario,
+Dear user,
 
-¡El procesamiento de su búsqueda en PubMed ha finalizado exitosamente!
+Your PubMed search processing has been completed successfully!
 
-Detalles finales:
-- ID de sesión: {session_id}
-- Artículos procesados: {total_articles}
-- Threshold de relevancia: {relevance_threshold}
-- Fecha de finalización: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Final details:
+- Session ID: {session_id}
+- Articles processed: {total_articles}
+- Relevance threshold: {relevance_threshold}
+- Completion date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-Se adjunta el archivo flavors_{session_id_short}.docx con los flavors generados.
+Attached is the file flavors_{session_id_short}.docx with the generated flavors for the Introduction and Discussion sections of your scientific article.
 
-Saludos cordiales,
+Best regards,
 PubMed AI Analyzer
 """
         
@@ -228,15 +228,15 @@ PubMed AI Analyzer
         server.send_message(msg)
         server.quit()
         
-        st.success(f"📧 Correo final enviado a {to_email} con DOCX adjunto")
+        st.success(f"📧 Final email sent to {to_email} with DOCX attached")
         return True
     except Exception as e:
-        st.error(f"❌ Error al enviar correo final: {e}")
+        st.error(f"❌ Error sending final email: {e}")
         return False
 
 
 # ============================================================================
-# CLASES PARA ALMACENAMIENTO REMOTO CON CSV
+# REMOTE CSV STORAGE CLASSES
 # ============================================================================
 
 class RemoteCSVStorage:
@@ -264,7 +264,7 @@ class RemoteCSVStorage:
             self.sftp = self.client.open_sftp()
             return True
         except Exception as e:
-            st.error(f"❌ Error de conexión remota: {e}")
+            st.error(f"❌ Remote connection error: {e}")
             return False
     
     def _ensure_dir(self):
@@ -293,7 +293,7 @@ class RemoteCSVStorage:
         except FileNotFoundError:
             return None
         except Exception as e:
-            st.warning(f"⚠️ Error leyendo {filename}: {e}")
+            st.warning(f"⚠️ Error reading {filename}: {e}")
             return None
     
     def write_csv(self, filename, df):
@@ -307,7 +307,7 @@ class RemoteCSVStorage:
                 f.write(csv_content.encode('utf-8-sig'))
             return True
         except Exception as e:
-            st.error(f"❌ Error escribiendo {filename}: {e}")
+            st.error(f"❌ Error writing {filename}: {e}")
             return False
     
     def append_to_csv(self, filename, new_data):
@@ -321,7 +321,7 @@ class RemoteCSVStorage:
                 df = new_data
             return self.write_csv(filename, df)
         except Exception as e:
-            st.error(f"❌ Error append a {filename}: {e}")
+            st.error(f"❌ Error appending to {filename}: {e}")
             return False
     
     def close(self):
@@ -346,7 +346,6 @@ class UserSessionManager:
         self.checkpoints_file = f"{login}_checkpoints.csv"
     
     def create_session(self, query: str, hypothesis: str, relevance_threshold: float, email: str) -> str:
-        """Crear nueva sesión para el usuario con ID único basado en timestamp"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
         session_id = f"{timestamp}_{query_hash}"
@@ -361,12 +360,11 @@ class UserSessionManager:
             'total_found': 0,
             'total_processed': 0,
             'start_time': datetime.now().isoformat(),
-            'end_time': '',  # ← Vacío como string, no None
+            'end_time': '',
             'status': 'running',
             'flavors_generated': False,
             'user_email': email
         }])
-        
         self.remote.append_to_csv(self.sessions_file, session_data)
         return session_id
     
@@ -395,7 +393,7 @@ class UserSessionManager:
         records = []
         for i, article in enumerate(articles):
             if i % 100 == 0 and i > 0:
-                st.write(f"   Procesando artículo {i+1}/{len(articles)}...")
+                st.write(f"   Processing article {i+1}/{len(articles)}...")
             
             pmid = article.get('pmid', '')
             if not pmid:
@@ -440,11 +438,10 @@ class UserSessionManager:
             df = df_new
         
         self.remote.write_csv(self.articles_file, df)
-        st.success(f"✅ Guardados {len(df_new)} artículos")
+        st.success(f"✅ Saved {len(df_new)} articles")
     
     def save_checkpoint(self, session_id: str, block_num: int, batch_size: int,
                         start_idx: int, end_idx: int, articles_processed: int):
-        """Guardar checkpoint para un bloque específico - CORREGIDO"""
         checkpoint_data = pd.DataFrame([{
             'session_id': str(session_id),
             'login': str(self.login),
@@ -456,7 +453,6 @@ class UserSessionManager:
             'checkpoint_time': datetime.now().isoformat(),
             'status': 'completed'
         }])
-        
         self.remote.append_to_csv(self.checkpoints_file, checkpoint_data)
     
     def get_completed_blocks(self, session_id: str) -> set:
@@ -474,20 +470,15 @@ class UserSessionManager:
         return set(session_articles['pmid'].tolist())
     
     def update_session(self, session_id: str, status: str, total_found: int = None, total_processed: int = None):
-        """Actualizar información de la sesión - CORREGIDO para Python 3.14"""
         df = self.remote.read_csv(self.sessions_file)
         if df is None or df.empty:
             return
-        
-        # Crear una copia para evitar problemas de vista
         df = df.copy()
         
-        # Asegurar que la columna end_time existe y es de tipo object (string)
-        if 'end_time' not in df.columns:
+        if 'end_time' in df.columns:
+            df['end_time'] = df['end_time'].astype(str)
+        else:
             df['end_time'] = ''
-        
-        # Convertir la columna a tipo string para evitar problemas
-        df['end_time'] = df['end_time'].astype(str)
         
         mask = df['session_id'] == session_id
         if total_found is not None:
@@ -495,7 +486,7 @@ class UserSessionManager:
         if total_processed is not None:
             df.loc[mask, 'total_processed'] = int(total_processed)
         df.loc[mask, 'status'] = str(status)
-        df.loc[mask, 'end_time'] = datetime.now().isoformat()
+        df.loc[mask, 'end_time'] = str(datetime.now().isoformat())
         
         self.remote.write_csv(self.sessions_file, df)
     
@@ -568,7 +559,7 @@ class UserSessionManager:
             
             return True
         except Exception as e:
-            st.error(f"Error eliminando sesión: {e}")
+            st.error(f"Error deleting session: {e}")
             return False
     
     def get_articles_by_block(self, session_id: str, block_number: int) -> pd.DataFrame:
@@ -578,7 +569,7 @@ class UserSessionManager:
         if 'block_number' in articles_df.columns:
             return articles_df[articles_df['block_number'] == block_number]
         else:
-            BLOCK_SIZE = 500  # MODIFICADO: 500 artículos por bloque
+            BLOCK_SIZE = 1000
             start_idx = (block_number - 1) * BLOCK_SIZE
             end_idx = block_number * BLOCK_SIZE
             return articles_df.iloc[start_idx:end_idx] if len(articles_df) > start_idx else pd.DataFrame()
@@ -594,7 +585,7 @@ class UserSessionManager:
 
 
 # ============================================================================
-# FUNCIONES DE UTILIDAD PARA PubMed
+# PUBMED UTILITY FUNCTIONS
 # ============================================================================
 
 def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
@@ -604,7 +595,7 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
             response = requests.get(url, params=params, timeout=30)
             if response.status_code == 429:
                 wait_time = delay * (2 ** attempt)
-                st.warning(f"⚠️ Rate limit. Waiting {wait_time}s...")
+                st.warning(f"⚠️ Rate limit reached. Waiting {wait_time}s before retry...")
                 time.sleep(wait_time)
                 continue
             response.raise_for_status()
@@ -616,15 +607,15 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
     return None
 
 
-def search_pubmed_complete(query, max_articles=1000):
-    """Search articles - limitado a max_articles (1000 = 2 bloques de 500)"""
+def search_pubmed_complete(query, max_articles=2000):
+    """Search articles - limited to max_articles (2000 = 2 blocks of 1000)"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
     try:
-        st.info("🔍 Buscando artículos en PubMed...")
+        st.info("🔍 Searching articles in PubMed...")
         
-        # Primero obtener el total
+        # First get the total count
         params = {"db": "pubmed", "term": query, "retmax": 1, "retmode": "xml"}
         response = make_request_with_retry(search_url, params)
         if response is None:
@@ -632,16 +623,16 @@ def search_pubmed_complete(query, max_articles=1000):
         
         root = ElementTree.fromstring(response.content)
         total_count = int(root.find(".//Count").text) if root.find(".//Count") is not None else 0
-        st.info(f"📊 PubMed encontró {total_count} artículos")
+        st.info(f"📊 PubMed found a total of {total_count} articles")
         
         if total_count == 0:
             return [], 0
         
-        # Limitar a max_articles
+        # Limit to max_articles
         articles_to_fetch = min(total_count, max_articles)
-        st.info(f"📊 Se procesarán {articles_to_fetch} artículos ({articles_to_fetch//500} bloques de 500)")
+        st.info(f"📊 Will process {articles_to_fetch} articles ({articles_to_fetch//1000} blocks of 1000)")
         
-        # Obtener todos los IDs
+        # Get all IDs
         all_ids = []
         retstart = 0
         batch_size = 10000
@@ -672,7 +663,7 @@ def search_pubmed_complete(query, max_articles=1000):
                     break
                 
                 all_ids.extend(batch_ids)
-                st.info(f"   ✅ Descargados {len(batch_ids)} IDs (total: {len(all_ids)})")
+                st.info(f"   ✅ Downloaded {len(batch_ids)} IDs (total: {len(all_ids)})")
                 
                 progress_bar.progress(min(len(all_ids) / articles_to_fetch, 1.0))
                 retstart += current_batch
@@ -683,16 +674,16 @@ def search_pubmed_complete(query, max_articles=1000):
                 break
         
         progress_bar.empty()
-        st.success(f"✅ Recuperados {len(all_ids)} IDs")
+        st.success(f"✅ Retrieved {len(all_ids)} IDs")
         
-        if len(all_ids) < 500:
-            st.error(f"❌ No hay suficientes artículos (mínimo 500, hay {len(all_ids)})")
+        if len(all_ids) < 1000:
+            st.error(f"❌ Not enough articles (minimum 1000, got {len(all_ids)})")
             return [], 0
         
         return all_ids, len(all_ids)
         
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Search error: {e}")
         return [], 0
 
 
@@ -725,7 +716,7 @@ def preprocess_text(text):
 
 
 # ============================================================================
-# EXTRACCIÓN DE TÉRMINOS
+# TERM EXTRACTION
 # ============================================================================
 
 def extract_key_terms_from_query(query):
@@ -1082,7 +1073,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
         end_idx = min((batch_num + 1) * batch_size, total_to_process)
         batch_ids = id_list[start_idx:end_idx]
         
-        st.write(f"   📦 Lote {batch_num + 1}/{num_batches} ({len(batch_ids)} artículos)...")
+        st.write(f"   📦 Batch {batch_num + 1}/{num_batches} ({len(batch_ids)} articles)...")
         
         summary_params = {"db": "pubmed", "id": ",".join(batch_ids), "retmode": "xml"}
         
@@ -1115,7 +1106,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
                 
             except Exception as e:
                 if retry == 2:
-                    st.warning(f"Error en lote {batch_num + 1}: {str(e)[:50]}")
+                    st.warning(f"Error in batch {batch_num + 1}: {str(e)[:50]}")
                 else:
                     time.sleep(5)
         
@@ -1127,16 +1118,16 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
 
 def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_terms, 
                                            session_manager, session_id, query, hypothesis, user_email):
-    BLOCK_SIZE = 500  # MODIFICADO: 500 artículos por bloque
+    BLOCK_SIZE = 1000
     total_to_process = len(id_list)
     total_blocks = (total_to_process + BLOCK_SIZE - 1) // BLOCK_SIZE
     
-    st.info(f"📦 Total de artículos a procesar: {total_to_process}")
-    st.info(f"📦 Se procesarán en {total_blocks} bloques de {BLOCK_SIZE} artículos cada uno")
+    st.info(f"📦 Total articles to process: {total_to_process}")
+    st.info(f"📦 Will be processed in {total_blocks} blocks of {BLOCK_SIZE} articles each")
     
-    # Email de inicio del proceso general
+    # Email at the start of the entire process
     if user_email:
-        st.info(f"📧 Enviando correo de inicio a {user_email}...")
+        st.info(f"📧 Sending start email to {user_email}...")
         send_status_email(user_email, session_id, 0, total_blocks, 0, total_to_process, "started")
     
     all_articles = []
@@ -1144,12 +1135,12 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
     if session_manager:
         completed_blocks = session_manager.get_completed_blocks(session_id)
         if completed_blocks:
-            st.info(f"🔄 Bloques ya completados: {sorted(completed_blocks)}")
+            st.info(f"🔄 Already completed blocks: {sorted(completed_blocks)}")
         existing_df = session_manager.get_session_articles(session_id)
         if not existing_df.empty:
             all_articles = existing_df.to_dict('records')
             processed_pmids = set(existing_df['pmid'].tolist())
-            st.info(f"📊 {len(processed_pmids)} artículos ya procesados")
+            st.info(f"📊 {len(processed_pmids)} previously processed articles found")
         else:
             processed_pmids = set()
     else:
@@ -1158,7 +1149,7 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
     
     for block_num in range(1, total_blocks + 1):
         if block_num in completed_blocks:
-            st.info(f"⏭️ Bloque {block_num}/{total_blocks} ya completado. Saltando...")
+            st.info(f"⏭️ Block {block_num}/{total_blocks} already completed. Skipping...")
             continue
         
         start_idx = (block_num - 1) * BLOCK_SIZE
@@ -1167,23 +1158,23 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
         new_ids = [pid for pid in block_ids if pid not in processed_pmids]
         
         if not new_ids:
-            st.info(f"⏭️ Bloque {block_num} sin nuevos IDs. Marcando como completado...")
+            st.info(f"⏭️ Block {block_num} has no new IDs. Marking as completed...")
             if session_manager:
                 session_manager.save_checkpoint(session_id, block_num, BLOCK_SIZE, start_idx, end_idx, len(all_articles))
             continue
         
-        # EMAIL: INICIO DEL BLOQUE
+        # EMAIL: BLOCK START
         if user_email:
-            st.info(f"📧 Enviando correo de INICIO del bloque {block_num}...")
+            st.info(f"📧 Sending BLOCK START email for block {block_num}...")
             send_status_email(user_email, session_id, block_num, total_blocks, len(new_ids), 0, "started_block")
         
-        st.markdown(f"## 📦 PROCESANDO BLOQUE {block_num}/{total_blocks}")
-        st.info(f"Artículos {start_idx+1}-{end_idx} ({len(new_ids)} nuevos)")
+        st.markdown(f"## 📦 PROCESSING BLOCK {block_num}/{total_blocks}")
+        st.info(f"Articles {start_idx+1}-{end_idx} ({len(new_ids)} new)")
         
         block_articles = fetch_articles_details(new_ids, query_terms, hypothesis_terms, block_num)
         
         if block_articles:
-            st.info(f"🧠 Calculando relevancia para {len(block_articles)} artículos...")
+            st.info(f"🧠 Calculating relevance for {len(block_articles)} articles in block {block_num}...")
             block_articles = calculate_relevance_to_search_and_hypothesis(block_articles, query, hypothesis)
         
         if session_manager and block_articles:
@@ -1192,23 +1183,23 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
                 processed_pmids.add(article.get('pmid', ''))
             session_manager.save_checkpoint(session_id, block_num, BLOCK_SIZE, start_idx, end_idx, len(all_articles) + len(block_articles))
             
-            st.success(f"✅ BLOQUE {block_num} COMPLETADO. {len(block_articles)} artículos guardados.")
+            st.success(f"✅ BLOCK {block_num} COMPLETED. {len(block_articles)} articles saved.")
             
-            # EMAIL: COMPLETACIÓN DEL BLOQUE
+            # EMAIL: BLOCK COMPLETION
             if user_email:
-                st.info(f"📧 Enviando correo de COMPLETACIÓN del bloque {block_num}...")
+                st.info(f"📧 Sending BLOCK COMPLETION email for block {block_num}...")
                 send_status_email(user_email, session_id, block_num, total_blocks, len(block_articles), len(all_articles) + len(block_articles), "completed")
         
         all_articles.extend(block_articles)
         
         if block_num < total_blocks:
-            st.info("⏳ Esperando 5 segundos antes del siguiente bloque...")
+            st.info("⏳ Waiting 5 seconds before next block...")
             time.sleep(5)
     
     if session_manager:
         session_manager.update_session(session_id, 'completed', total_found=total_to_process, total_processed=len(all_articles))
     
-    st.success(f"🎉 PROCESO COMPLETADO. Total: {len(all_articles)} artículos en {total_blocks} bloques")
+    st.success(f"🎉 PROCESS COMPLETED. Total: {len(all_articles)} articles in {total_blocks} blocks")
     return all_articles, total_blocks
 
 
@@ -1239,7 +1230,7 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
                 article['hypothesis_relevance'] = 0.0
         articles.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
     except Exception as e:
-        st.warning(f"Error en relevancia: {e}")
+        st.warning(f"Error calculating relevance: {e}")
         for article in articles:
             article['relevance_score'] = 0.5
     return articles
@@ -1248,15 +1239,15 @@ def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
 def filter_articles_by_relevance(articles, relevance_threshold):
     filtered = [a for a in articles if a.get('relevance_score', 0) >= relevance_threshold]
     if articles:
-        st.write(f"**📊 Filtro:**")
+        st.write(f"**📊 Relevance Filter:**")
         st.write(f"   - Threshold: {relevance_threshold}")
-        st.write(f"   - Antes: {len(articles)}")
-        st.write(f"   - Después: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
+        st.write(f"   - Before: {len(articles)}")
+        st.write(f"   - After: {len(filtered)} ({len(filtered)/len(articles)*100:.1f}%)")
     return filtered
 
 
 # ============================================================================
-# FUNCIONES DE CLUSTERING
+# CLUSTERING FUNCTIONS
 # ============================================================================
 
 def extract_topic_keywords_tfidf(articles, n_keywords=5):
@@ -1776,39 +1767,39 @@ def export_articles_to_csv(articles):
 def generate_flavors_from_saved_session_only(session_manager, session_id, relevance_threshold, block_number=None):
     if block_number is not None:
         articles_df = session_manager.get_articles_by_block(session_id, block_number)
-        block_label = f"bloque {block_number}"
+        block_label = f"block {block_number}"
     else:
         articles_df = session_manager.get_session_articles(session_id)
-        block_label = "sesión completa"
+        block_label = "full session"
     if articles_df.empty:
-        st.error(f"❌ No hay artículos en {block_label}")
+        st.error(f"❌ No articles found in {block_label}")
         return None, None, None, None
     session_info = session_manager.get_session_info(session_id)
     if session_info is None:
-        st.error("❌ No se pudo obtener información de la sesión")
+        st.error("❌ Could not get session information")
         return None, None, None, None
     query = session_info.get('query', '')
     hypothesis = session_info.get('hypothesis', '')
     articles = articles_df.to_dict('records')
     articles = [a for a in articles if a is not None]
-    st.info(f"✅ Cargados {len(articles)} artículos de {block_label}")
+    st.info(f"✅ Loaded {len(articles)} articles from {block_label}")
     threshold = relevance_threshold if relevance_threshold is not None else float(session_info.get('relevance_threshold', 0.35))
     filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= threshold]
-    st.info(f"📊 Filtro ({threshold}): {len(filtered_articles)} de {len(articles)} artículos")
+    st.info(f"📊 Relevance filter ({threshold}): {len(filtered_articles)} of {len(articles)} articles")
     if len(filtered_articles) < 5:
-        st.error(f"❌ No hay suficientes artículos (mínimo 5, hay {len(filtered_articles)})")
+        st.error(f"❌ Not enough articles after filtering (minimum 5, got {len(filtered_articles)})")
         return None, None, None, None
     query_terms = extract_key_terms_from_query(query)
     hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
-    with st.spinner("🔍 Generando flavors..."):
+    with st.spinner("🔍 Generating flavors from saved articles..."):
         flavors = generate_all_flavors(filtered_articles, query_terms, hypothesis_terms)
     return flavors, filtered_articles, query, hypothesis
 
 
 def generate_automatic_flavors(session_manager, session_id, relevance_threshold, user_email):
     st.markdown("---")
-    st.markdown("## 🎨 GENERANDO FLAVORS AUTOMÁTICAMENTE...")
-    st.info("Generando flavors desde los artículos procesados...")
+    st.markdown("## 🎨 AUTOMATICALLY GENERATING FLAVORS...")
+    st.info("Article processing has finished. Now generating flavors...")
     
     flavors, filtered_articles, query, hypothesis = generate_flavors_from_saved_session_only(
         session_manager, session_id, relevance_threshold, block_number=None
@@ -1835,29 +1826,29 @@ def generate_automatic_flavors(session_manager, session_id, relevance_threshold,
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         st.markdown("---")
-        st.markdown("## 📥 RESULTADO FINAL")
-        st.success("✅ ¡Flavors generados exitosamente!")
+        st.markdown("## 📥 FINAL RESULT")
+        st.success("✅ Flavors generated successfully!")
         
         col_left, col_right = st.columns(2)
         with col_left:
-            st.download_button("💾 DESCARGAR FLAVORS (DOCX)", data=docx_bytes_for_download,
-                              file_name=f"flavors_{session_id[:20]}_{timestamp}.docx",
+            st.download_button("💾 DOWNLOAD FLAVORS (DOCX)", data=docx_bytes_for_download,
+                              file_name=f"flavors_automatic_{session_id[:20]}_{timestamp}.docx",
                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                               type="primary")
         with col_right:
             csv_data = export_articles_to_csv(filtered_articles)
             if csv_data:
-                st.download_button("📊 DESCARGAR ARTÍCULOS (CSV)", data=csv_data,
-                                  file_name=f"articles_{session_id[:20]}_{timestamp}.csv", mime="text/csv")
+                st.download_button("📊 DOWNLOAD ARTICLES (CSV)", data=csv_data,
+                                  file_name=f"articles_automatic_{session_id[:20]}_{timestamp}.csv", mime="text/csv")
         
         if user_email:
-            st.info(f"📧 Enviando archivo DOCX a {user_email}...")
+            st.info(f"📧 Sending DOCX file to {user_email}...")
             email_sent = send_final_email(user_email, session_id, len(filtered_articles), 
                                          relevance_threshold, docx_bytes_for_email, session_id[:20])
             if email_sent:
-                st.success(f"✅ DOCX enviado a {user_email}")
+                st.success(f"✅ DOCX sent to {user_email}")
             else:
-                st.warning(f"⚠️ No se pudo enviar el correo")
+                st.warning(f"⚠️ Could not send email to {user_email}")
         return True
     return False
 
@@ -1889,33 +1880,33 @@ def display_flavors_preview(flavors):
                         if article:
                             title = str(article.get('title', 'No title'))[:80]
                             st.markdown(f"   {j}. {title}...")
-    st.info(f"✅ Total flavors: {total_flavors}")
+    st.info(f"✅ Total flavors generated: {total_flavors}")
     return total_flavors
 
 
 def display_session_exporter(session_manager):
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📤 Exportar sesión")
+    st.sidebar.markdown("### 📤 Export Session")
     user_sessions = session_manager.get_user_sessions()
     if user_sessions.empty:
-        st.sidebar.info("No hay sesiones")
+        st.sidebar.info("No sessions to export")
         return
     session_options = {}
     for _, session in user_sessions.iterrows():
         session_id = session['session_id']
         flavors_status = "✅" if session.get('flavors_generated', False) else "⏳"
-        session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} artículos)"
+        session_name = f"{flavors_status} {session_id[:25]}... - {session['start_time'][:16]} ({session.get('total_processed', 0)} articles)"
         session_options[session_name] = session_id
-    selected = st.sidebar.selectbox("Seleccionar sesión:", list(session_options.keys()))
+    selected = st.sidebar.selectbox("Select session to export:", list(session_options.keys()))
     if selected:
         sid = session_options[selected]
         stats = session_manager.get_session_stats(sid)
-        st.sidebar.markdown(f"📄 Artículos: {stats['total_articles']} | ⭐ Calidad: {stats['avg_quality']:.1f}")
-        if st.sidebar.button("📥 Exportar CSV"):
+        st.sidebar.markdown(f"📄 Articles: {stats['total_articles']} | ⭐ Quality: {stats['avg_quality']:.1f}")
+        if st.sidebar.button("📥 Export to CSV"):
             csv_data = session_manager.export_session_to_csv(sid)
             if csv_data:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                st.sidebar.download_button("💾 DESCARGAR CSV", data=csv_data,
+                st.sidebar.download_button("💾 DOWNLOAD CSV", data=csv_data,
                                           file_name=f"session_{sid[:8]}_{timestamp}.csv", mime="text/csv")
 
 
@@ -1927,21 +1918,21 @@ def main():
     st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
     
     if 'user_login' not in st.session_state:
-        st.markdown("### 🔐 Identificación de usuario")
+        st.markdown("### 🔐 User Identification")
         col1, col2 = st.columns(2)
         with col1:
-            login = st.text_input("Login:", placeholder="ejemplo: juan_perez")
+            login = st.text_input("Login (unique identifier):", placeholder="example: john_doe")
         with col2:
-            user_email = st.text_input("📧 Correo electrónico:", placeholder="usuario@dominio.com")
+            user_email = st.text_input("📧 Email address:", placeholder="user@domain.com")
         
-        if st.button("✅ Continuar", type="primary"):
+        if st.button("✅ Continue", type="primary"):
             if login.strip() and user_email.strip() and '@' in user_email:
                 st.session_state.user_login = login.strip().lower()
                 st.session_state.user_email = user_email.strip()
                 st.session_state.new_search_mode = True
                 st.rerun()
             else:
-                st.warning("⚠️ Complete ambos campos correctamente")
+                st.warning("⚠️ Please enter valid login and email")
         return
     
     if 'new_search_mode' not in st.session_state:
@@ -1960,10 +1951,10 @@ def main():
         )
         session_manager = UserSessionManager(remote_storage, st.session_state.user_login)
         
-        st.sidebar.success(f"👤 Usuario: {st.session_state.user_login}")
+        st.sidebar.success(f"👤 User: {st.session_state.user_login}")
         st.sidebar.info(f"📧 Email: {st.session_state.user_email}")
         
-        if st.sidebar.button("🔄 Cambiar usuario"):
+        if st.sidebar.button("🔄 Change User"):
             del st.session_state.user_login
             del st.session_state.user_email
             st.rerun()
@@ -1975,10 +1966,10 @@ def main():
             for _, session in user_sessions.iterrows():
                 sid = session['session_id']
                 status = "✅" if session.get('flavors_generated', False) else "⏳"
-                name = f"{status} {sid[:25]}... ({session.get('total_processed', 0)} artículos)"
+                name = f"{status} {sid[:25]}... ({session.get('total_processed', 0)} articles)"
                 session_options[name] = sid
-            selected = st.sidebar.selectbox("Sesiones guardadas:", ["[NUEVA BÚSQUEDA]"] + list(session_options.keys()))
-            if selected == "[NUEVA BÚSQUEDA]":
+            selected = st.sidebar.selectbox("Saved Sessions:", ["[NEW SEARCH]"] + list(session_options.keys()))
+            if selected == "[NEW SEARCH]":
                 st.session_state.new_search_mode = True
                 selected_session_id = None
             else:
@@ -1990,38 +1981,38 @@ def main():
         display_session_exporter(session_manager)
         
     except Exception as e:
-        st.warning(f"⚠️ Error de conexión remota: {e}")
+        st.warning(f"⚠️ Remote connection error: {e}")
         session_manager = None
         st.session_state.new_search_mode = True
     
-    st.info("⚡ 2 BLOQUES DE 500 ARTÍCULOS | Emails de inicio y fin por bloque | DOCX final por email")
+    st.info("⚡ 2 BLOCKS OF 1000 ARTICLES | Block start and completion emails | Final DOCX by email")
     st.markdown("---")
     
     if selected_session_id and session_manager and not st.session_state.new_search_mode:
         session_info = session_manager.get_session_info(selected_session_id)
         if session_info:
-            st.info(f"📌 Usando sesión: {selected_session_id[:25]}... | Artículos: {session_info.get('total_processed', 0)} | Flavors: {'✅' if session_manager.has_flavors_generated(selected_session_id) else '⏳'}")
+            st.info(f"📌 Using saved session: {selected_session_id[:25]}... | Articles: {session_info.get('total_processed', 0)} | Flavors: {'✅' if session_manager.has_flavors_generated(selected_session_id) else '⏳'}")
             
             articles_df = session_manager.get_session_articles(selected_session_id)
             total_articles = len(articles_df)
-            BLOCK_SIZE = 500
+            BLOCK_SIZE = 1000
             num_blocks = (total_articles + BLOCK_SIZE - 1) // BLOCK_SIZE if total_articles > 0 else 0
             
             if num_blocks > 0:
-                block_options = ["TODA LA SESIÓN"] + [f"Bloque {i+1}" for i in range(num_blocks)]
-                selected_block = st.selectbox("Seleccionar:", block_options)
+                block_options = ["FULL SESSION"] + [f"Block {i+1}" for i in range(num_blocks)]
+                selected_block = st.selectbox("Select:", block_options)
                 threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
                 
-                if st.button("🎨 GENERAR FLAVORS", type="primary"):
-                    if selected_block == "TODA LA SESIÓN":
+                if st.button("🎨 GENERATE FLAVORS", type="primary"):
+                    if selected_block == "FULL SESSION":
                         flavors, articles, query, hypothesis = generate_flavors_from_saved_session_only(
                             session_manager, selected_session_id, threshold, None)
-                        label = "sesion_completa"
+                        label = "full_session"
                     else:
                         block_num = int(selected_block.split()[1])
                         flavors, articles, query, hypothesis = generate_flavors_from_saved_session_only(
                             session_manager, selected_session_id, threshold, block_num)
-                        label = f"bloque_{block_num}"
+                        label = f"block_{block_num}"
                     
                     if flavors:
                         session_manager.mark_flavors_generated(selected_session_id)
@@ -2032,13 +2023,13 @@ def main():
                         docx_bytes = BytesIO()
                         doc.save(docx_bytes)
                         docx_bytes.seek(0)
-                        st.download_button("💾 DESCARGAR DOCX", data=docx_bytes, file_name=f"flavors_{label}.docx",
+                        st.download_button("💾 DOWNLOAD DOCX", data=docx_bytes, file_name=f"flavors_{label}.docx",
                                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
                         csv_data = export_articles_to_csv(articles)
                         if csv_data:
-                            st.download_button("📊 DESCARGAR CSV", data=csv_data, file_name=f"articles_{label}.csv", mime="text/csv")
+                            st.download_button("📊 DOWNLOAD CSV", data=csv_data, file_name=f"articles_{label}.csv", mime="text/csv")
     else:
-        st.info("🆕 **Nueva Búsqueda**")
+        st.info("🆕 **New Search**")
         
         query = st.text_area("**PubMed search strategy:**",
             value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab])",
@@ -2050,23 +2041,23 @@ def main():
             value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes, with distinct patterns based on timing of presentation and location within the ventricular wall.",
             height=100)
         
-        auto_flavors = st.checkbox("🤖 Generar flavors automáticamente", value=True)
+        auto_flavors = st.checkbox("🤖 Automatically generate flavors after processing", value=True)
         
-        if st.button("🚀 GENERATE (2 BLOQUES DE 500)", type="primary"):
+        if st.button("🚀 GENERATE (2 BLOCKS OF 1000)", type="primary"):
             if not query.strip() or not hypothesis.strip():
-                st.warning("⚠️ Complete los campos")
+                st.warning("⚠️ Please fill in all fields")
             else:
                 start = time.time()
                 qt = extract_key_terms_from_query(query)
                 ht = extract_key_terms_from_hypothesis(hypothesis)
-                st.info(f"📝 Términos: {len(qt)} de búsqueda, {len(ht)} de hipótesis")
+                st.info(f"📝 Extracted {len(qt)} search terms, {len(ht)} hypothesis terms")
                 
-                with st.spinner("🔍 Buscando artículos (máximo 1000 = 2 bloques de 500)..."):
-                    id_list, total = search_pubmed_complete(query.strip(), max_articles=1000)
+                with st.spinner("🔍 Searching articles (max 2000 = 2 blocks of 1000)..."):
+                    id_list, total = search_pubmed_complete(query.strip(), max_articles=2000)
                     if not id_list:
-                        st.error("❌ No se encontraron artículos")
+                        st.error("❌ No articles found")
                         st.stop()
-                    st.info(f"📊 Se procesarán {len(id_list)} artículos (2 bloques de 500)")
+                    st.info(f"📊 Will process {len(id_list)} articles (2 blocks of 1000)")
                     
                     if session_manager:
                         sid = session_manager.create_session(query, hypothesis, threshold, st.session_state.user_email)
@@ -2077,29 +2068,29 @@ def main():
                         blocks = 2
                 
                 if not articles:
-                    st.error("❌ No se procesaron artículos")
+                    st.error("❌ Could not process articles")
                     st.stop()
                 
-                st.success(f"✅ Procesados {len(articles)} artículos de {blocks} bloques")
+                st.success(f"✅ Processed {len(articles)} articles from {blocks} blocks")
                 
-                with st.spinner("🧠 Calculando relevancia..."):
+                with st.spinner("🧠 Calculating relevance..."):
                     articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
                     filtered = filter_articles_by_relevance(articles, threshold)
                     articles = filtered
                 
                 if len(articles) < 5:
-                    st.error(f"❌ Pocos artículos después del filtro ({len(articles)})")
+                    st.error(f"❌ Not enough articles after filtering ({len(articles)})")
                     st.stop()
                 
-                st.info(f"⏱️ Tiempo: {(time.time()-start)/60:.1f} minutos")
+                st.info(f"⏱️ Processing time: {(time.time()-start)/60:.1f} minutes")
                 
                 if auto_flavors and session_manager and 'sid' in locals():
                     success = generate_automatic_flavors(session_manager, sid, threshold, st.session_state.user_email)
                     if success:
-                        st.success("🎉 ¡Proceso completado! DOCX enviado a tu correo.")
+                        st.success("🎉 Process completed! DOCX sent to your email.")
     
     st.markdown("---")
-    st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v31.0 | ✅ 2 BLOQUES DE 500 | Emails de inicio y fin por bloque</div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v32.0 | ✅ 2 BLOCKS OF 1000 | Block start and completion emails</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
