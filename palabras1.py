@@ -1927,11 +1927,6 @@ def terms_to_boolean(terms_str):
         myocardial infarction
         intramyocardial dissecting hematoma, intramyocardial dissection, intramyocardial dissecting
         heart rupture, cardiac rupture, ventricular septal rupture, free wall rupture
-    
-    Ejemplo salida:
-        ("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND 
-        ("intramyocardial dissecting hematoma"[Mesh] OR "intramyocardial dissecting hematoma"[tiab] OR "intramyocardial dissection"[Mesh] OR "intramyocardial dissection"[tiab] OR "intramyocardial dissecting"[Mesh] OR "intramyocardial dissecting"[tiab]) AND
-        ("heart rupture"[Mesh] OR "heart rupture"[tiab] OR "cardiac rupture"[Mesh] OR "cardiac rupture"[tiab] OR "ventricular septal rupture"[Mesh] OR "ventricular septal rupture"[tiab] OR "free wall rupture"[Mesh] OR "free wall rupture"[tiab])
     """
     # Split by lines first (each line is a concept group)
     lines = [line.strip() for line in terms_str.split('\n') if line.strip()]
@@ -1945,14 +1940,11 @@ def terms_to_boolean(terms_str):
                 clean_term = term.strip('"')
                 expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
                 expressions.append(expr)
-            # Single group: join with OR
             return " OR ".join(expressions)
         return ""
     
-    # Process each line as a concept group
     all_groups = []
     for line in lines:
-        # Split line by commas to get individual terms
         terms_in_group = [t.strip() for t in re.split(r',', line) if t.strip()]
         if terms_in_group:
             group_expressions = []
@@ -1960,82 +1952,33 @@ def terms_to_boolean(terms_str):
                 clean_term = term.strip('"')
                 expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
                 group_expressions.append(expr)
-            # Join terms within the same group with OR
             all_groups.append(" OR ".join(group_expressions))
     
-    # Join different groups with AND
     return " AND ".join(all_groups)
 
 
 def rewrite_hypothesis(hypothesis):
-    """
-    Rewrites the English hypothesis to be properly formatted:
-    - First letter capitalized
-    - Ending period if missing
-    - Basic space cleanup
-    """
+    """Rewrites the English hypothesis to be properly formatted"""
     if not hypothesis:
         return ""
-    
-    # Remove extra spaces
     hypothesis = re.sub(r'\s+', ' ', hypothesis).strip()
-    
-    # Ensure first letter is uppercase
     if hypothesis and hypothesis[0].islower():
         hypothesis = hypothesis[0].upper() + hypothesis[1:]
-    
-    # Ensure ending period
     if hypothesis and hypothesis[-1] not in '.!?':
         hypothesis += '.'
-    
     return hypothesis
-
 
 
 def show_search_builder_tab():
     """Display the search builder tab for constructing PubMed queries and hypotheses"""
-
+    
     st.markdown("## 🔧 PubMed Search Builder")
     st.markdown("Build your PubMed search query and hypothesis here, then copy the results to the main tab.")
-
-    st.info(
-        """
-        **📌 Formato correcto para construir la búsqueda:**
-
-        - **Escribe cada concepto en una línea diferente**
-        - **Dentro de la misma línea, separa los sinónimos con comas**
-        - **El programa generará: (Concepto1) AND (Concepto2 OR Sinónimo1 OR Sinónimo2)**
-
-        **Ejemplo para tu investigación:**
-
-        diabetes, type 2 diabetes, T2DM
-        metformin
-        cardiovascular disease, heart disease
-        """
-    )
-
-    # Área de texto para ingresar conceptos
-    concepts_input = st.text_area(
-        "✏️ Ingresa tus conceptos:",
-        height=200,
-        placeholder="Ejemplo:\ncancer, neoplasm\nimmunotherapy, checkpoint inhibitors\nsurvival rate"
-    )
-
-    # Botón para generar query
-    if st.button("🔍 Generar búsqueda"):
-        if concepts_input.strip():
-            query = build_pubmed_query(concepts_input)
-
-            st.success("✅ Query generada:")
-            st.code(query, language="text")
-
-            st.download_button(
-                label="📥 Descargar query",
-                data=query,
-                file_name="pubmed_query.txt",
-                mime="text/plain"
-            )
-        else:
-            st.warning("⚠️ Por favor ingresa al menos un concepto.")
-
-
+    
+    st.info("""
+    **📌 Formato correcto para construir la búsqueda:**
+    
+    - **Escribe cada concepto en una línea diferente**
+    - **Dentro de la misma línea, separa los sinónimos con comas**
+    
+    **Ejemplo para tu investigación:**
