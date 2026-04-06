@@ -27,6 +27,14 @@ from email import encoders
 warnings.filterwarnings('ignore')
 
 # ============================================================================
+# CONFIGURATION - MODIFIED: 100 articles per block, 2 blocks total
+# ============================================================================
+
+BLOCK_SIZE = 100  # MODIFIED: 100 articles per block (was 1000)
+MAX_BLOCKS = 2    # MODIFIED: Maximum 2 blocks
+MAX_ARTICLES = BLOCK_SIZE * MAX_BLOCKS  # 200 articles total
+
+# ============================================================================
 # EMBEDDINGS CONFIGURATION WITH ROBUST FALLBACK
 # ============================================================================
 
@@ -112,6 +120,7 @@ Details:
 - Session ID: {session_id[:30]}...
 - Block: {block_num}/{total_blocks}
 - Articles in this block: {articles_in_block}
+- Block size: 100 articles
 
 You will receive a notification when this block is completed.
 
@@ -143,6 +152,7 @@ Details:
 - Session ID: {session_id[:30]}...
 - Total blocks to process: {total_blocks}
 - Total articles found: {total_articles}
+- Block size: 100 articles per block
 
 You will receive notifications when each block starts and completes.
 
@@ -201,6 +211,8 @@ Final details:
 - Articles processed: {total_articles}
 - Relevance threshold: {relevance_threshold}
 - Completion date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- Block size: 100 articles per block
+- Maximum blocks: 2
 
 Attached is the file flavors_{session_id_short}.docx with the generated flavors for the Introduction and Discussion sections of your scientific article.
 
@@ -392,7 +404,7 @@ class UserSessionManager:
         
         records = []
         for i, article in enumerate(articles):
-            if i % 100 == 0 and i > 0:
+            if i % 20 == 0 and i > 0:
                 st.write(f"   Processing article {i+1}/{len(articles)}...")
             
             pmid = article.get('pmid', '')
@@ -569,7 +581,6 @@ class UserSessionManager:
         if 'block_number' in articles_df.columns:
             return articles_df[articles_df['block_number'] == block_number]
         else:
-            BLOCK_SIZE = 1000
             start_idx = (block_number - 1) * BLOCK_SIZE
             end_idx = block_number * BLOCK_SIZE
             return articles_df.iloc[start_idx:end_idx] if len(articles_df) > start_idx else pd.DataFrame()
@@ -607,8 +618,8 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
     return None
 
 
-def search_pubmed_complete(query, max_articles=2000):
-    """Search articles - limited to max_articles (2000 = 2 blocks of 1000)"""
+def search_pubmed_complete(query, max_articles=MAX_ARTICLES):
+    """Search articles - limited to max_articles (200 = 2 blocks of 100)"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
@@ -628,9 +639,10 @@ def search_pubmed_complete(query, max_articles=2000):
         if total_count == 0:
             return [], 0
         
-        # Limit to max_articles
+        # Limit to max_articles (200 = 2 blocks of 100)
         articles_to_fetch = min(total_count, max_articles)
-        st.info(f"📊 Will process {articles_to_fetch} articles ({articles_to_fetch//1000} blocks of 1000)")
+        total_blocks = (articles_to_fetch + BLOCK_SIZE - 1) // BLOCK_SIZE
+        st.info(f"📊 Will process {articles_to_fetch} articles ({total_blocks} blocks of {BLOCK_SIZE})")
         
         # Get all IDs
         all_ids = []
@@ -676,8 +688,8 @@ def search_pubmed_complete(query, max_articles=2000):
         progress_bar.empty()
         st.success(f"✅ Retrieved {len(all_ids)} IDs")
         
-        if len(all_ids) < 1000:
-            st.error(f"❌ Not enough articles (minimum 1000, got {len(all_ids)})")
+        if len(all_ids) < BLOCK_SIZE:
+            st.error(f"❌ Not enough articles (minimum {BLOCK_SIZE}, got {len(all_ids)})")
             return [], 0
         
         return all_ids, len(all_ids)
@@ -1062,7 +1074,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
     if not id_list:
         return []
     total_to_process = len(id_list)
-    batch_size = 30
+    batch_size = 15  # Reduced batch size for 100-article blocks
     num_batches = math.ceil(total_to_process / batch_size)
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     articles = []
@@ -1118,9 +1130,9 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
 
 def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_terms, 
                                            session_manager, session_id, query, hypothesis, user_email):
-    BLOCK_SIZE = 1000
     total_to_process = len(id_list)
     total_blocks = (total_to_process + BLOCK_SIZE - 1) // BLOCK_SIZE
+    total_blocks = min(total_blocks, MAX_BLOCKS)  # Limit to maximum blocks
     
     st.info(f"📦 Total articles to process: {total_to_process}")
     st.info(f"📦 Will be processed in {total_blocks} blocks of {BLOCK_SIZE} articles each")
@@ -1148,6 +1160,10 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
         processed_pmids = set()
     
     for block_num in range(1, total_blocks + 1):
+        if block_num > MAX_BLOCKS:
+            st.info(f"⏭️ Reached maximum blocks ({MAX_BLOCKS}). Stopping...")
+            break
+            
         if block_num in completed_blocks:
             st.info(f"⏭️ Block {block_num}/{total_blocks} already completed. Skipping...")
             continue
@@ -1199,8 +1215,8 @@ def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_term
     if session_manager:
         session_manager.update_session(session_id, 'completed', total_found=total_to_process, total_processed=len(all_articles))
     
-    st.success(f"🎉 PROCESS COMPLETED. Total: {len(all_articles)} articles in {total_blocks} blocks")
-    return all_articles, total_blocks
+    st.success(f"🎉 PROCESS COMPLETED. Total: {len(all_articles)} articles in {min(total_blocks, MAX_BLOCKS)} blocks")
+    return all_articles, min(total_blocks, MAX_BLOCKS)
 
 
 def calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis):
@@ -1678,6 +1694,7 @@ def create_document_with_flavors(flavors, hypothesis, query, total_articles, rel
     doc.add_paragraph(f'Relevance threshold applied: {relevance_threshold}')
     doc.add_paragraph(f'Generation date: {datetime.now().strftime("%Y-%m-%d %H:%M")}')
     doc.add_paragraph(f'Embedding model: TF-IDF + LSA (fallback)')
+    doc.add_paragraph(f'Configuration: {BLOCK_SIZE} articles per block, maximum {MAX_BLOCKS} blocks')
     doc.add_paragraph()
     doc.add_heading('FLAVORS FOR INTRODUCTION', level=1)
     doc.add_paragraph('The following paragraphs are designed for the Introduction section.')
@@ -2035,6 +2052,7 @@ def show_search_builder_tab():
         st.markdown("- The hypothesis is automatically capitalized and gets a period at the end.")
         st.markdown("- **Copy the generated text and paste it into the Main tab** to use it in the analyzer.")
         st.markdown("- **Important:** The search is now restricted to articles specifically about intramyocardial dissection to avoid irrelevant results.")
+        st.markdown("- **Configuration:** Each block processes **100 articles**, with a maximum of **2 blocks** (200 articles total).")
 
 
 # ============================================================================
@@ -2043,6 +2061,9 @@ def show_search_builder_tab():
 
 def main():
     st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
+    
+    # Display configuration info in sidebar
+    st.sidebar.info(f"⚙️ **Configuration:**\n- {BLOCK_SIZE} articles per block\n- Maximum {MAX_BLOCKS} blocks\n- {MAX_ARTICLES} articles max total")
     
     # Create tabs: Main and Search Builder
     tab1, tab2 = st.tabs(["🎯 MAIN - Article Analysis", "🔧 SEARCH BUILDER"])
@@ -2120,7 +2141,7 @@ def main():
             session_manager = None
             st.session_state.new_search_mode = True
         
-        st.info("⚡ 2 BLOCKS OF 1000 ARTICLES | Block start and completion emails | Final DOCX by email")
+        st.info(f"⚡ {MAX_BLOCKS} BLOCKS OF {BLOCK_SIZE} ARTICLES | Block start and completion emails | Final DOCX by email")
         st.markdown("---")
         
         if selected_session_id and session_manager and not st.session_state.new_search_mode:
@@ -2130,7 +2151,6 @@ def main():
                 
                 articles_df = session_manager.get_session_articles(selected_session_id)
                 total_articles = len(articles_df)
-                BLOCK_SIZE = 1000
                 num_blocks = (total_articles + BLOCK_SIZE - 1) // BLOCK_SIZE if total_articles > 0 else 0
                 
                 if num_blocks > 0:
@@ -2182,7 +2202,7 @@ def main():
             
             auto_flavors = st.checkbox("🤖 Automatically generate flavors after processing", value=True)
             
-            if st.button("🚀 GENERATE (2 BLOCKS OF 1000)", type="primary"):
+            if st.button(f"🚀 GENERATE ({MAX_BLOCKS} BLOCKS OF {BLOCK_SIZE})", type="primary"):
                 if not query.strip() or not hypothesis.strip():
                     st.warning("⚠️ Please fill in all fields")
                 else:
@@ -2191,12 +2211,12 @@ def main():
                     ht = extract_key_terms_from_hypothesis(hypothesis)
                     st.info(f"📝 Extracted {len(qt)} search terms, {len(ht)} hypothesis terms")
                     
-                    with st.spinner("🔍 Searching articles (max 2000 = 2 blocks of 1000)..."):
-                        id_list, total = search_pubmed_complete(query.strip(), max_articles=2000)
+                    with st.spinner(f"🔍 Searching articles (max {MAX_ARTICLES} = {MAX_BLOCKS} blocks of {BLOCK_SIZE})..."):
+                        id_list, total = search_pubmed_complete(query.strip(), max_articles=MAX_ARTICLES)
                         if not id_list:
                             st.error("❌ No articles found")
                             st.stop()
-                        st.info(f"📊 Will process {len(id_list)} articles (2 blocks of 1000)")
+                        st.info(f"📊 Will process {len(id_list)} articles ({MAX_BLOCKS} blocks of {BLOCK_SIZE})")
                         
                         if session_manager:
                             sid = session_manager.create_session(query, hypothesis, threshold, st.session_state.user_email)
@@ -2204,7 +2224,7 @@ def main():
                                 id_list, qt, ht, session_manager, sid, query, hypothesis, st.session_state.user_email)
                         else:
                             articles = fetch_articles_details(id_list, qt, ht)
-                            blocks = 2
+                            blocks = MAX_BLOCKS
                     
                     if not articles:
                         st.error("❌ Could not process articles")
@@ -2229,7 +2249,7 @@ def main():
                             st.success("🎉 Process completed! DOCX sent to your email.")
         
         st.markdown("---")
-        st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v32.0 | ✅ 2 BLOCKS OF 1000 | Block start and completion emails | Focused on Intramyocardial Dissection</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: center; color: gray;'>PubMed AI Analyzer v32.0 | ✅ {MAX_BLOCKS} BLOCKS OF {BLOCK_SIZE} ARTICLES | Block start and completion emails | Focused on Intramyocardial Dissection</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
