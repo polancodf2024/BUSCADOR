@@ -1911,7 +1911,7 @@ def display_session_exporter(session_manager):
 
 
 # ============================================================================
-# SEARCH BUILDER TAB FUNCTIONS (from palabras.py)
+# SEARCH BUILDER TAB FUNCTIONS (from palabras.py) - CORREGIDO
 # ============================================================================
 
 def terms_to_boolean(terms_str):
@@ -1988,18 +1988,9 @@ def show_search_builder_tab():
                 boolean_result = terms_to_boolean(terms_input)
                 st.success("✅ Boolean search generated:")
                 st.code(boolean_result, language="text")
-                
-                # Store in session state for copying
-                st.session_state['builder_query'] = boolean_result
-                
                 st.info("📋 **Copy the text above** to use it in the main tab.")
             else:
                 st.warning("Please enter at least one term.")
-        
-        # Display current query if exists
-        if 'builder_query' in st.session_state and st.session_state['builder_query']:
-            st.markdown("### 📝 Current Query")
-            st.code(st.session_state['builder_query'], language="text")
     
     with col2:
         st.markdown("### 💡 English Hypothesis")
@@ -2020,18 +2011,9 @@ def show_search_builder_tab():
                 corrected_hypothesis = rewrite_hypothesis(hypothesis_input)
                 st.success("✅ Hypothesis rewritten correctly:")
                 st.code(corrected_hypothesis, language="text")
-                
-                # Store in session state for copying
-                st.session_state['builder_hypothesis'] = corrected_hypothesis
-                
                 st.info("📋 **Copy the text above** to use it in the main tab.")
             else:
                 st.warning("Please enter a hypothesis.")
-        
-        # Display current hypothesis if exists
-        if 'builder_hypothesis' in st.session_state and st.session_state['builder_hypothesis']:
-            st.markdown("### 📝 Current Hypothesis")
-            st.code(st.session_state['builder_hypothesis'], language="text")
     
     # Help section
     with st.expander("📖 Help & Examples"):
@@ -2050,25 +2032,6 @@ def show_search_builder_tab():
         st.markdown("- Each term is searched as `[Mesh]` (MeSH term) and `[tiab]` (title/abstract).")
         st.markdown("- The hypothesis is automatically capitalized and gets a period at the end.")
         st.markdown("- **Copy the generated text and paste it into the Main tab** to use it in the analyzer.")
-    
-    st.markdown("---")
-    st.markdown("### ⚡ Quick Copy Area")
-    st.markdown("Select and copy the text below to paste into the main tab:")
-    
-    col_copy1, col_copy2 = st.columns(2)
-    with col_copy1:
-        query_to_copy = st.session_state.get('builder_query', '')
-        if query_to_copy:
-            st.text_area("PubMed Query (copy this):", value=query_to_copy, height=100, key="copy_query")
-        else:
-            st.info("Generate a query first using the button above.")
-    
-    with col_copy2:
-        hypothesis_to_copy = st.session_state.get('builder_hypothesis', '')
-        if hypothesis_to_copy:
-            st.text_area("Hypothesis (copy this):", value=hypothesis_to_copy, height=100, key="copy_hypothesis")
-        else:
-            st.info("Generate a hypothesis first using the button above.")
 
 
 # ============================================================================
