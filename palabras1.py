@@ -1911,7 +1911,7 @@ def display_session_exporter(session_manager):
 
 
 # ============================================================================
-# SEARCH BUILDER TAB FUNCTIONS (from palabras.py) - CORREGIDO
+# SEARCH BUILDER TAB FUNCTIONS (from palabras.py)
 # ============================================================================
 
 def terms_to_boolean(terms_str):
@@ -1973,7 +1973,7 @@ def show_search_builder_tab():
         st.markdown("### 📋 English Terms")
         st.markdown("Enter a list of terms separated by commas or new lines:")
         
-        # MODIFIED: More specific terms focused on intramyocardial dissection
+        # More specific terms focused on intramyocardial dissection
         example_terms = "myocardial infarction, intramyocardial dissection, intramyocardial dissecting hematoma, heart rupture, cardiac rupture, ventricular septal rupture, free wall rupture"
         
         terms_input = st.text_area(
@@ -1997,7 +1997,7 @@ def show_search_builder_tab():
         st.markdown("### 💡 English Hypothesis")
         st.markdown("Enter a hypothesis or sentence to rewrite correctly:")
         
-        # MODIFIED: Hypothesis without the temporal patterns part
+        # Hypothesis without the temporal patterns part
         example_hypothesis = "Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes"
         
         hypothesis_input = st.text_area(
@@ -2051,7 +2051,7 @@ def main():
         show_search_builder_tab()
     
     with tab1:
-        # Main application content (original)
+        # AUTHENTICATION - Must be first!
         if 'user_login' not in st.session_state:
             st.markdown("### 🔐 User Identification")
             col1, col2 = st.columns(2)
@@ -2073,6 +2073,7 @@ def main():
         if 'new_search_mode' not in st.session_state:
             st.session_state.new_search_mode = True
         
+        # Initialize session manager (within tab1, after authentication)
         session_manager = None
         selected_session_id = None
         
@@ -2113,6 +2114,7 @@ def main():
             else:
                 st.session_state.new_search_mode = True
             
+            # This is now safe because user is authenticated
             display_session_exporter(session_manager)
             
         except Exception as e:
@@ -2166,7 +2168,7 @@ def main():
         else:
             st.info("🆕 **New Search**")
             
-            # MODIFIED: More specific PubMed query focused on intramyocardial dissection
+            # More specific PubMed query focused on intramyocardial dissection
             query = st.text_area("**PubMed search strategy:**",
                 value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"intramyocardial dissection\"[Mesh] OR \"intramyocardial dissection\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab] OR \"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab])",
                 height=100,
@@ -2174,7 +2176,7 @@ def main():
             
             threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
             
-            # MODIFIED: Hypothesis without the temporal patterns part
+            # Hypothesis without the temporal patterns part
             hypothesis = st.text_area("**📌 Hypothesis:**",
                 value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes.",
                 height=100,
