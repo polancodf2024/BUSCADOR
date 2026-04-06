@@ -1991,17 +1991,51 @@ def rewrite_hypothesis(hypothesis):
     return hypothesis
 
 
+
 def show_search_builder_tab():
     """Display the search builder tab for constructing PubMed queries and hypotheses"""
-    
+
     st.markdown("## 🔧 PubMed Search Builder")
     st.markdown("Build your PubMed search query and hypothesis here, then copy the results to the main tab.")
-    
-    st.info("""
-    **📌 Formato correcto para construir la búsqueda:**
-    
-    - **Escribe cada concepto en una línea diferente**
-    - **Dentro de la misma línea, separa los sinónimos con comas**
-    - **El programa generará: (Concepto1) AND (Concepto2 OR Sinónimo1 OR Sinónimo2)**
-    
-    **Ejemplo para tu investigación:**
+
+    st.info(
+        """
+        **📌 Formato correcto para construir la búsqueda:**
+
+        - **Escribe cada concepto en una línea diferente**
+        - **Dentro de la misma línea, separa los sinónimos con comas**
+        - **El programa generará: (Concepto1) AND (Concepto2 OR Sinónimo1 OR Sinónimo2)**
+
+        **Ejemplo para tu investigación:**
+
+        diabetes, type 2 diabetes, T2DM
+        metformin
+        cardiovascular disease, heart disease
+        """
+    )
+
+    # Área de texto para ingresar conceptos
+    concepts_input = st.text_area(
+        "✏️ Ingresa tus conceptos:",
+        height=200,
+        placeholder="Ejemplo:\ncancer, neoplasm\nimmunotherapy, checkpoint inhibitors\nsurvival rate"
+    )
+
+    # Botón para generar query
+    if st.button("🔍 Generar búsqueda"):
+        if concepts_input.strip():
+            query = build_pubmed_query(concepts_input)
+
+            st.success("✅ Query generada:")
+            st.code(query, language="text")
+
+            st.download_button(
+                label="📥 Descargar query",
+                data=query,
+                file_name="pubmed_query.txt",
+                mime="text/plain"
+            )
+        else:
+            st.warning("⚠️ Por favor ingresa al menos un concepto.")
+
+
