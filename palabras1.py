@@ -1917,24 +1917,47 @@ def display_session_exporter(session_manager):
 def terms_to_boolean(terms_str):
     """
     Converts a list of English terms to PubMed boolean search syntax.
-    Example input: "myocardial infarction, heart rupture, cardiac rupture"
-    Output: ("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ...
+
+    Input: "myocardial infarction, heart rupture, cardiac rupture"
+
+    Output: ("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND
+            ("heart rupture"[Mesh] OR "heart rupture"[tiab] OR "cardiac rupture"[Mesh] OR "cardiac rupture"[tiab])
+
+    Note: Terms are grouped by line. Terms on the same line are joined with OR.
+          Different lines are joined with AND.
     """
-    # Split by commas or newlines
-    terms = [t.strip() for t in re.split(r'[,|\n]+', terms_str) if t.strip()]
-    
-    if not terms:
+    # Split by lines first (each line is a concept group)
+    lines = [line.strip() for line in terms_str.split('\n') if line.strip()]
+
+    if not lines:
+        # If no line breaks, split by commas
+        terms = [t.strip() for t in re.split(r',', terms_str) if t.strip()]
+        if terms:
+            # All terms in one group -> join with OR
+            expressions = []
+            for term in terms:
+                clean_term = term.strip('"')
+                expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
+                expressions.append(expr)
+            return " OR ".join(expressions)
         return ""
-    
-    expressions = []
-    for term in terms:
-        # Remove extra quotes if present
-        clean_term = term.strip('"')
-        expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
-        expressions.append(expr)
-    
-    # Join with AND
-    return " AND ".join(expressions)
+
+    # Process each line as a concept group
+    all_groups = []
+    for line in lines:
+        # Split line by commas to get individual terms
+        terms_in_group = [t.strip() for t in re.split(r',', line) if t.strip()]
+        if terms_in_group:
+            group_expressions = []
+            for term in terms_in_group:
+                clean_term = term.strip('"')
+                expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
+                group_expressions.append(expr)
+            # Join terms within the same group with OR
+            all_groups.append(" OR ".join(group_expressions))
+
+    # Join different groups with AND
+    return " AND ".join(all_groups)
 
 
 def rewrite_hypothesis(hypothesis):
