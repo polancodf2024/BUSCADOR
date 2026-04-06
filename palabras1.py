@@ -1917,55 +1917,47 @@ def display_session_exporter(session_manager):
 def terms_to_boolean(terms_str):
     """
     Converts a list of English terms to PubMed boolean search syntax.
-    
-    FORMATO CORRECTO:
-    - Cada línea representa un concepto/grupo de sinónimos
-    - Los términos dentro de la misma línea se unen con OR
-    - Las diferentes líneas se unen con AND
-    
-    Ejemplo entrada:
-        myocardial infarction
-        intramyocardial dissecting hematoma, intramyocardial dissection, intramyocardial dissecting
-        heart rupture, cardiac rupture, ventricular septal rupture, free wall rupture
+    Example input: "myocardial infarction, intramyocardial dissection, heart rupture"
+    Output: ("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ...
     """
-    # Split by lines first (each line is a concept group)
-    lines = [line.strip() for line in terms_str.split('\n') if line.strip()]
+    # Split by commas or newlines
+    terms = [t.strip() for t in re.split(r'[,|\n]+', terms_str) if t.strip()]
     
-    if not lines:
-        # If no line breaks, treat as a single group separated by commas
-        terms = [t.strip() for t in re.split(r',', terms_str) if t.strip()]
-        if terms:
-            expressions = []
-            for term in terms:
-                clean_term = term.strip('"')
-                expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
-                expressions.append(expr)
-            return " OR ".join(expressions)
+    if not terms:
         return ""
     
-    all_groups = []
-    for line in lines:
-        terms_in_group = [t.strip() for t in re.split(r',', line) if t.strip()]
-        if terms_in_group:
-            group_expressions = []
-            for term in terms_in_group:
-                clean_term = term.strip('"')
-                expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
-                group_expressions.append(expr)
-            all_groups.append(" OR ".join(group_expressions))
+    expressions = []
+    for term in terms:
+        # Remove extra quotes if present
+        clean_term = term.strip('"')
+        expr = f'("{clean_term}"[Mesh] OR "{clean_term}"[tiab])'
+        expressions.append(expr)
     
-    return " AND ".join(all_groups)
+    # Join with AND
+    return " AND ".join(expressions)
 
 
 def rewrite_hypothesis(hypothesis):
-    """Rewrites the English hypothesis to be properly formatted"""
+    """
+    Rewrites the English hypothesis to be properly formatted:
+    - First letter capitalized
+    - Ending period if missing
+    - Basic space cleanup
+    """
     if not hypothesis:
         return ""
+    
+    # Remove extra spaces
     hypothesis = re.sub(r'\s+', ' ', hypothesis).strip()
+    
+    # Ensure first letter is uppercase
     if hypothesis and hypothesis[0].islower():
         hypothesis = hypothesis[0].upper() + hypothesis[1:]
+    
+    # Ensure ending period
     if hypothesis and hypothesis[-1] not in '.!?':
         hypothesis += '.'
+    
     return hypothesis
 
 
@@ -1975,10 +1967,270 @@ def show_search_builder_tab():
     st.markdown("## 🔧 PubMed Search Builder")
     st.markdown("Build your PubMed search query and hypothesis here, then copy the results to the main tab.")
     
-    st.info("""
-    **📌 Formato correcto para construir la búsqueda:**
+    col1, col2 = st.columns(2)
     
-    - **Escribe cada concepto en una línea diferente**
-    - **Dentro de la misma línea, separa los sinónimos con comas**
+    with col1:
+        st.markdown("### 📋 English Terms")
+        st.markdown("Enter a list of terms separated by commas or new lines:")
+        
+        # MODIFIED: More specific terms focused on intramyocardial dissection
+        example_terms = "myocardial infarction, intramyocardial dissection, intramyocardial dissecting hematoma, heart rupture, cardiac rupture, ventricular septal rupture, free wall rupture"
+        
+        terms_input = st.text_area(
+            "Terms:",
+            value=example_terms,
+            height=200,
+            help="Example: myocardial infarction, intramyocardial dissection, intramyocardial dissecting hematoma",
+            key="builder_terms"
+        )
+        
+        if st.button("🔍 Convert to PubMed Search", key="builder_convert_btn"):
+            if terms_input.strip():
+                boolean_result = terms_to_boolean(terms_input)
+                st.success("✅ Boolean search generated:")
+                st.code(boolean_result, language="text")
+                st.info("📋 **Copy the text above** to use it in the main tab.")
+            else:
+                st.warning("Please enter at least one term.")
     
-    **Ejemplo para tu investigación:**
+    with col2:
+        st.markdown("### 💡 English Hypothesis")
+        st.markdown("Enter a hypothesis or sentence to rewrite correctly:")
+        
+        # MODIFIED: Hypothesis without the temporal patterns part
+        example_hypothesis = "Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes"
+        
+        hypothesis_input = st.text_area(
+            "Hypothesis:",
+            value=example_hypothesis,
+            height=200,
+            help="Example: Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes",
+            key="builder_hypothesis"
+        )
+        
+        if st.button("✍️ Rewrite Hypothesis", key="builder_rewrite_btn"):
+            if hypothesis_input.strip():
+                corrected_hypothesis = rewrite_hypothesis(hypothesis_input)
+                st.success("✅ Hypothesis rewritten correctly:")
+                st.code(corrected_hypothesis, language="text")
+                st.info("📋 **Copy the text above** to use it in the main tab.")
+            else:
+                st.warning("Please enter a hypothesis.")
+    
+    # Help section
+    with st.expander("📖 Help & Examples"):
+        st.markdown("### Example terms input:")
+        st.markdown("```\nmyocardial infarction, intramyocardial dissection, intramyocardial dissecting hematoma, heart rupture, cardiac rupture\n```")
+        
+        st.markdown("### Generated output:")
+        st.markdown("```\n(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"intramyocardial dissection\"[Mesh] OR \"intramyocardial dissection\"[tiab]) AND (\"intramyocardial dissecting hematoma\"[Mesh] OR \"intramyocardial dissecting hematoma\"[tiab]) AND (\"heart rupture\"[Mesh] OR \"heart rupture\"[tiab]) AND (\"cardiac rupture\"[Mesh] OR \"cardiac rupture\"[tiab])\n```")
+        
+        st.markdown("### Example hypothesis:")
+        st.markdown("**Input:** `intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes`")
+        st.markdown("**Output:** `Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes.`")
+        
+        st.markdown("### Notes:")
+        st.markdown("- Terms are combined with `AND` (all required).")
+        st.markdown("- Each term is searched as `[Mesh]` (MeSH term) and `[tiab]` (title/abstract).")
+        st.markdown("- The hypothesis is automatically capitalized and gets a period at the end.")
+        st.markdown("- **Copy the generated text and paste it into the Main tab** to use it in the analyzer.")
+        st.markdown("- **Important:** The search is now restricted to articles specifically about intramyocardial dissection to avoid irrelevant results.")
+
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
+
+def main():
+    st.title("🧠 PubMed AI Analyzer - Advanced Flavor Generator")
+    
+    # Create tabs: Main and Search Builder
+    tab1, tab2 = st.tabs(["🎯 MAIN - Article Analysis", "🔧 SEARCH BUILDER"])
+    
+    with tab2:
+        show_search_builder_tab()
+    
+    with tab1:
+        # Main application content (original)
+        if 'user_login' not in st.session_state:
+            st.markdown("### 🔐 User Identification")
+            col1, col2 = st.columns(2)
+            with col1:
+                login = st.text_input("Login (unique identifier):", placeholder="example: john_doe")
+            with col2:
+                user_email = st.text_input("📧 Email address:", placeholder="user@domain.com")
+            
+            if st.button("✅ Continue", type="primary"):
+                if login.strip() and user_email.strip() and '@' in user_email:
+                    st.session_state.user_login = login.strip().lower()
+                    st.session_state.user_email = user_email.strip()
+                    st.session_state.new_search_mode = True
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Please enter valid login and email")
+            return
+        
+        if 'new_search_mode' not in st.session_state:
+            st.session_state.new_search_mode = True
+        
+        session_manager = None
+        selected_session_id = None
+        
+        try:
+            remote_storage = RemoteCSVStorage(
+                host=st.secrets["remote_host"],
+                port=st.secrets["remote_port"],
+                username=st.secrets["remote_user"],
+                password=st.secrets["remote_password"],
+                remote_dir=st.secrets["remote_dir"]
+            )
+            session_manager = UserSessionManager(remote_storage, st.session_state.user_login)
+            
+            st.sidebar.success(f"👤 User: {st.session_state.user_login}")
+            st.sidebar.info(f"📧 Email: {st.session_state.user_email}")
+            
+            if st.sidebar.button("🔄 Change User"):
+                del st.session_state.user_login
+                del st.session_state.user_email
+                st.rerun()
+            
+            st.sidebar.markdown("---")
+            user_sessions = session_manager.get_user_sessions()
+            if not user_sessions.empty:
+                session_options = {}
+                for _, session in user_sessions.iterrows():
+                    sid = session['session_id']
+                    status = "✅" if session.get('flavors_generated', False) else "⏳"
+                    name = f"{status} {sid[:25]}... ({session.get('total_processed', 0)} articles)"
+                    session_options[name] = sid
+                selected = st.sidebar.selectbox("Saved Sessions:", ["[NEW SEARCH]"] + list(session_options.keys()))
+                if selected == "[NEW SEARCH]":
+                    st.session_state.new_search_mode = True
+                    selected_session_id = None
+                else:
+                    st.session_state.new_search_mode = False
+                    selected_session_id = session_options[selected]
+            else:
+                st.session_state.new_search_mode = True
+            
+            display_session_exporter(session_manager)
+            
+        except Exception as e:
+            st.warning(f"⚠️ Remote connection error: {e}")
+            session_manager = None
+            st.session_state.new_search_mode = True
+        
+        st.info("⚡ 2 BLOCKS OF 1000 ARTICLES | Block start and completion emails | Final DOCX by email")
+        st.markdown("---")
+        
+        if selected_session_id and session_manager and not st.session_state.new_search_mode:
+            session_info = session_manager.get_session_info(selected_session_id)
+            if session_info:
+                st.info(f"📌 Using saved session: {selected_session_id[:25]}... | Articles: {session_info.get('total_processed', 0)} | Flavors: {'✅' if session_manager.has_flavors_generated(selected_session_id) else '⏳'}")
+                
+                articles_df = session_manager.get_session_articles(selected_session_id)
+                total_articles = len(articles_df)
+                BLOCK_SIZE = 1000
+                num_blocks = (total_articles + BLOCK_SIZE - 1) // BLOCK_SIZE if total_articles > 0 else 0
+                
+                if num_blocks > 0:
+                    block_options = ["FULL SESSION"] + [f"Block {i+1}" for i in range(num_blocks)]
+                    selected_block = st.selectbox("Select:", block_options)
+                    threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
+                    
+                    if st.button("🎨 GENERATE FLAVORS", type="primary"):
+                        if selected_block == "FULL SESSION":
+                            flavors, articles, query, hypothesis = generate_flavors_from_saved_session_only(
+                                session_manager, selected_session_id, threshold, None)
+                            label = "full_session"
+                        else:
+                            block_num = int(selected_block.split()[1])
+                            flavors, articles, query, hypothesis = generate_flavors_from_saved_session_only(
+                                session_manager, selected_session_id, threshold, block_num)
+                            label = f"block_{block_num}"
+                        
+                        if flavors:
+                            session_manager.mark_flavors_generated(selected_session_id)
+                            display_flavors_preview(flavors)
+                            qt = extract_key_terms_from_query(query)
+                            ht = extract_key_terms_from_hypothesis(hypothesis)
+                            doc = create_document_with_flavors(flavors, hypothesis, query, len(articles), threshold, qt, ht)
+                            docx_bytes = BytesIO()
+                            doc.save(docx_bytes)
+                            docx_bytes.seek(0)
+                            st.download_button("💾 DOWNLOAD DOCX", data=docx_bytes, file_name=f"flavors_{label}.docx",
+                                              mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                            csv_data = export_articles_to_csv(articles)
+                            if csv_data:
+                                st.download_button("📊 DOWNLOAD CSV", data=csv_data, file_name=f"articles_{label}.csv", mime="text/csv")
+        else:
+            st.info("🆕 **New Search**")
+            
+            # MODIFIED: More specific PubMed query focused on intramyocardial dissection
+            query = st.text_area("**PubMed search strategy:**",
+                value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"intramyocardial dissection\"[Mesh] OR \"intramyocardial dissection\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab] OR \"heart rupture\"[Mesh] OR \"cardiac rupture\"[tiab] OR \"ventricular septal rupture\"[tiab] OR \"free wall rupture\"[tiab])",
+                height=100,
+                help="Search terms focused specifically on intramyocardial dissection")
+            
+            threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
+            
+            # MODIFIED: Hypothesis without the temporal patterns part
+            hypothesis = st.text_area("**📌 Hypothesis:**",
+                value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes.",
+                height=100,
+                help="Hypothesis focused on anatomical pathways without temporal patterns")
+            
+            auto_flavors = st.checkbox("🤖 Automatically generate flavors after processing", value=True)
+            
+            if st.button("🚀 GENERATE (2 BLOCKS OF 1000)", type="primary"):
+                if not query.strip() or not hypothesis.strip():
+                    st.warning("⚠️ Please fill in all fields")
+                else:
+                    start = time.time()
+                    qt = extract_key_terms_from_query(query)
+                    ht = extract_key_terms_from_hypothesis(hypothesis)
+                    st.info(f"📝 Extracted {len(qt)} search terms, {len(ht)} hypothesis terms")
+                    
+                    with st.spinner("🔍 Searching articles (max 2000 = 2 blocks of 1000)..."):
+                        id_list, total = search_pubmed_complete(query.strip(), max_articles=2000)
+                        if not id_list:
+                            st.error("❌ No articles found")
+                            st.stop()
+                        st.info(f"📊 Will process {len(id_list)} articles (2 blocks of 1000)")
+                        
+                        if session_manager:
+                            sid = session_manager.create_session(query, hypothesis, threshold, st.session_state.user_email)
+                            articles, blocks = process_articles_in_independent_blocks(
+                                id_list, qt, ht, session_manager, sid, query, hypothesis, st.session_state.user_email)
+                        else:
+                            articles = fetch_articles_details(id_list, qt, ht)
+                            blocks = 2
+                    
+                    if not articles:
+                        st.error("❌ Could not process articles")
+                        st.stop()
+                    
+                    st.success(f"✅ Processed {len(articles)} articles from {blocks} blocks")
+                    
+                    with st.spinner("🧠 Calculating relevance..."):
+                        articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
+                        filtered = filter_articles_by_relevance(articles, threshold)
+                        articles = filtered
+                    
+                    if len(articles) < 5:
+                        st.error(f"❌ Not enough articles after filtering ({len(articles)})")
+                        st.stop()
+                    
+                    st.info(f"⏱️ Processing time: {(time.time()-start)/60:.1f} minutes")
+                    
+                    if auto_flavors and session_manager and 'sid' in locals():
+                        success = generate_automatic_flavors(session_manager, sid, threshold, st.session_state.user_email)
+                        if success:
+                            st.success("🎉 Process completed! DOCX sent to your email.")
+        
+        st.markdown("---")
+        st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v32.0 | ✅ 2 BLOCKS OF 1000 | Block start and completion emails | Focused on Intramyocardial Dissection</div>", unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
