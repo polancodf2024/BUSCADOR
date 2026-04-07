@@ -2041,13 +2041,13 @@ def main():
         st.info("🆕 **Nueva Búsqueda**")
         
         query = st.text_area("**PubMed search strategy:**",
-            value='''("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ("intramyocardial dissection"[tiab] OR "intramyocardial dissecting hematoma"[tiab] OR "intramyocardial dissecting"[tiab])'''
+            value="(\"myocardial infarction\"[Mesh] OR \"myocardial infarction\"[tiab]) AND (\"intramyocardial dissection\"[tiab] OR \"intramyocardial dissecting hematoma\"[tiab] OR \"intramyocardial dissecting\"[tiab])"
             height=100)
         
         threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
         
         hypothesis = st.text_area("**📌 Hypothesis:**",
-            value='''Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes.'''
+            value="Intramyocardial dissections occurring as a complication of myocardial infarction follow predictable anatomical pathways along established tissue planes."
             height=100)
         
         auto_flavors = st.checkbox("🤖 Generar flavors automáticamente", value=True)
