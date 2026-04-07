@@ -2040,10 +2040,11 @@ def main():
     else:
         st.info("🆕 **Nueva Búsqueda**")
         
+        consulta_pubmed = '("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ("intramyocardial dissection"[tiab] OR "intramyocardial dissecting hematoma"[tiab] OR "intramyocardial dissecting"[tiab])'
+
         query = st.text_area("**PubMed search strategy:**",
-            consulta_pubmed = r'("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ("intramyocardial dissection"[tiab] OR "intramyocardial dissecting hematoma"[tiab] OR "intramyocardial dissecting"[tiab])',
-            value = consulta_pubmed,
-            height=100)
+            value=consulta_pubmed,
+            height=100)        
         
         threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
         
