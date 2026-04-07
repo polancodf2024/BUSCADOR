@@ -361,7 +361,7 @@ class UserSessionManager:
             'total_found': 0,
             'total_processed': 0,
             'start_time': datetime.now().isoformat(),
-            'end_time': '',  # ← Vacío como string, no None
+            'end_time': '',
             'status': 'running',
             'flavors_generated': False,
             'user_email': email
@@ -479,14 +479,11 @@ class UserSessionManager:
         if df is None or df.empty:
             return
         
-        # Crear una copia para evitar problemas de vista
         df = df.copy()
         
-        # Asegurar que la columna end_time existe y es de tipo object (string)
         if 'end_time' not in df.columns:
             df['end_time'] = ''
         
-        # Convertir la columna a tipo string para evitar problemas
         df['end_time'] = df['end_time'].astype(str)
         
         mask = df['session_id'] == session_id
@@ -578,7 +575,7 @@ class UserSessionManager:
         if 'block_number' in articles_df.columns:
             return articles_df[articles_df['block_number'] == block_number]
         else:
-            BLOCK_SIZE = 500  # MODIFICADO: 500 artículos por bloque
+            BLOCK_SIZE = 500
             start_idx = (block_number - 1) * BLOCK_SIZE
             end_idx = block_number * BLOCK_SIZE
             return articles_df.iloc[start_idx:end_idx] if len(articles_df) > start_idx else pd.DataFrame()
@@ -617,7 +614,7 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
 
 
 def search_pubmed_complete(query, max_articles=1000):
-    """Search articles - limitado a max_articles (1000 = 2 bloques de 500)"""
+    """Search articles - adaptado para cualquier número de artículos"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
@@ -637,9 +634,15 @@ def search_pubmed_complete(query, max_articles=1000):
         if total_count == 0:
             return [], 0
         
-        # Limitar a max_articles
-        articles_to_fetch = min(total_count, max_articles)
-        st.info(f"📊 Se procesarán {articles_to_fetch} artículos ({articles_to_fetch//500} bloques de 500)")
+        # Determinar cuántos artículos obtener
+        if max_articles is None:
+            articles_to_fetch = total_count
+        else:
+            articles_to_fetch = min(total_count, max_articles)
+        
+        # Calcular número de bloques
+        blocks_needed = (articles_to_fetch + 499) // 500
+        st.info(f"📊 Se procesarán {articles_to_fetch} artículos ({blocks_needed} bloques de 500)")
         
         # Obtener todos los IDs
         all_ids = []
@@ -685,9 +688,12 @@ def search_pubmed_complete(query, max_articles=1000):
         progress_bar.empty()
         st.success(f"✅ Recuperados {len(all_ids)} IDs")
         
-        if len(all_ids) < 500:
-            st.error(f"❌ No hay suficientes artículos (mínimo 500, hay {len(all_ids)})")
+        # MODIFICADO: Ya no hay mínimo de 500 artículos
+        if len(all_ids) == 0:
+            st.error(f"❌ No se encontraron artículos")
             return [], 0
+        elif len(all_ids) < 500:
+            st.warning(f"⚠️ Solo se encontraron {len(all_ids)} artículos (menos de 500). Se procesarán todos.")
         
         return all_ids, len(all_ids)
         
@@ -1127,12 +1133,21 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, block_number=
 
 def process_articles_in_independent_blocks(id_list, query_terms, hypothesis_terms, 
                                            session_manager, session_id, query, hypothesis, user_email):
-    BLOCK_SIZE = 500  # MODIFICADO: 500 artículos por bloque
+    # MODIFICADO: Ajustar BLOCK_SIZE dinámicamente según el número de artículos
     total_to_process = len(id_list)
+    
+    if total_to_process < 500:
+        BLOCK_SIZE = total_to_process
+    else:
+        BLOCK_SIZE = 500
+    
     total_blocks = (total_to_process + BLOCK_SIZE - 1) // BLOCK_SIZE
     
     st.info(f"📦 Total de artículos a procesar: {total_to_process}")
-    st.info(f"📦 Se procesarán en {total_blocks} bloques de {BLOCK_SIZE} artículos cada uno")
+    if total_to_process < 500:
+        st.info(f"📦 Se procesarán en 1 bloque con todos los {total_to_process} artículos")
+    else:
+        st.info(f"📦 Se procesarán en {total_blocks} bloques de {BLOCK_SIZE} artículos cada uno")
     
     # Email de inicio del proceso general
     if user_email:
@@ -1795,8 +1810,8 @@ def generate_flavors_from_saved_session_only(session_manager, session_id, releva
     threshold = relevance_threshold if relevance_threshold is not None else float(session_info.get('relevance_threshold', 0.35))
     filtered_articles = [a for a in articles if a.get('relevance_score', 0) is not None and a.get('relevance_score', 0) >= threshold]
     st.info(f"📊 Filtro ({threshold}): {len(filtered_articles)} de {len(articles)} artículos")
-    if len(filtered_articles) < 5:
-        st.error(f"❌ No hay suficientes artículos (mínimo 5, hay {len(filtered_articles)})")
+    if len(filtered_articles) < 3:
+        st.error(f"❌ No hay suficientes artículos (mínimo 3, hay {len(filtered_articles)})")
         return None, None, None, None
     query_terms = extract_key_terms_from_query(query)
     hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
@@ -1994,7 +2009,7 @@ def main():
         session_manager = None
         st.session_state.new_search_mode = True
     
-    st.info("⚡ 2 BLOQUES DE 500 ARTÍCULOS | Emails de inicio y fin por bloque | DOCX final por email")
+    st.info("⚡ PROCESAMIENTO FLEXIBLE | Emails de inicio y fin por bloque | DOCX final por email")
     st.markdown("---")
     
     if selected_session_id and session_manager and not st.session_state.new_search_mode:
@@ -2040,11 +2055,12 @@ def main():
     else:
         st.info("🆕 **Nueva Búsqueda**")
         
+        # Consulta de PubMed corregida
         consulta_pubmed = '("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ("intramyocardial dissection"[tiab] OR "intramyocardial dissecting hematoma"[tiab] OR "intramyocardial dissecting"[tiab])'
-
+        
         query = st.text_area("**PubMed search strategy:**",
             value=consulta_pubmed,
-            height=100)        
+            height=100)
         
         threshold = st.slider("Relevance threshold:", 0.0, 0.9, 0.35, 0.05)
         
@@ -2054,7 +2070,7 @@ def main():
         
         auto_flavors = st.checkbox("🤖 Generar flavors automáticamente", value=True)
         
-        if st.button("🚀 GENERATE (2 BLOQUES DE 500)", type="primary"):
+        if st.button("🚀 GENERATE", type="primary"):
             if not query.strip() or not hypothesis.strip():
                 st.warning("⚠️ Complete los campos")
             else:
@@ -2063,12 +2079,11 @@ def main():
                 ht = extract_key_terms_from_hypothesis(hypothesis)
                 st.info(f"📝 Términos: {len(qt)} de búsqueda, {len(ht)} de hipótesis")
                 
-                with st.spinner("🔍 Buscando artículos (máximo 1000 = 2 bloques de 500)..."):
-                    id_list, total = search_pubmed_complete(query.strip(), max_articles=1000)
+                with st.spinner("🔍 Buscando artículos..."):
+                    id_list, total = search_pubmed_complete(query.strip(), max_articles=None)  # Sin límite máximo
                     if not id_list:
                         st.error("❌ No se encontraron artículos")
                         st.stop()
-                    st.info(f"📊 Se procesarán {len(id_list)} artículos (2 bloques de 500)")
                     
                     if session_manager:
                         sid = session_manager.create_session(query, hypothesis, threshold, st.session_state.user_email)
@@ -2076,21 +2091,21 @@ def main():
                             id_list, qt, ht, session_manager, sid, query, hypothesis, st.session_state.user_email)
                     else:
                         articles = fetch_articles_details(id_list, qt, ht)
-                        blocks = 2
+                        blocks = 1
                 
                 if not articles:
                     st.error("❌ No se procesaron artículos")
                     st.stop()
                 
-                st.success(f"✅ Procesados {len(articles)} artículos de {blocks} bloques")
+                st.success(f"✅ Procesados {len(articles)} artículos")
                 
                 with st.spinner("🧠 Calculando relevancia..."):
                     articles = calculate_relevance_to_search_and_hypothesis(articles, query, hypothesis)
                     filtered = filter_articles_by_relevance(articles, threshold)
                     articles = filtered
                 
-                if len(articles) < 5:
-                    st.error(f"❌ Pocos artículos después del filtro ({len(articles)})")
+                if len(articles) < 3:
+                    st.error(f"❌ Pocos artículos después del filtro ({len(articles)}). Se necesitan al menos 3.")
                     st.stop()
                 
                 st.info(f"⏱️ Tiempo: {(time.time()-start)/60:.1f} minutos")
@@ -2101,7 +2116,7 @@ def main():
                         st.success("🎉 ¡Proceso completado! DOCX enviado a tu correo.")
     
     st.markdown("---")
-    st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v31.0 | ✅ 2 BLOQUES DE 500 | Emails de inicio y fin por bloque</div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; color: gray;'>PubMed AI Analyzer v32.0 | PROCESAMIENTO FLEXIBLE | Emails de inicio y fin por bloque</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
