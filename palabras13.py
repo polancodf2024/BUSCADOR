@@ -688,7 +688,7 @@ class ConsensusAnalyzer:
         
         summary = f"""
 ╔════════════════════════════════════════════════════════════╗
-║                         📋 RESUMEN EJECUTIVO               ║
+                         📋 RESUMEN EJECUTIVO                                       
 ╚════════════════════════════════════════════════════════════╝
 
 🔬 HIPÓTESIS EVALUADA:
