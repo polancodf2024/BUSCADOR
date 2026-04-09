@@ -1,11 +1,10 @@
 """
-PubMed AI Analyzer v8.7 - COMPLETE WITH INTERPRETIVE ASSISTANT
-- Based on palabras15.py (fully functional)
-- Includes: embeddings (BioBERT/SBERT), clustering (KMeans), TF-IDF
-- NEW: "What Does This Mean?" section with contextual interpretation
-- Increased limit to 3000 articles
-- NO LLM (local processing only)
-- FULLY TRANSLATED TO ENGLISH
+PubMed AI Analyzer v8.9 - FULL TEXT CONCLUSIONS WITH DOI DISPLAY
+- Based on v8.8 with full text extraction
+- NEW: Displays DOIs of "nuances" and "confirms" articles in Executive Summary
+- Helps researchers locate and manually access paywalled articles
+- Supports: PubMed Central (PMC) + Unpaywall + PDF fallback
+- Fully translated to English
 """
 
 import streamlit as st
@@ -40,10 +39,11 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # ============================================================================
 
-MAX_ARTICLES = 3000      # Maximum articles to process
-BATCH_SIZE = 50          # Articles per PubMed API batch
-BLOCK_SIZE = 500         # Articles per processing block
-REQUEST_DELAY = 0.5      # Seconds between requests
+MAX_ARTICLES = 3000
+BATCH_SIZE = 50
+BLOCK_SIZE = 500
+REQUEST_DELAY = 0.5
+ENABLE_FULL_TEXT = True
 
 def get_email_config():
     try:
@@ -56,6 +56,233 @@ def get_email_config():
         }
     except Exception:
         return {'smtp_server': "smtp.gmail.com", 'smtp_port': 587, 'email_user': "", 'email_password': "", 'notification_email': ""}
+
+def get_institutional_email():
+    """Get institutional email from secrets.toml or return default"""
+    try:
+        return st.secrets.get("institutional_email", "tool@example.com")
+    except:
+        return "tool@example.com"
+
+
+# ============================================================================
+# NEW: DOI DISPLAY IN EXECUTIVE SUMMARY (v8.9)
+# ============================================================================
+
+class DOIFormatter:
+    """Helper class to format DOIs for display"""
+    
+    @staticmethod
+    def format_doi(doi: str) -> str:
+        """Format DOI for display (as clickable link)"""
+        if not doi:
+            return "No DOI available"
+        return f"https://doi.org/{doi}"
+    
+    @staticmethod
+    def extract_dois_from_articles(articles: List[Dict]) -> Dict:
+        """Extract DOIs grouped by relation type"""
+        result = {
+            'confirms': [],
+            'nuances': [],
+            'extends': [],
+            'contradicts': []
+        }
+        
+        for article in articles:
+            relation = article.get('hypothesis_relation', 'unrelated')
+            if relation in result:
+                doi = article.get('doi')
+                if doi:
+                    result[relation].append({
+                        'doi': doi,
+                        'title': article.get('title', 'No title')[:100],
+                        'authors': article.get('authors', 'Unknown')[:60],
+                        'year': article.get('pubdate', 'n.d.')[:4],
+                        'pmid': article.get('pmid', '')
+                    })
+        
+        return result
+
+
+# ============================================================================
+# FULL TEXT EXTRACTOR (v8.9 - with institutional email)
+# ============================================================================
+
+class FullTextExtractor:
+    @staticmethod
+    def extract_conclusions(pmid: str, doi: str = None) -> Dict:
+        result = {'text': None, 'source': None, 'confidence': 0.0, 'error': None}
+        
+        if not ENABLE_FULL_TEXT:
+            return result
+        
+        pmc_result = FullTextExtractor._from_pmc(pmid)
+        if pmc_result['text']:
+            return pmc_result
+        
+        if doi:
+            unpaywall_result = FullTextExtractor._from_unpaywall(doi)
+            if unpaywall_result['text']:
+                return unpaywall_result
+        
+        result['error'] = "Full text not available (article may not be Open Access)"
+        return result
+    
+    @staticmethod
+    def _from_pmc(pmid: str) -> Dict:
+        result = {'text': None, 'source': None, 'confidence': 0.0, 'error': None}
+        
+        pmcid = FullTextExtractor._pmid_to_pmcid(pmid)
+        if not pmcid:
+            result['error'] = "No PMCID found"
+            return result
+        
+        base_url = "https://www.ncbi.nlm.nih.gov/pmc/oai/oai.cgi"
+        params = {
+            "verb": "GetRecord",
+            "identifier": f"oai:pubmedcentral.gov:{pmcid}",
+            "metadataPrefix": "pmc"
+        }
+        
+        try:
+            response = requests.get(base_url, params=params, timeout=30)
+            if response.status_code == 200:
+                try:
+                    root = ElementTree.fromstring(response.content)
+                    ns = {
+                        'pmc': 'http://www.ncbi.nlm.nih.gov/pmc/standards/markup/',
+                        'oai': 'http://www.openarchives.org/OAI/2.0/'
+                    }
+                    
+                    record = root.find(".//oai:record", ns)
+                    if record is not None:
+                        conclusions = FullTextExtractor._find_conclusions_in_xml(record, ns)
+                        if conclusions:
+                            result['text'] = conclusions
+                            result['source'] = 'PubMed Central (PMC)'
+                            result['confidence'] = 0.95
+                            return result
+                except:
+                    pass
+                
+                text_content = response.text.lower()
+                conclusions = FullTextExtractor._find_conclusions_in_text(text_content)
+                if conclusions:
+                    result['text'] = conclusions
+                    result['source'] = 'PubMed Central (text)'
+                    result['confidence'] = 0.85
+                    return result
+        except Exception as e:
+            result['error'] = f"PMC error: {str(e)[:100]}"
+        
+        return result
+    
+    @staticmethod
+    def _pmid_to_pmcid(pmid: str) -> Optional[str]:
+        url = "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
+        params = {
+            "ids": pmid,
+            "format": "json",
+            "tool": "pubmed_analyzer",
+            "email": get_institutional_email()  # ← Uses institutional email from secrets
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                if 'records' in data and len(data['records']) > 0:
+                    pmcid = data['records'][0].get('pmcid')
+                    if pmcid:
+                        return pmcid
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def _find_conclusions_in_xml(element, ns) -> Optional[str]:
+        keywords = ['conclusion', 'discussion', 'summary', 'findings']
+        
+        for sec in element.findall(".//pmc:sec", ns):
+            title_elem = sec.find(".//pmc:title", ns)
+            if title_elem is not None and title_elem.text:
+                title_lower = title_elem.text.lower()
+                if any(kw in title_lower for kw in keywords):
+                    paragraphs = []
+                    for p in sec.findall(".//pmc:p", ns):
+                        if p.text:
+                            paragraphs.append(p.text)
+                    if paragraphs:
+                        return ' '.join(paragraphs)[:3000]
+        return None
+    
+    @staticmethod
+    def _find_conclusions_in_text(text: str) -> Optional[str]:
+        patterns = [
+            r'<title[^>]*>conclusions?[\s]*</title[^>]*>(.*?)(?=<title|</sec|$)',
+            r'<title[^>]*>discussion[\s]*</title[^>]*>(.*?)(?=<title|</sec|$)',
+            r'<title[^>]*>summary[\s]*</title[^>]*>(.*?)(?=<title|</sec|$)',
+            r'conclusions?\s*\n\s*([^\\n]+(?:\n[^\\n]+)*?)(?:\n\n|\n[a-z]+\s*\n)',
+            r'discussion\s*\n\s*([^\\n]+(?:\n[^\\n]+)*?)(?:\n\n|\n[a-z]+\s*\n)',
+            r'our findings confirm that ([^.!]+[.!])',
+            r'this study demonstrates that ([^.!]+[.!])',
+            r'we conclude that ([^.!]+[.!])',
+            r'supports the hypothesis that ([^.!]+[.!])',
+            r'confirms that ([^.!]+[.!])',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                extracted = match.group(1)
+                extracted = re.sub(r'<[^>]+>', ' ', extracted)
+                extracted = re.sub(r'\s+', ' ', extracted).strip()
+                if len(extracted) > 50:
+                    return extracted[:3000]
+        return None
+    
+    @staticmethod
+    def _from_unpaywall(doi: str) -> Dict:
+        result = {'text': None, 'source': None, 'confidence': 0.0, 'error': None}
+        
+        pdf_url = FullTextExtractor._find_oa_pdf_url(doi)
+        if not pdf_url:
+            result['error'] = "No Open Access PDF found"
+            return result
+        
+        try:
+            response = requests.get(pdf_url, timeout=45, headers={'User-Agent': 'Mozilla/5.0'})
+            if response.status_code == 200:
+                text = response.text.lower()
+                conclusions = FullTextExtractor._find_conclusions_in_text(text)
+                if conclusions:
+                    result['text'] = conclusions
+                    result['source'] = 'Unpaywall (Open Access PDF)'
+                    result['confidence'] = 0.70
+                    return result
+        except:
+            pass
+        
+        result['error'] = "Could not extract from PDF"
+        return result
+    
+    @staticmethod
+    def _find_oa_pdf_url(doi: str) -> Optional[str]:
+        url = f"https://api.unpaywall.org/v2/{doi}"
+        params = {"email": get_institutional_email()}  # ← Uses institutional email from secrets
+        
+        try:
+            response = requests.get(url, params=params, timeout=20)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('is_oa') and data.get('best_oa_location'):
+                    pdf_url = data['best_oa_location'].get('url_for_pdf')
+                    if pdf_url:
+                        return pdf_url
+        except:
+            pass
+        return None
 
 
 # ============================================================================
@@ -72,19 +299,19 @@ class EmailSender:
             return False, "❌ Email configuration not available."
         
         if subject is None:
-            subject = f"PubMed AI Analyzer v8.7 - Evidence Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            subject = f"PubMed AI Analyzer v8.9 - Evidence Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         if body is None:
             body = f"""
             Hello,
             
-            Attached is the evidence analysis generated by PubMed AI Analyzer v8.7.
+            Attached is the evidence analysis generated by PubMed AI Analyzer v8.9.
+            
+            NEW FEATURE: DOIs of "nuances" and "confirms" articles are now displayed
+            in the Executive Summary for easy access to paywalled articles.
             
             File: {filename}
             Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            
-            This document includes a new "What Does This Mean?" section that automatically
-            interprets the results to help contextualize your findings.
             
             This is an automated message.
             """
@@ -138,7 +365,7 @@ class HypothesisRelationClassifier:
         'validates', 'our findings confirm', 'these results confirm',
         'is consistent with', 'provides evidence for',
         'confirm the hypothesis', 'support the hypothesis',
-        'findings support', 'results confirm'
+        'findings support', 'results confirm', 'we conclude that'
     ]
     
     CONTRADICTS_PHRASES = [
@@ -150,44 +377,63 @@ class HypothesisRelationClassifier:
     NUANCES_PHRASES = ['however', 'although', 'but', 'except', 'whereas', 'interestingly', 'notably']
     
     @classmethod
-    def classify(cls, title: str, abstract: str, hypothesis: str) -> Dict:
-        if not abstract and not title:
-            return {'relation': 'unrelated', 'confidence': 0.0, 'reason': 'No text available'}
+    def classify(cls, title: str, abstract: str, hypothesis: str, full_text_conclusions: str = None) -> Dict:
+        text_parts = []
+        if full_text_conclusions:
+            text_parts.append(full_text_conclusions)
+        if abstract:
+            text_parts.append(abstract)
+        if title:
+            text_parts.append(title)
         
-        text = f"{title} {abstract if abstract else ''}".lower()
+        text = " ".join(text_parts).lower()
+        
+        if not text:
+            return {'relation': 'unrelated', 'confidence': 0.0, 'reason': 'No text available'}
         
         for phrase in cls.CONFIRMS_PHRASES:
             if phrase in text:
-                return {'relation': 'confirms', 'confidence': 0.95, 'reason': f'Explicit phrase: "{phrase}"'}
+                source = "full text" if full_text_conclusions and phrase in full_text_conclusions.lower() else "abstract/title"
+                return {
+                    'relation': 'confirms', 
+                    'confidence': 0.95,
+                    'reason': f'Explicit phrase: "{phrase}" (found in {source})'
+                }
         
         for phrase in cls.CONTRADICTS_PHRASES:
             if phrase in text:
-                return {'relation': 'contradicts', 'confidence': 0.95, 'reason': f'Explicit phrase: "{phrase}"'}
+                return {
+                    'relation': 'contradicts', 
+                    'confidence': 0.95,
+                    'reason': f'Explicit phrase: "{phrase}"'
+                }
         
         nuance_count = sum(1 for p in cls.NUANCES_PHRASES if p in text)
         if nuance_count >= 2:
-            return {'relation': 'nuances', 'confidence': 0.6, 'reason': f'Presence of nuances ({nuance_count})'}
+            return {
+                'relation': 'nuances', 
+                'confidence': 0.6,
+                'reason': f'Presence of nuances ({nuance_count})'
+            }
         
-        return {'relation': 'unrelated', 'confidence': 0.3, 'reason': 'No explicit textual evidence found'}
+        return {
+            'relation': 'unrelated', 
+            'confidence': 0.3,
+            'reason': 'No explicit textual evidence found'
+        }
 
 
 # ============================================================================
-# NEW: INTERPRETIVE ASSISTANT (v8.7)
+# INTERPRETIVE ASSISTANT
 # ============================================================================
 
 class InterpretiveAssistant:
-    """
-    Generates a "What Does This Mean?" section that contextualizes
-    numerical results for the researcher.
-    """
-    
     @staticmethod
     def generate_interpretation(consensus: Dict, total_articles: int, 
                                  relevant_articles: int, hypothesis: str,
-                                 avg_methodological: float) -> str:
-        """
-        Generates contextual interpretation based on results.
-        """
+                                 avg_methodological: float,
+                                 full_text_available: int = 0) -> str:
+        
         confirms_pct = consensus.get('confirms_percentage', 0)
         nuances_pct = consensus.get('nuances_percentage', 0)
         contradicts_pct = consensus.get('contradicts_percentage', 0)
@@ -198,9 +444,16 @@ class InterpretiveAssistant:
         interpretation += "This section helps you interpret the numerical results in context.\n\n"
         interpretation += "---\n\n"
         
-        # ================================================================
-        # 1. INTERPRETATION OF CONFIRMATION
-        # ================================================================
+        if full_text_available > 0:
+            interpretation += f"## 📄 FULL TEXT ANALYSIS ({full_text_available} articles)\n\n"
+            interpretation += f"→ This analysis extracted and analyzed the **Conclusions/Discussion** sections from {full_text_available} Open Access articles.\n"
+            interpretation += "→ These sections are where authors explicitly state their findings, increasing detection of confirmatory statements.\n\n"
+        else:
+            interpretation += "## 📄 FULL TEXT ANALYSIS\n\n"
+            interpretation += "→ No Open Access full text articles were found for this search.\n"
+            interpretation += "→ Analysis is based only on titles and abstracts.\n"
+            interpretation += "→ Consider that confirmatory statements may exist in the full text of paywalled articles.\n\n"
+        
         interpretation += "## 📊 Regarding hypothesis confirmation\n\n"
         
         if confirms_pct == 0:
@@ -211,151 +464,58 @@ class InterpretiveAssistant:
             interpretation += "**Possible explanations:**\n"
             interpretation += "• Your hypothesis has not been formally evaluated in the literature\n"
             interpretation += "• Existing studies are predominantly descriptive (case reports)\n"
-            interpretation += "• Confirmation would require a specific study design that hasn't been conducted\n"
             interpretation += "• The language used in articles is more cautious (e.g., 'suggests', 'may indicate')\n\n"
         elif confirms_pct < 30:
             interpretation += f"**🟠 Only {confirms_pct:.0f}% of studies explicitly confirm your hypothesis**\n\n"
-            interpretation += "→ Confirmatory evidence is scarce.\n"
-            interpretation += "→ Most articles do not directly address your hypothesis.\n\n"
+            interpretation += "→ Confirmatory evidence is scarce.\n\n"
         elif confirms_pct > 70:
             interpretation += f"**🟢 {confirms_pct:.0f}% of studies explicitly confirm your hypothesis**\n\n"
-            interpretation += "→ There is strong consensus in the literature.\n"
-            interpretation += "→ Your hypothesis is well supported by explicit evidence.\n\n"
+            interpretation += "→ There is strong consensus in the literature.\n\n"
         else:
             interpretation += f"**🟡 {confirms_pct:.0f}% of studies explicitly confirm your hypothesis**\n\n"
-            interpretation += "→ Support for your hypothesis is moderate.\n"
-            interpretation += "→ There is evidence, but also room for more research.\n\n"
+            interpretation += "→ Support for your hypothesis is moderate.\n\n"
         
-        # ================================================================
-        # 2. INTERPRETATION OF CONTRADICTIONS
-        # ================================================================
-        if contradicts_pct > 0:
-            interpretation += "## ⚠️ Regarding contradictions\n\n"
-            if contradicts_pct > 30:
-                interpretation += f"**🔴 {contradicts_pct:.0f}% of studies contradict your hypothesis**\n\n"
-                interpretation += "→ There is significant evidence against your hypothesis.\n"
-                interpretation += "→ Review the contradicting articles to understand their arguments.\n\n"
-            else:
-                interpretation += f"**🟡 {contradicts_pct:.0f}% of studies contradict your hypothesis**\n\n"
-                interpretation += "→ There is some contrary evidence, but it is not majority.\n"
-                interpretation += "→ Consider whether these studies have methodological limitations.\n\n"
-        
-        # ================================================================
-        # 3. INTERPRETATION OF RELEVANCE
-        # ================================================================
         interpretation += "## 📚 Regarding article relevance\n\n"
         
         if relevant_articles < 5:
             interpretation += f"**📊 Only {relevant_articles} articles are truly relevant** "
             interpretation += f"(out of {total_articles} total, {unrelated_pct:.0f}% are not related)\n\n"
-            interpretation += "→ Your specific hypothesis has barely been addressed in the literature.\n"
-            interpretation += "→ 'Unrelated' articles contain your search terms "
-            interpretation += "but do NOT address your specific hypothesis.\n"
-            interpretation += "→ This is a valid finding: absence of relevant literature is useful information.\n\n"
-            interpretation += "**Recommendation:** Consider reformulating your hypothesis as an EXPLORATORY question "
-            interpretation += "rather than a CONFIRMATORY one.\n\n"
+            interpretation += "→ Your specific hypothesis has barely been addressed in the literature.\n\n"
+            interpretation += "**Recommendation:** Consider reformulating your hypothesis as an EXPLORATORY question.\n\n"
         elif relevant_articles < 15:
-            interpretation += f"**📊 {relevant_articles} articles are relevant** "
-            interpretation += f"(out of {total_articles} total)\n\n"
-            interpretation += "→ There is a moderate body of literature addressing your topic.\n"
-            interpretation += "→ Sufficient for analysis, but not for definitive conclusions.\n\n"
+            interpretation += f"**📊 {relevant_articles} articles are relevant**\n\n"
         else:
-            interpretation += f"**📊 {relevant_articles} articles are relevant** "
-            interpretation += f"(out of {total_articles} total)\n\n"
-            interpretation += "→ There is a substantial body of literature on your topic.\n"
-            interpretation += "→ Results have greater robustness.\n\n"
+            interpretation += f"**📊 {relevant_articles} articles are relevant**\n\n"
         
-        # ================================================================
-        # 4. INTERPRETATION OF METHODOLOGICAL QUALITY
-        # ================================================================
         interpretation += "## ⭐ Regarding methodological quality\n\n"
         
         if avg_methodological < 30:
             interpretation += f"**🔴 Average methodological quality: {avg_methodological:.0f}/100**\n\n"
-            interpretation += "→ Existing evidence is predominantly of **low quality**.\n"
-            interpretation += "→ This is **expected** for:\n"
-            interpretation += "  • Rare diseases or uncommon conditions\n"
-            interpretation += "  • Emerging topics with little prior research\n"
-            interpretation += "  • Phenomena described mainly in case reports\n"
+            interpretation += "→ This is **expected** for rare diseases or emerging topics.\n"
             interpretation += "→ **Does not indicate your analysis is incorrect**; it reflects the state of the literature.\n\n"
-        elif avg_methodological < 60:
-            interpretation += f"**🟡 Average methodological quality: {avg_methodological:.0f}/100**\n\n"
-            interpretation += "→ Methodological quality is moderate.\n"
-            interpretation += "→ Results should be interpreted with caution.\n\n"
-        else:
-            interpretation += f"**🟢 Average methodological quality: {avg_methodological:.0f}/100**\n\n"
-            interpretation += "→ Evidence shows good methodological quality.\n"
-            interpretation += "→ Greater confidence in results.\n\n"
         
-        # ================================================================
-        # 5. INTERPRETATION OF NUANCES AND EXTENSIONS
-        # ================================================================
-        if nuances_pct > 50:
-            interpretation += "## 🔍 Regarding nuances\n\n"
-            interpretation += f"**{nuances_pct:.0f}% of relevant articles add nuance to your hypothesis**\n\n"
-            interpretation += "→ These articles **mention** the phenomenon but **do not explicitly confirm it**.\n"
-            interpretation += "→ They may add conditions, limitations, or specific contexts.\n"
-            interpretation += "→ They are useful for understanding the complexity of the topic.\n\n"
-        
-        if extends_pct > 20:
-            interpretation += "## 🚀 Regarding extensions\n\n"
-            interpretation += f"**{extends_pct:.0f}% of relevant articles extend your hypothesis**\n\n"
-            interpretation += "→ Some studies apply your hypothesis to new contexts or populations.\n"
-            interpretation += "→ This suggests the concept has broader applicability.\n\n"
-        
-        # ================================================================
-        # 6. ACTIONABLE RECOMMENDATIONS
-        # ================================================================
         interpretation += "## 💡 RECOMMENDATIONS BASED ON THESE RESULTS\n\n"
         
         if confirms_pct == 0 and relevant_articles < 5:
             interpretation += "**✅ SUGGESTED ACTIONS:**\n"
-            interpretation += "1. **Reformulate your hypothesis as an EXPLORATORY question** rather than confirmatory\n"
+            interpretation += "1. **Reformulate your hypothesis as an EXPLORATORY question**\n"
             interpretation += "2. **Conduct a QUALITATIVE systematic review** of case reports\n"
-            interpretation += "3. **Use these results as JUSTIFICATION** for primary research\n"
-            interpretation += "4. **Remember that absence of evidence is NOT evidence of absence**\n\n"
+            interpretation += "3. **Remember that absence of evidence is NOT evidence of absence**\n\n"
             interpretation += "**❌ NOT RECOMMENDED ACTIONS:**\n"
             interpretation += "1. Concluding the hypothesis is false (it hasn't been tested)\n"
-            interpretation += "2. Dismissing the analysis as 'failed' (the finding is valid)\n"
-            interpretation += "3. Ignoring 'unrelated' articles (they may have contextual information)\n\n"
-        elif confirms_pct > 50:
-            interpretation += "**✅ SUGGESTED ACTIONS:**\n"
-            interpretation += "1. The hypothesis is supported by the evidence\n"
-            interpretation += "2. Consider applying the findings in practice or research\n"
-            interpretation += "3. Identify areas where uncertainty remains\n\n"
-        elif contradicts_pct > 30:
-            interpretation += "**✅ SUGGESTED ACTIONS:**\n"
-            interpretation += "1. Critically review articles that contradict the hypothesis\n"
-            interpretation += "2. Evaluate whether contradictions stem from methodological differences\n"
-            interpretation += "3. Consider refining or modifying the original hypothesis\n\n"
-        else:
-            interpretation += "**✅ SUGGESTED ACTIONS:**\n"
-            interpretation += "1. Maintain the hypothesis but adjust expectations\n"
-            interpretation += "2. Complement with searches in other databases (Google Scholar, Scopus)\n"
-            interpretation += "3. Remember that absence of evidence is NOT evidence of absence\n"
-            interpretation += "4. Document this knowledge gap in future publications\n\n"
+            interpretation += "2. Dismissing the analysis as 'failed'\n\n"
         
-        # ================================================================
-        # 7. METHODOLOGICAL NOTE
-        # ================================================================
         interpretation += "---\n\n"
         interpretation += "## 📌 METHODOLOGICAL NOTE\n\n"
-        interpretation += "The 'Confirms' classification requires **explicit textual evidence** "
-        interpretation += "(phrases like *'confirms that'*, *'supports the hypothesis'*).\n\n"
-        interpretation += "This is INTENTIONAL to avoid:\n"
-        interpretation += "• False confirmations based solely on thematic similarity\n"
-        interpretation += "• Subjective interpretations of content\n"
-        interpretation += "• Researcher bias in classification\n\n"
-        interpretation += "If your hypothesis is correct but not formulated in terms "
-        interpretation += "that appear verbatim in abstracts, you will get 0% confirmation. "
-        interpretation += "This does not invalidate your hypothesis; it indicates it has not "
-        interpretation += "been formally evaluated using that specific language."
+        interpretation += "The 'Confirms' classification requires **explicit textual evidence**.\n\n"
+        interpretation += "**v8.9 NEW FEATURE:** DOIs of 'nuances' and 'confirms' articles are displayed in the Executive Summary for easy manual access.\n\n"
+        interpretation += "If your hypothesis is correct but not formulated in terms that appear verbatim, you will get 0% confirmation. This does not invalidate your hypothesis; it indicates it has not been formally evaluated using that specific language."
         
         return interpretation
 
 
 # ============================================================================
-# FALSE CONFIRMATION VALIDATOR
+# FALSE CONFIRMATION VALIDATOR, QUALITY ALERTS, CONTRADICTION DETECTOR, TEMPORAL ANALYZER
 # ============================================================================
 
 class FalseConfirmationValidator:
@@ -364,7 +524,7 @@ class FalseConfirmationValidator:
         if article.get('hypothesis_relation') != 'confirms':
             return article
         
-        text = f"{article.get('title', '')} {article.get('abstract', '')}".lower()
+        text = f"{article.get('title', '')} {article.get('abstract', '')} {article.get('full_text_conclusions', '')}".lower()
         
         explicit_confirmation = any(phrase in text for phrase in [
             'confirms that', 'demonstrates that', 'consistent with the hypothesis'
@@ -377,10 +537,6 @@ class FalseConfirmationValidator:
         
         return article
 
-
-# ============================================================================
-# QUALITY ALERTS
-# ============================================================================
 
 class QualityAlertSystem:
     @staticmethod
@@ -395,12 +551,16 @@ class QualityAlertSystem:
         
         case_reports = sum(1 for a in articles if a.get('evidence_level') == 'Case report')
         rct = sum(1 for a in articles if a.get('evidence_level') == 'RCT')
+        full_text_available = sum(1 for a in articles if a.get('full_text_available', False))
         
         if case_reports / total > 0.5:
             alerts['critical'].append({'message': f'⚠️ {case_reports}/{total} are case reports', 'recommendation': 'Interpret with caution'})
         
         if rct > 0:
             alerts['success'].append({'message': f'✅ {rct} randomized controlled trial(s)', 'recommendation': ''})
+        
+        if full_text_available > 0:
+            alerts['success'].append({'message': f'📄 {full_text_available} articles had full text conclusions analyzed', 'recommendation': 'Higher confidence in classification'})
         
         low_quality = [a for a in articles if (a.get('methodological_score') or 0) < 30]
         if len(low_quality) > total * 0.5:
@@ -418,10 +578,6 @@ class QualityAlertSystem:
         
         return {'alerts': alerts, 'overall_level': overall_level, 'overall_message': overall_message, 'total_articles': total}
 
-
-# ============================================================================
-# CONTRADICTION DETECTOR
-# ============================================================================
 
 class ContradictionDetector:
     @staticmethod
@@ -446,10 +602,6 @@ class ContradictionDetector:
             return "✅ **No significant contradictions detected**"
         return f"⚠️ **{len(contradictions)} contradiction(s) detected**"
 
-
-# ============================================================================
-# TEMPORAL ANALYSIS
-# ============================================================================
 
 class TemporalConsensusAnalyzer:
     @staticmethod
@@ -519,7 +671,7 @@ class TemporalConsensusAnalyzer:
 
 
 # ============================================================================
-# PICO EXTRACTION
+# PICO EXTRACTION, DEDUPLICATION, CONSENSUS ANALYZER
 # ============================================================================
 
 class PICOExtractor:
@@ -536,10 +688,6 @@ class PICOExtractor:
         }
 
 
-# ============================================================================
-# DEDUPLICATION
-# ============================================================================
-
 def deduplicate_articles(articles: List[Dict]) -> List[Dict]:
     if not articles:
         return []
@@ -552,10 +700,6 @@ def deduplicate_articles(articles: List[Dict]) -> List[Dict]:
             unique.append(a)
     return unique
 
-
-# ============================================================================
-# CONSENSUS ANALYSIS
-# ============================================================================
 
 class ConsensusAnalyzer:
     @staticmethod
@@ -611,6 +755,11 @@ class ConsensusAnalyzer:
         methodological_scores = [a.get('methodological_score', 0) for a in articles if a.get('methodological_score') is not None]
         avg_methodological = sum(methodological_scores) / len(methodological_scores) if methodological_scores else 0
         
+        full_text_count = sum(1 for a in articles if a.get('full_text_available', False))
+        
+        # NEW: Extract DOIs for nuances and confirms articles
+        doi_data = DOIFormatter.extract_dois_from_articles(articles)
+        
         if articles:
             best_article = max(articles, key=lambda x: x.get('methodological_score', 0) or 0)
             best_authors = best_article.get('authors', 'Author')[:80]
@@ -628,9 +777,9 @@ class ConsensusAnalyzer:
         relation_symbol = {'confirms': '✅', 'contradicts': '⚠️', 'nuances': '🔍', 'extends': '🚀', 'unrelated': '📚'}.get(best_relation, '📚')
         
         summary = f"""
-╔═════════════════════════════════════════╗
-                     EXECUTIVE SUMMARY v8.7                                   
-╚═════════════════════════════════════════╝
+╔═══════════════════════════════════════╗
+                     EXECUTIVE SUMMARY v8.9                                   
+╚═══════════════════════════════════════╝
 
 🔬 HYPOTHESIS EVALUATED:
    "{hypothesis[:200]}..."
@@ -647,7 +796,41 @@ class ConsensusAnalyzer:
 ⭐ EVIDENCE QUALITY:
    • Average methodological quality: {avg_methodological:.0f}/100
    • Articles analyzed: {consensus['total_articles']}
+   • Full text conclusions analyzed: {full_text_count}
 
+"""
+        
+        # NEW: Add DOI section for nuances articles
+        if doi_data['nuances']:
+            summary += "🔍 **ARTICLES THAT ADD NUANCE (MATIZAN) - WITH DOI:**\n\n"
+            for i, art in enumerate(doi_data['nuances'][:10], 1):
+                summary += f"   {i}. {art['authors']} ({art['year']})\n"
+                summary += f"      Title: {art['title']}\n"
+                summary += f"      DOI: {DOIFormatter.format_doi(art['doi'])}\n"
+                if art['pmid']:
+                    summary += f"      PMID: {art['pmid']}\n"
+                summary += "\n"
+            summary += "   💡 **Recommendation:** These articles are behind paywall. "
+            summary += "Use your institutional credentials or request via interlibrary loan.\n\n"
+        
+        # NEW: Add DOI section for confirms articles
+        if doi_data['confirms']:
+            summary += "✅ **ARTICLES THAT CONFIRM THE HYPOTHESIS - WITH DOI:**\n\n"
+            for i, art in enumerate(doi_data['confirms'][:10], 1):
+                summary += f"   {i}. {art['authors']} ({art['year']})\n"
+                summary += f"      Title: {art['title']}\n"
+                summary += f"      DOI: {DOIFormatter.format_doi(art['doi'])}\n"
+                if art['pmid']:
+                    summary += f"      PMID: {art['pmid']}\n"
+                summary += "\n"
+        
+        # If no DOIs available for nuances/confirms
+        if not doi_data['nuances'] and not doi_data['confirms']:
+            summary += "📄 **NO DOI AVAILABLE FOR RELEVANT ARTICLES**\n\n"
+            summary += "   The articles that add nuance or confirm the hypothesis do not have \n"
+            summary += "   available DOIs in PubMed. You can search by PMID or title directly.\n\n"
+        
+        summary += f"""
 🏆 BEST METHODOLOGICAL QUALITY:
    • {best_authors} ({best_year})
    • Design: {best_design}
@@ -726,13 +909,13 @@ except ImportError as e:
     st.warning(f"⚠️ SentenceTransformers not available: {e}")
     AI_EMBEDDINGS_AVAILABLE = False
 
-st.info(f"📊 Status: Embeddings={'✅' if AI_EMBEDDINGS_AVAILABLE else '❌'} | Clustering={'✅' if SKLEARN_AVAILABLE else '❌'} | Charts={'✅' if MATPLOTLIB_AVAILABLE else '❌'}")
+st.info(f"📊 Status: Embeddings={'✅' if AI_EMBEDDINGS_AVAILABLE else '❌'} | Clustering={'✅' if SKLEARN_AVAILABLE else '❌'} | Charts={'✅' if MATPLOTLIB_AVAILABLE else '❌'} | Full Text={'✅' if ENABLE_FULL_TEXT else '❌'}")
 
-st.set_page_config(page_title="PubMed AI Analyzer v8.7", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="PubMed AI Analyzer v8.9", page_icon="🧠", layout="wide")
 
 
 # ============================================================================
-# EVIDENCE HIERARCHY SYSTEM
+# EVIDENCE HIERARCHY, NUMERICAL EXTRACTOR, METHODOLOGICAL CHECKLIST
 # ============================================================================
 
 class EvidenceHierarchy:
@@ -814,7 +997,7 @@ class MethodologicalChecklist:
 
 
 # ============================================================================
-# EXPORT FUNCTIONS
+# EXPORT FUNCTIONS, CHART FUNCTIONS
 # ============================================================================
 
 class ReferenceExporter:
@@ -833,10 +1016,6 @@ class ReferenceExporter:
             lines.append(f"@article{{pmid_{pmid},\n  title = {{{a.get('title', '')}}},\n  journal = {{{a.get('journal', '')}}},\n  year = {{{a.get('pubdate', '')[:4]}}},\n  pmid = {{{pmid}}}\n}}\n")
         return "\n".join(lines)
 
-
-# ============================================================================
-# CHART FUNCTIONS
-# ============================================================================
 
 def plot_consensus_gauge(consensus: Dict) -> Optional[BytesIO]:
     if not MATPLOTLIB_AVAILABLE:
@@ -984,6 +1163,10 @@ def extract_article_info(doc_sum):
     article["journal"] = source_item.text if source_item is not None else "N/A"
     pubdate_item = doc_sum.find(".//Item[@Name='PubDate']")
     article["pubdate"] = pubdate_item.text if pubdate_item is not None else "N/A"
+    
+    doi_item = doc_sum.find(".//Item[@Name='DOI']")
+    article["doi"] = doi_item.text if doi_item is not None else None
+    
     return article
 
 
@@ -1008,8 +1191,12 @@ def extract_all_outcomes(text):
     return list(outcomes)
 
 
-def enhanced_article_analysis(title: str, abstract: str, hypothesis: str = "") -> Dict:
+def enhanced_article_analysis(title: str, abstract: str, hypothesis: str, 
+                               full_text_conclusions: str = None, 
+                               full_text_available: bool = False) -> Dict:
     full_text = f"{title} {abstract if abstract else ''}"
+    if full_text_conclusions:
+        full_text += f" {full_text_conclusions}"
     
     study_design, evidence_level, evidence_score = EvidenceHierarchy.classify_study_design(title, abstract, "")
     
@@ -1017,7 +1204,7 @@ def enhanced_article_analysis(title: str, abstract: str, hypothesis: str = "") -
     sample_size = numbers.get('n')
     best_effect = NumericalExtractor.get_best_effect_size(numbers)
     
-    relation_info = HypothesisRelationClassifier.classify(title, abstract, hypothesis)
+    relation_info = HypothesisRelationClassifier.classify(title, abstract, hypothesis, full_text_conclusions)
     
     all_outcomes = extract_all_outcomes(full_text)
     pico = PICOExtractor.extract_all(title, abstract)
@@ -1049,7 +1236,9 @@ def enhanced_article_analysis(title: str, abstract: str, hypothesis: str = "") -
         'methodological_score': methodological_score,
         'pico_population': pico['population'],
         'pico_intervention': pico['intervention'],
-        'pico_outcomes': pico['outcomes']
+        'pico_outcomes': pico['outcomes'],
+        'full_text_available': full_text_available,
+        'full_text_conclusions': full_text_conclusions[:500] if full_text_conclusions else None
     }
 
 
@@ -1062,6 +1251,7 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, hypothesis=""
     num_batches = math.ceil(total_to_process / batch_size)
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     articles = []
+    full_text_count = 0
     
     for batch_num in range(num_batches):
         start_idx = batch_num * batch_size
@@ -1091,7 +1281,26 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, hypothesis=""
                     abstract = get_abstract(article["pmid"])
                     article["abstract"] = abstract if abstract else "Not available"
                     
-                    enhanced = enhanced_article_analysis(article["title"], abstract, hypothesis)
+                    full_text_conclusions = None
+                    full_text_available = False
+                    
+                    if ENABLE_FULL_TEXT:
+                        ft_result = FullTextExtractor.extract_conclusions(
+                            pmid=article["pmid"], 
+                            doi=article.get("doi")
+                        )
+                        if ft_result['text']:
+                            full_text_conclusions = ft_result['text']
+                            full_text_available = True
+                            full_text_count += 1
+                    
+                    enhanced = enhanced_article_analysis(
+                        article["title"], 
+                        abstract, 
+                        hypothesis,
+                        full_text_conclusions,
+                        full_text_available
+                    )
                     article.update(enhanced)
                     article["block_number"] = block_number
                     articles.append(article)
@@ -1103,6 +1312,9 @@ def fetch_articles_details(id_list, query_terms, hypothesis_terms, hypothesis=""
                     time.sleep(5)
         
         time.sleep(1)
+    
+    if full_text_count > 0:
+        st.success(f"📄 Extracted conclusions from {full_text_count} Open Access articles")
     
     return articles
 
@@ -1118,6 +1330,9 @@ def calculate_relevance_to_hypothesis(articles, hypothesis):
         hypothesis_embedding = embedder.encode([hypothesis[:500]])[0]
         for article in articles:
             text = f"{article.get('title', '')} {article.get('abstract', '')}"
+            if article.get('full_text_conclusions'):
+                text += f" {article.get('full_text_conclusions')}"
+            
             if text and len(text) > 50:
                 article_embedding = embedder.encode([text[:1000]])[0]
                 similarity = cosine_similarity([hypothesis_embedding], [article_embedding])[0][0]
@@ -1310,11 +1525,14 @@ def generate_flavor_summary_human_style(flavor_data, flavor_type, hypothesis):
     name = flavor_data.get('name', 'Flavor')
     
     high_methodological = [a for a in articles if (a.get('methodological_score') or 0) >= 70]
+    full_text_articles = [a for a in articles if a.get('full_text_available', False)]
     
     if flavor_type == 'by_thesis':
         summary = f"### {name}\n\n{insight}\n\n"
         if high_methodological:
             summary += f"**📊 High methodological quality:** {len(high_methodological)} studies with quality ≥70/100.\n\n"
+        if full_text_articles:
+            summary += f"**📄 Full text conclusions analyzed:** {len(full_text_articles)} articles.\n\n"
         
         best = max(articles, key=lambda x: x.get('methodological_score') or 0) if articles else None
         if best:
@@ -1344,7 +1562,8 @@ def generate_flavor_summary_human_style(flavor_data, flavor_type, hypothesis):
         title = str(article.get('title', 'No title'))[:80]
         journal = str(article.get('journal', 'Journal'))[:30]
         year = str(article.get('pubdate', 'n.d.'))[:4]
-        citation = f"{i}. {authors}. {title}. {journal}. {year}"
+        ft_marker = " [FT]" if article.get('full_text_available') else ""
+        citation = f"{i}. {authors}. {title}. {journal}. {year}{ft_marker}"
         if pmid and pmid != 'N/A':
             citation += f"; PMID: {pmid}"
         citations.append(citation)
@@ -1353,7 +1572,7 @@ def generate_flavor_summary_human_style(flavor_data, flavor_type, hypothesis):
 
 
 # ============================================================================
-# COMPLETE DOCUMENT WITH INTERPRETATION SECTION
+# DOCUMENT GENERATION
 # ============================================================================
 
 def add_grade_table_to_doc(doc, articles):
@@ -1366,11 +1585,12 @@ def add_grade_table_to_doc(doc, articles):
     
     doc.add_heading('📊 Methodological Quality Table (top 10 studies)', level=2)
     doc.add_paragraph('NOTE: This table shows METHODOLOGICAL quality, NOT hypothesis confirmation.')
+    doc.add_paragraph('📄 [FT] = Full text conclusions were analyzed for this article.')
     
-    table = doc.add_table(rows=1, cols=7)
+    table = doc.add_table(rows=1, cols=8)
     table.style = 'Table Grid'
     
-    headers = ['Study', 'Design', 'N', 'EF (95%CI)', 'Methodological Quality', 'Relation', 'Design Score']
+    headers = ['Study', 'Design', 'N', 'EF (95%CI)', 'Methodological Quality', 'Relation', 'Score', 'FT']
     for i, header in enumerate(headers):
         table.rows[0].cells[i].text = header
     
@@ -1403,6 +1623,7 @@ def add_grade_table_to_doc(doc, articles):
                    'contradicts': '⚠️ Contradicts', 'unrelated': '📚 Unrelated'}
         row[5].text = rel_map.get(art.get('hypothesis_relation', 'unrelated'), '📚 Other')
         row[6].text = f"{art.get('evidence_score', 0):.0f}/100"
+        row[7].text = "✅" if art.get('full_text_available') else "❌"
     
     doc.add_paragraph()
 
@@ -1416,7 +1637,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
         section.left_margin = Inches(0.8)
         section.right_margin = Inches(0.8)
     
-    title = doc.add_heading('Evidence Analysis by Flavors v8.7', 0)
+    title = doc.add_heading('Evidence Analysis by Flavors v8.9', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     doc.add_paragraph(f'**Search strategy:** {str(query)[:200]}...')
@@ -1429,6 +1650,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     note_para = doc.add_paragraph()
     note_para.add_run('⚠️ IMPORTANT NOTE: ').bold = True
     note_para.add_run('Classification is based on EXPLICIT textual evidence (phrases like "confirms that").')
+    note_para.add_run('\n\n📄 NEW v8.9: DOIs of "nuances" and "confirms" articles are displayed in the Executive Summary for easy manual access.')
     
     doc.add_page_break()
     
@@ -1445,7 +1667,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     
     doc.add_page_break()
     
-    # EXECUTIVE SUMMARY
+    # EXECUTIVE SUMMARY (now includes DOIs)
     exec_title = doc.add_heading('📋 EXECUTIVE SUMMARY AND CONSENSUS ANALYSIS', level=1)
     exec_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
@@ -1466,19 +1688,17 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     
     doc.add_page_break()
     
-    # ================================================================
-    # NEW SECTION: WHAT DOES THIS MEAN? (v8.7)
-    # ================================================================
+    # WHAT DOES THIS MEAN? section
     doc.add_page_break()
     
-    # Calculate metrics for interpretive assistant
     methodological_scores = [a.get('methodological_score', 0) for a in all_articles if a.get('methodological_score') is not None]
     avg_methodological = sum(methodological_scores) / len(methodological_scores) if methodological_scores else 0
     
     relevant_articles = len(all_articles)
+    full_text_available = sum(1 for a in all_articles if a.get('full_text_available', False))
     
     interpretation = InterpretiveAssistant.generate_interpretation(
-        consensus, total_articles, relevant_articles, hypothesis, avg_methodological
+        consensus, total_articles, relevant_articles, hypothesis, avg_methodological, full_text_available
     )
     
     for line in interpretation.split('\n'):
@@ -1541,7 +1761,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     doc.add_heading('FLAVORS BY RELATION TO HYPOTHESIS', level=1)
     doc.add_paragraph('The following flavors group articles by how they relate to the hypothesis.')
     doc.add_paragraph('⚠️ Classification is based on EXPLICIT textual evidence.')
-    doc.add_paragraph()
+    doc.add_paragraph('📄 [FT] indicates full text conclusions were analyzed.\n')
     
     thesis_flavors = flavors.get('by_thesis', {})
     for relation, flavor_data in thesis_flavors.items():
@@ -1602,9 +1822,11 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     
     doc.add_paragraph()
     doc.add_paragraph('---')
-    doc.add_paragraph(f'*Document generated by PubMed AI Analyzer v8.7*')
+    doc.add_paragraph(f'*Document generated by PubMed AI Analyzer v8.9*')
     doc.add_paragraph(f'*Email configured with: {get_email_config()["email_user"]}*')
     doc.add_paragraph('*"Confirms" classification requires EXPLICIT textual evidence.*')
+    doc.add_paragraph('*📄 Full text conclusions extracted from Open Access articles (PMC + Unpaywall)*')
+    doc.add_paragraph('*🔍 DOIs of relevant articles are displayed in the Executive Summary for manual access.*')
     
     return doc
 
@@ -1618,6 +1840,7 @@ def export_articles_to_csv_enhanced(articles):
     for article in articles:
         row = {
             'PMID': article.get('pmid', ''),
+            'DOI': article.get('doi', ''),
             'Title': article.get('title', ''),
             'Authors': article.get('authors', ''),
             'Journal': article.get('journal', ''),
@@ -1633,6 +1856,8 @@ def export_articles_to_csv_enhanced(articles):
             'Relation Confidence': article.get('relation_confidence', 0),
             'Classification Reason': article.get('relation_reason', ''),
             'Validation Note': article.get('validation_note', ''),
+            'Full Text Available': article.get('full_text_available', False),
+            'Full Text Conclusions (excerpt)': (article.get('full_text_conclusions', '')[:500] if article.get('full_text_conclusions') else ''),
             'PICO_Population': article.get('pico_population', ''),
             'PICO_Intervention': article.get('pico_intervention', ''),
             'PICO_Outcomes': article.get('pico_outcomes', '')
@@ -1647,7 +1872,7 @@ def export_articles_to_csv_enhanced(articles):
 
 def display_flavors_preview_v8(flavors, consensus):
     st.markdown("---")
-    st.markdown("## 📋 EXECUTIVE SUMMARY v8.7")
+    st.markdown("## 📋 EXECUTIVE SUMMARY v8.9")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -1667,7 +1892,8 @@ def display_flavors_preview_v8(flavors, consensus):
             st.image(consensus_fig, use_container_width=True)
     
     st.markdown("---")
-    st.markdown("## 🎨 Generated Flavors (v8.7)")
+    st.markdown("## 🎨 Generated Flavors (v8.9)")
+    st.info("📄 **NEW:** DOIs of 'nuances' and 'confirms' articles are displayed in the Executive Summary (DOCX) for easy manual access.")
     
     thesis_flavors = flavors.get('by_thesis', {})
     if thesis_flavors:
@@ -1680,11 +1906,23 @@ def display_flavors_preview_v8(flavors, consensus):
                 st.markdown(f"📊 **Insight:** {flavor_data.get('insight', '')}")
                 st.markdown(f"⭐ **Average methodological quality:** {flavor_data.get('avg_methodological_score', 0):.0f}/100")
                 
+                ft_count = sum(1 for a in flavor_data.get('articles', []) if a.get('full_text_available'))
+                if ft_count > 0:
+                    st.markdown(f"📄 **Full text analyzed:** {ft_count} articles")
+                
+                # Show DOIs in preview
+                articles_with_doi = [a for a in flavor_data.get('articles', []) if a.get('doi')]
+                if articles_with_doi and relation in ['nuances', 'confirms']:
+                    st.markdown("**🔍 DOIs for manual access:**")
+                    for art in articles_with_doi[:5]:
+                        st.markdown(f"   • {art.get('doi')}")
+                
                 st.markdown("**📄 Featured articles (best methodological quality):**")
                 for i, art in enumerate(flavor_data.get('representative_articles', [])[:5], 1):
                     title = art.get('title', 'No title')[:80]
                     meth_score = art.get('methodological_score') or 0
-                    st.markdown(f"   {i}. {title}... (methodological quality={meth_score:.0f})")
+                    ft_marker = " [FT]" if art.get('full_text_available') else ""
+                    st.markdown(f"   {i}. {title}{ft_marker}... (methodological quality={meth_score:.0f})")
                     if art.get('validation_note'):
                         st.caption(f"   📝 {art.get('validation_note')}")
 
@@ -1751,6 +1989,9 @@ def process_and_generate_flavors(query, hypothesis, threshold, user_email, sessi
     hypothesis_terms = extract_key_terms_from_hypothesis(hypothesis)
     st.info(f"📝 Terms: {len(query_terms)} search, {len(hypothesis_terms)} hypothesis")
     
+    if ENABLE_FULL_TEXT:
+        st.info("📄 Full text conclusions extraction ENABLED (PMC + Unpaywall)")
+    
     progress_placeholder = st.empty()
     
     def update_progress(current, total):
@@ -1810,6 +2051,10 @@ def process_and_generate_flavors(query, hypothesis, threshold, user_email, sessi
     filtered_articles = deduplicate_articles(filtered_articles)
     st.info(f"📊 After deduplication: {len(filtered_articles)} unique articles")
     
+    ft_count = sum(1 for a in filtered_articles if a.get('full_text_available', False))
+    if ft_count > 0:
+        st.success(f"📄 Full text conclusions extracted for {ft_count} Open Access articles")
+    
     if len(filtered_articles) < 3:
         st.error(f"❌ Too few articles ({len(filtered_articles)}). Minimum 3 required.")
         return None, None, None, None, None
@@ -1859,8 +2104,8 @@ class UserSessionManager:
     def __init__(self, login):
         self.login = login
         self.storage = LocalStorage(login)
-        self.articles_file = f"{login}_articles_v87.csv"
-        self.sessions_file = f"{login}_sessions_v87.csv"
+        self.articles_file = f"{login}_articles_v89.csv"
+        self.sessions_file = f"{login}_sessions_v89.csv"
         self.current_session_id = None
     
     def create_session(self, query: str, hypothesis: str, relevance_threshold: float, email: str) -> str:
@@ -1899,6 +2144,9 @@ class UserSessionManager:
                 'authors': str(article.get('authors', ''))[:500],
                 'journal': str(article.get('journal', ''))[:200],
                 'abstract': str(article.get('abstract', ''))[:5000],
+                'doi': str(article.get('doi', ''))[:200],
+                'full_text_conclusions': str(article.get('full_text_conclusions', ''))[:2000] if article.get('full_text_conclusions') else '',
+                'full_text_available': bool(article.get('full_text_available', False)),
                 'methodological_score': float(article.get('methodological_score', 0) or 0),
                 'evidence_level': str(article.get('evidence_level', '')),
                 'evidence_score': int(article.get('evidence_score', 0) or 0),
@@ -1962,9 +2210,12 @@ class UserSessionManager:
 # ============================================================================
 
 def main():
-    st.title("🧠 PubMed AI Analyzer v8.7 ")
-    st.markdown("*Evidence analysis with CORRECTED classification + Assistant that interprets results*")
-    st.markdown("⚠️ **v8.7 New Feature:** New **'What Does This Mean?'** section that contextualizes numerical results and offers actionable recommendations.")
+    # ⚠️ CRITICAL: global declaration MUST be at the very beginning
+    global ENABLE_FULL_TEXT
+    
+    st.title("🧠 PubMed AI Analyzer v8.9")
+    st.markdown("*Evidence analysis with FULL TEXT CONCLUSIONS extraction and DOI display for relevant articles*")
+    st.markdown("⚠️ **v8.9 NEW FEATURE:** DOIs of 'nuances' and 'confirms' articles are now displayed in the Executive Summary for easy manual access to paywalled articles.")
     
     if 'user_login' not in st.session_state:
         st.markdown("### 🔐 Identification")
@@ -2006,10 +2257,18 @@ def main():
     )
     
     st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📄 Full Text Settings (v8.9)")
+    
+    enable_full_text = st.sidebar.checkbox("Extract full text conclusions", value=ENABLE_FULL_TEXT)
+    
+    st.sidebar.info("📄 Extracts Conclusions/Discussion from:\n- PubMed Central (PMC)\n- Unpaywall (Open Access PDFs)\n\n🔍 DOIs of relevant articles appear in Executive Summary")
+    
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### 🤖 AI Packages Loaded")
     st.sidebar.markdown(f"- **Embeddings:** {'✅' if AI_EMBEDDINGS_AVAILABLE else '❌'}")
     st.sidebar.markdown(f"- **Clustering:** {'✅' if SKLEARN_AVAILABLE else '❌'}")
     st.sidebar.markdown(f"- **Charts:** {'✅' if MATPLOTLIB_AVAILABLE else '❌'}")
+    st.sidebar.markdown(f"- **Full Text:** {'✅' if enable_full_text else '❌'}")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📧 Email Configuration")
@@ -2024,11 +2283,11 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📦 Export")
-    st.sidebar.markdown("- DOCX (with email)")
-    st.sidebar.markdown("- CSV (complete data)")
+    st.sidebar.markdown("- DOCX (with email and DOIs)")
+    st.sidebar.markdown("- CSV (with full text excerpts)")
     st.sidebar.markdown("- RIS / BibTeX")
     
-    st.info("⚡ **v8.7 NEW:** Includes **'What Does This Mean?'** section that automatically interprets results and offers personalized recommendations.")
+    st.info("⚡ **v8.9 NEW:** DOIs of 'nuances' and 'confirms' articles are displayed in the Executive Summary (DOCX). Click on DOI links to access paywalled articles via your institution.")
     st.markdown("---")
     
     default_query = '("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ("intramyocardial dissection"[tiab] OR "intramyocardial dissecting hematoma"[tiab])'
@@ -2040,7 +2299,7 @@ def main():
     
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        generate_button = st.button("🚀 GENERATE FLAVORS v8.7", type="primary", use_container_width=True)
+        generate_button = st.button("🚀 GENERATE FLAVORS v8.9", type="primary", use_container_width=True)
     with col2:
         send_email = st.checkbox("📧 Send by email", value=True)
     with col3:
@@ -2050,6 +2309,8 @@ def main():
         if not query.strip() or not hypothesis.strip():
             st.warning("⚠️ Please complete search and hypothesis fields")
         else:
+            ENABLE_FULL_TEXT = enable_full_text
+            
             session_manager = UserSessionManager(st.session_state.user_login)
             session_id = session_manager.create_session(query, hypothesis, threshold, st.session_state.user_email)
             
@@ -2077,7 +2338,7 @@ def main():
                     tab1, tab2, tab3, tab4 = st.tabs(["📄 DOCX", "📊 CSV", "📚 RIS", "📖 BibTeX"])
                     
                     with tab1:
-                        filename = f"flavors_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                        filename = f"flavors_v89_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
                         st.download_button(
                             "💾 DOWNLOAD DOCX",
                             data=docx_bytes,
@@ -2104,7 +2365,7 @@ def main():
                             st.download_button(
                                 "📊 DOWNLOAD CSV",
                                 data=csv_data,
-                                file_name=f"articles_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                file_name=f"articles_v89_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                 mime="text/csv",
                                 use_container_width=True
                             )
@@ -2114,7 +2375,7 @@ def main():
                         st.download_button(
                             "📚 DOWNLOAD RIS",
                             data=ris_data,
-                            file_name=f"references_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ris",
+                            file_name=f"references_v89_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ris",
                             mime="application/x-research-info-systems",
                             use_container_width=True
                         )
@@ -2124,18 +2385,30 @@ def main():
                         st.download_button(
                             "📖 DOWNLOAD BibTeX",
                             data=bib_data,
-                            file_name=f"references_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bib",
+                            file_name=f"references_v89_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bib",
                             mime="text/plain",
                             use_container_width=True
                         )
                     
                     st.success("✅ Process completed!")
-                    st.info("💡 **v8.7 New Feature:** Check the **'What Does This Mean?'** section in the DOCX document to contextually interpret the results.")
+                    
+                    # Show DOI summary in Streamlit
+                    doi_data = DOIFormatter.extract_dois_from_articles(articles)
+                    if doi_data['nuances']:
+                        st.info(f"🔍 {len(doi_data['nuances'])} article(s) that add nuance have DOIs available. Check the Executive Summary in the DOCX file.")
+                    if doi_data['confirms']:
+                        st.success(f"✅ {len(doi_data['confirms'])} article(s) that confirm the hypothesis have DOIs available.")
+                    
+                    ft_count = sum(1 for a in articles if a.get('full_text_available', False))
+                    if ft_count > 0:
+                        st.info(f"📄 Full text conclusions were extracted for {ft_count} Open Access articles.")
+                    else:
+                        st.info("📄 No Open Access full text articles were found. Use the DOIs in the Executive Summary to manually access paywalled articles via your institution.")
                 else:
                     st.error("❌ Could not generate flavors. Try with a lower threshold.")
     
     st.markdown("---")
-    st.markdown("*PubMed AI Analyzer v8.7 | Classification based on EXPLICIT textual evidence | Integrated interpretive assistant*")
+    st.markdown("*PubMed AI Analyzer v8.9 | Full text conclusions extraction | DOI display for relevant articles | Classification based on EXPLICIT textual evidence*")
 
 
 if __name__ == "__main__":
