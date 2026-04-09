@@ -1,15 +1,10 @@
 """
-PubMed AI Analyzer v8.4 - Human-Like Evidence Analysis Plus
-MEJORAS v8.4:
-- ENVÍO DE DOCX POR CORREO ELECTRÓNICO (configurado con secrets.toml)
-- Alertas de calidad (semáforo)
-- Detección de contradicciones entre estudios
-- Línea de tiempo de publicaciones
-- Tabla GRADE en DOCX
-- Forest plot de tamaños del efecto
-- Detección de sesgo de publicación
-- Extracción PICO automática
-- Resumen Ejecutivo + Análisis de Consenso
+PubMed AI Analyzer v8.7 - COMPLETO CON ASISTENTE INTERPRETATIVO
+- Basado en palabras15.py (funciona correctamente)
+- Incluye: embeddings (BioBERT/SBERT), clustering (KMeans), TF-IDF
+- NUEVO: Sección "¿Qué significa esto?" con interpretación contextual
+- Aumentado límite a 3000 artículos
+- SIN LLM (solo procesamiento local)
 """
 
 import streamlit as st
@@ -22,13 +17,11 @@ import re
 from collections import Counter
 import numpy as np
 import math
-import string
 import os
 from io import BytesIO, StringIO
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.style import WD_STYLE_TYPE
 import warnings
 import hashlib
 import json
@@ -39,410 +32,452 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# CONFIGURACIÓN DE SECRETS.TOML
+# CONFIGURACIÓN
 # ============================================================================
 
+MAX_ARTICLES = 3000      # Máximo de artículos a procesar
+BATCH_SIZE = 50          # Artículos por lote de PubMed API
+BLOCK_SIZE = 500         # Artículos por bloque de procesamiento
+REQUEST_DELAY = 0.5      # Segundos entre requests
+
 def get_email_config():
-    """Obtiene la configuración de email desde secrets.toml"""
     try:
-        config = {
+        return {
             'smtp_server': st.secrets.get("smtp_server", "smtp.gmail.com"),
             'smtp_port': int(st.secrets.get("smtp_port", 587)),
             'email_user': st.secrets.get("email_user", ""),
             'email_password': st.secrets.get("email_password", ""),
             'notification_email': st.secrets.get("notification_email", "")
         }
-        return config
-    except Exception as e:
-        return {
-            'smtp_server': "smtp.gmail.com",
-            'smtp_port': 587,
-            'email_user': "",
-            'email_password': "",
-            'notification_email': ""
-        }
+    except Exception:
+        return {'smtp_server': "smtp.gmail.com", 'smtp_port': 587, 'email_user': "", 'email_password': "", 'notification_email': ""}
 
 
 # ============================================================================
-# NUEVA MEJORA v8.4: ENVÍO DE CORREO ELECTRÓNICO
+# EMAIL SENDER
 # ============================================================================
 
 class EmailSender:
-    """Envía el documento DOCX por correo electrónico usando secrets.toml"""
-    
     @staticmethod
-    def send_docx_by_email(
-        recipient_email: str,
-        docx_bytes: BytesIO,
-        filename: str,
-        subject: str = None,
-        body: str = None
-    ) -> Tuple[bool, str]:
-        """
-        Envía un archivo DOCX por correo electrónico usando configuración de secrets.toml
-        """
+    def send_docx_by_email(recipient_email: str, docx_bytes: BytesIO, filename: str,
+                           subject: str = None, body: str = None) -> Tuple[bool, str]:
         config = get_email_config()
         
-        # Verificar configuración
         if not config['email_user'] or not config['email_password']:
-            return False, "❌ Configuración de correo no disponible. Verificar secrets.toml"
+            return False, "❌ Configuración de correo no disponible."
         
         if subject is None:
-            subject = f"PubMed AI Analyzer - Análisis de Evidencia - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            subject = f"PubMed AI Analyzer v8.7 - Análisis de Evidencia - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         if body is None:
             body = f"""
             Hola,
             
-            Adjunto encontrará el análisis de evidencia generado por PubMed AI Analyzer v8.4.
+            Adjunto encontrará el análisis de evidencia generado por PubMed AI Analyzer v8.7.
             
             Archivo: {filename}
-            Fecha de generación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             
-            El documento incluye:
-            - Resumen Ejecutivo y Análisis de Consenso
-            - Tabla GRADE de evidencia
-            - Forest plot de tamaños del efecto
-            - Análisis de sesgo de publicación
-            - Detección de contradicciones entre estudios
-            - Línea de tiempo de publicaciones
-            - Alertas de calidad metodológica
-            - Flavors por relación con hipótesis
-            - Clusters temáticos
+            Este documento incluye una nueva sección "¿Qué significa esto?" que interpreta
+            automáticamente los resultados para ayudarle a contextualizar sus hallazgos.
             
-            Este es un mensaje automático, por favor no responder a este correo.
-            
-            Saludos cordiales,
-            PubMed AI Analyzer
+            Este es un mensaje automático.
             """
         
-        # Crear mensaje
         msg = MIMEMultipart()
         msg['From'] = config['email_user']
         msg['To'] = recipient_email
         msg['Subject'] = subject
         
-        # Copia oculta al email de notificación si está configurado
         if config['notification_email']:
             msg['Bcc'] = config['notification_email']
         
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
-        # Adjuntar archivo
         try:
             docx_bytes.seek(0)
             attachment = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
             attachment.set_payload(docx_bytes.read())
             encoders.encode_base64(attachment)
-            attachment.add_header(
-                'Content-Disposition',
-                f'attachment; filename={filename}'
-            )
+            attachment.add_header('Content-Disposition', f'attachment; filename={filename}')
             msg.attach(attachment)
         except Exception as e:
-            return False, f"❌ Error al adjuntar archivo: {str(e)}"
+            return False, f"❌ Error al adjuntar: {str(e)}"
         
-        # Enviar correo
         try:
             with smtplib.SMTP(config['smtp_server'], config['smtp_port']) as server:
                 server.starttls()
                 server.login(config['email_user'], config['email_password'])
                 server.send_message(msg)
-            
-            # Mensaje de éxito con detalles
-            success_msg = f"✅ Documento enviado correctamente a {recipient_email}"
-            if config['notification_email']:
-                success_msg += f" (copia a {config['notification_email']})"
-            return True, success_msg
+            return True, f"✅ Enviado a {recipient_email}"
         except Exception as e:
-            return False, f"❌ Error al enviar correo: {str(e)}"
+            return False, f"❌ Error: {str(e)}"
     
     @staticmethod
     def get_email_config_status() -> Dict:
-        """Verifica si la configuración de email está disponible"""
         config = get_email_config()
-        
         return {
             'configured': bool(config['email_user'] and config['email_password']),
-            'sender_email': config['email_user'] if config['email_user'] else "No configurado",
-            'smtp_server': config['smtp_server'],
-            'notification_email': config['notification_email'] if config['notification_email'] else "No configurado"
+            'sender_email': config['email_user'] if config['email_user'] else "No configurado"
         }
-    
-    @staticmethod
-    def test_connection() -> Tuple[bool, str]:
-        """Prueba la conexión SMTP"""
-        config = get_email_config()
-        
-        if not config['email_user'] or not config['email_password']:
-            return False, "❌ Configuración incompleta en secrets.toml"
-        
-        try:
-            with smtplib.SMTP(config['smtp_server'], config['smtp_port']) as server:
-                server.starttls()
-                server.login(config['email_user'], config['email_password'])
-            return True, "✅ Conexión SMTP exitosa"
-        except Exception as e:
-            return False, f"❌ Error de conexión: {str(e)}"
 
 
 # ============================================================================
-# NUEVA MEJORA v8.3: ALERTAS DE CALIDAD (SISTEMA DE SEMÁFORO)
+# CLASIFICADOR DE RELACIÓN CON HIPÓTESIS
+# ============================================================================
+
+class HypothesisRelationClassifier:
+    CONFIRMS_PHRASES = [
+        'confirms that', 'demonstrates that', 'shows that',
+        'consistent with the hypothesis', 'supports the hypothesis',
+        'validates', 'our findings confirm', 'these results confirm',
+        'is consistent with', 'provides evidence for',
+        'confirm the hypothesis', 'support the hypothesis',
+        'findings support', 'results confirm'
+    ]
+    
+    CONTRADICTS_PHRASES = [
+        'contradicts the hypothesis', 'contrary to', 'disagrees with',
+        'opposite to what was expected', 'does not support',
+        'refutes', 'calls into question', 'inconsistent with the hypothesis'
+    ]
+    
+    NUANCES_PHRASES = ['however', 'although', 'but', 'except', 'whereas', 'interestingly', 'notably']
+    
+    @classmethod
+    def classify(cls, title: str, abstract: str, hypothesis: str) -> Dict:
+        if not abstract and not title:
+            return {'relation': 'unrelated', 'confidence': 0.0, 'reason': 'No hay texto'}
+        
+        text = f"{title} {abstract if abstract else ''}".lower()
+        
+        for phrase in cls.CONFIRMS_PHRASES:
+            if phrase in text:
+                return {'relation': 'confirms', 'confidence': 0.95, 'reason': f'Frase explícita: "{phrase}"'}
+        
+        for phrase in cls.CONTRADICTS_PHRASES:
+            if phrase in text:
+                return {'relation': 'contradicts', 'confidence': 0.95, 'reason': f'Frase explícita: "{phrase}"'}
+        
+        nuance_count = sum(1 for p in cls.NUANCES_PHRASES if p in text)
+        if nuance_count >= 2:
+            return {'relation': 'nuances', 'confidence': 0.6, 'reason': f'Presencia de matices ({nuance_count})'}
+        
+        return {'relation': 'unrelated', 'confidence': 0.3, 'reason': 'No se encontró evidencia textual explícita'}
+
+
+# ============================================================================
+# NUEVO: ASISTENTE INTERPRETATIVO (v8.7)
+# ============================================================================
+
+class InterpretiveAssistant:
+    """
+    Genera una sección "¿Qué significa esto?" que contextualiza
+    los resultados numéricos para el investigador.
+    """
+    
+    @staticmethod
+    def generate_interpretation(consensus: Dict, total_articles: int, 
+                                 relevant_articles: int, hypothesis: str,
+                                 avg_methodological: float) -> str:
+        """
+        Genera la interpretación contextual basada en los resultados.
+        """
+        confirms_pct = consensus.get('confirms_percentage', 0)
+        nuances_pct = consensus.get('nuances_percentage', 0)
+        contradicts_pct = consensus.get('contradicts_percentage', 0)
+        extends_pct = consensus.get('extends_percentage', 0)
+        unrelated_pct = 100 - (confirms_pct + nuances_pct + contradicts_pct + extends_pct)
+        
+        interpretation = "# 🤔 ¿QUÉ SIGNIFICA ESTO?\n\n"
+        interpretation += "Esta sección le ayuda a interpretar los resultados numéricos en contexto.\n\n"
+        interpretation += "---\n\n"
+        
+        # ================================================================
+        # 1. INTERPRETACIÓN DE LA CONFIRMACIÓN
+        # ================================================================
+        interpretation += "## 📊 Sobre la confirmación de la hipótesis\n\n"
+        
+        if confirms_pct == 0:
+            interpretation += "**🔴 0% de los estudios confirman explícitamente su hipótesis**\n\n"
+            interpretation += "→ Esto **NO significa que su hipótesis sea falsa**.\n"
+            interpretation += "→ Significa que ningún artículo contiene frases explícitas como "
+            interpretation += "*'confirms that'* o *'supports the hypothesis'* en relación a su hipótesis específica.\n\n"
+            interpretation += "**Posibles explicaciones:**\n"
+            interpretation += "• Su hipótesis no ha sido formalmente evaluada en la literatura\n"
+            interpretation += "• Los estudios existentes son predominantemente descriptivos (reportes de caso)\n"
+            interpretation += "• La confirmación requeriría un diseño de estudio específico que no se ha realizado\n"
+            interpretation += "• El lenguaje utilizado en los artículos es más cauto (ej: 'sugiere', 'podría indicar')\n\n"
+        elif confirms_pct < 30:
+            interpretation += f"**🟠 Solo {confirms_pct:.0f}% de los estudios confirman explícitamente su hipótesis**\n\n"
+            interpretation += "→ La evidencia de confirmación es escasa.\n"
+            interpretation += "→ La mayoría de los artículos no abordan directamente su hipótesis.\n\n"
+        elif confirms_pct > 70:
+            interpretation += f"**🟢 {confirms_pct:.0f}% de los estudios confirman explícitamente su hipótesis**\n\n"
+            interpretation += "→ Existe consenso sólido en la literatura.\n"
+            interpretation += "→ Su hipótesis está bien respaldada por evidencia explícita.\n\n"
+        else:
+            interpretation += f"**🟡 {confirms_pct:.0f}% de los estudios confirman explícitamente su hipótesis**\n\n"
+            interpretation += "→ El respaldo a su hipótesis es moderado.\n"
+            interpretation += "→ Existe evidencia, pero también espacio para más investigación.\n\n"
+        
+        # ================================================================
+        # 2. INTERPRETACIÓN DE CONTRADICCIONES
+        # ================================================================
+        if contradicts_pct > 0:
+            interpretation += "## ⚠️ Sobre las contradicciones\n\n"
+            if contradicts_pct > 30:
+                interpretation += f"**🔴 {contradicts_pct:.0f}% de los estudios contradicen su hipótesis**\n\n"
+                interpretation += "→ Existe evidencia significativa en contra de su hipótesis.\n"
+                interpretation += "→ Se recomienda revisar los artículos que contradicen para entender sus argumentos.\n\n"
+            else:
+                interpretation += f"**🟡 {contradicts_pct:.0f}% de los estudios contradicen su hipótesis**\n\n"
+                interpretation += "→ Hay alguna evidencia contraria, pero no es mayoritaria.\n"
+                interpretation += "→ Considere si estos estudios tienen limitaciones metodológicas.\n\n"
+        
+        # ================================================================
+        # 3. INTERPRETACIÓN DE RELEVANCIA
+        # ================================================================
+        interpretation += "## 📚 Sobre la relevancia de los artículos\n\n"
+        
+        if relevant_articles < 5:
+            interpretation += f"**📊 Solo {relevant_articles} artículos son realmente relevantes** "
+            interpretation += f"(de {total_articles} totales, {unrelated_pct:.0f}% no están relacionados)\n\n"
+            interpretation += "→ Su hipótesis específica apenas ha sido abordada en la literatura.\n"
+            interpretation += "→ Los artículos 'no relacionados' contienen las palabras de su búsqueda "
+            interpretation += "pero NO abordan su hipótesis específica.\n"
+            interpretation += "→ Esto es un hallazgo válido: la ausencia de literatura relevante es información útil.\n\n"
+            interpretation += "**Recomendación:** Considerar reformular su hipótesis como pregunta EXPLORATORIA "
+            interpretation += "en lugar de CONFIRMATORIA.\n\n"
+        elif relevant_articles < 15:
+            interpretation += f"**📊 {relevant_articles} artículos son relevantes** "
+            interpretation += f"(de {total_articles} totales)\n\n"
+            interpretation += "→ Existe un cuerpo de literatura moderado que aborda su tema.\n"
+            interpretation += "→ Suficiente para un análisis, pero no para conclusiones definitivas.\n\n"
+        else:
+            interpretation += f"**📊 {relevant_articles} artículos son relevantes** "
+            interpretation += f"(de {total_articles} totales)\n\n"
+            interpretation += "→ Existe un cuerpo de literatura sustancial sobre su tema.\n"
+            interpretation += "→ Los resultados tienen mayor robustez.\n\n"
+        
+        # ================================================================
+        # 4. INTERPRETACIÓN DE CALIDAD METODOLÓGICA
+        # ================================================================
+        interpretation += "## ⭐ Sobre la calidad metodológica\n\n"
+        
+        if avg_methodological < 30:
+            interpretation += f"**🔴 Calidad metodológica promedio: {avg_methodological:.0f}/100**\n\n"
+            interpretation += "→ La evidencia existente es predominantemente de **baja calidad**.\n"
+            interpretation += "→ Esto es **esperable** para:\n"
+            interpretation += "  • Enfermedades raras o condiciones poco frecuentes\n"
+            interpretation += "  • Temas emergentes con poca investigación previa\n"
+            interpretation += "  • Fenómenos descritos principalmente en reportes de caso\n"
+            interpretation += "→ **No indica que su análisis sea incorrecto**; refleja el estado de la literatura.\n\n"
+        elif avg_methodological < 60:
+            interpretation += f"**🟡 Calidad metodológica promedio: {avg_methodological:.0f}/100**\n\n"
+            interpretation += "→ La calidad metodológica es moderada.\n"
+            interpretation += "→ Los resultados deben interpretarse con cautela.\n\n"
+        else:
+            interpretation += f"**🟢 Calidad metodológica promedio: {avg_methodological:.0f}/100**\n\n"
+            interpretation += "→ La evidencia muestra buena calidad metodológica.\n"
+            interpretation += "→ Mayor confianza en los resultados.\n\n"
+        
+        # ================================================================
+        # 5. INTERPRETACIÓN DE MATICES Y EXTENSIONES
+        # ================================================================
+        if nuances_pct > 50:
+            interpretation += "## 🔍 Sobre los matices\n\n"
+            interpretation += f"**{nuances_pct:.0f}% de los artículos relevantes matizan su hipótesis**\n\n"
+            interpretation += "→ Estos artículos **mencionan** el fenómeno pero **no lo confirman explícitamente**.\n"
+            interpretation += "→ Pueden añadir condiciones, limitaciones o contextos específicos.\n"
+            interpretation += "→ Son útiles para entender la complejidad del tema.\n\n"
+        
+        if extends_pct > 20:
+            interpretation += "## 🚀 Sobre las extensiones\n\n"
+            interpretation += f"**{extends_pct:.0f}% de los artículos extienden su hipótesis**\n\n"
+            interpretation += "→ Algunos estudios aplican su hipótesis a nuevos contextos o poblaciones.\n"
+            interpretation += "→ Esto sugiere que el concepto tiene aplicabilidad más amplia.\n\n"
+        
+        # ================================================================
+        # 6. RECOMENDACIONES ACCIONABLES
+        # ================================================================
+        interpretation += "## 💡 RECOMENDACIONES BASADAS EN ESTOS RESULTADOS\n\n"
+        
+        if confirms_pct == 0 and relevant_articles < 5:
+            interpretation += "**✅ ACCIONES SUGERIDAS:**\n"
+            interpretation += "1. **Reformular la hipótesis como pregunta EXPLORATORIA** en lugar de confirmatoria\n"
+            interpretation += "2. **Realizar una revisión sistemática CUALITATIVA** de los reportes de caso\n"
+            interpretation += "3. **Usar estos resultados como JUSTIFICACIÓN** para investigación primaria\n"
+            interpretation += "4. **Considerar que la ausencia de evidencia NO es evidencia de ausencia**\n\n"
+            interpretation += "**❌ ACCIONES NO RECOMENDADAS:**\n"
+            interpretation += "1. Concluir que la hipótesis es falsa (no ha sido probada)\n"
+            interpretation += "2. Descartar el análisis como 'fallido' (el hallazgo es válido)\n"
+            interpretation += "3. Ignorar los artículos 'no relacionados' (pueden tener información contextual)\n\n"
+        elif confirms_pct > 50:
+            interpretation += "**✅ ACCIONES SUGERIDAS:**\n"
+            interpretation += "1. La hipótesis está respaldada por la evidencia\n"
+            interpretation += "2. Considerar aplicar los hallazgos en la práctica o investigación\n"
+            interpretation += "3. Identificar áreas donde aún hay incertidumbre\n\n"
+        elif contradicts_pct > 30:
+            interpretation += "**✅ ACCIONES SUGERIDAS:**\n"
+            interpretation += "1. Revisar críticamente los artículos que contradicen la hipótesis\n"
+            interpretation += "2. Evaluar si las contradicciones se deben a diferencias metodológicas\n"
+            interpretation += "3. Considerar refinar o modificar la hipótesis original\n\n"
+        else:
+            interpretation += "**✅ ACCIONES SUGERIDAS:**\n"
+            interpretation += "1. Mantener la hipótesis pero ajustar las expectativas\n"
+            interpretation += "2. Complementar con búsquedas en otras bases de datos (Google Scholar, Scopus)\n"
+            interpretation += "3. Considerar que la ausencia de evidencia NO es evidencia de ausencia\n"
+            interpretation += "4. Documentar esta brecha de conocimiento en futuras publicaciones\n\n"
+        
+        # ================================================================
+        # 7. NOTA SOBRE LA METODOLOGÍA DEL ANÁLISIS
+        # ================================================================
+        interpretation += "---\n\n"
+        interpretation += "## 📌 NOTA METODOLÓGICA\n\n"
+        interpretation += "La clasificación 'Confirma' requiere **evidencia textual EXPLÍCITA** "
+        interpretation += "(frases como *'confirms that'*, *'supports the hypothesis'*).\n\n"
+        interpretation += "Esto es INTENCIONAL para evitar:\n"
+        interpretation += "• Falsas confirmaciones por mera similitud temática\n"
+        interpretation += "• Interpretaciones subjetivas del contenido\n"
+        interpretation += "• Sesgos del investigador en la clasificación\n\n"
+        interpretation += "Si su hipótesis es correcta pero no está formulada en términos "
+        interpretation += "que aparezcan textualmente en los abstracts, obtendrá 0% de confirmaciones. "
+        interpretation += "Esto no invalida su hipótesis, sino que indica que no ha sido "
+        interpretation += "formalmente evaluada con ese lenguaje específico."
+        
+        return interpretation
+
+
+# ============================================================================
+# VALIDADOR DE FALSAS CONFIRMACIONES
+# ============================================================================
+
+class FalseConfirmationValidator:
+    @staticmethod
+    def validate(article: Dict, hypothesis: str) -> Dict:
+        if article.get('hypothesis_relation') != 'confirms':
+            return article
+        
+        text = f"{article.get('title', '')} {article.get('abstract', '')}".lower()
+        
+        explicit_confirmation = any(phrase in text for phrase in [
+            'confirms that', 'demonstrates that', 'consistent with the hypothesis'
+        ])
+        
+        if not explicit_confirmation:
+            article['hypothesis_relation'] = 'nuances'
+            article['relation_confidence'] = 0.4
+            article['validation_note'] = '⚠️ Posible falsa confirmación - no hay evidencia explícita.'
+        
+        return article
+
+
+# ============================================================================
+# ALERTAS DE CALIDAD
 # ============================================================================
 
 class QualityAlertSystem:
-    """Sistema de alertas de calidad metodológica con semáforo"""
-    
     @staticmethod
     def generate_alerts(articles: List[Dict]) -> Dict:
-        """Genera alertas automáticas sobre limitaciones metodológicas"""
         articles = deduplicate_articles(articles)
         total = len(articles)
         
-        alerts = {
-            'critical': [],   # 🔴 Crítico
-            'warning': [],    # 🟡 Advertencia
-            'info': [],       # 🔵 Informativo
-            'success': []     # 🟢 Éxito
-        }
+        if total == 0:
+            return {'alerts': {}, 'overall_level': "🔵 INFORMATIVO", 'overall_message': "No hay artículos"}
         
-        # 1. Análisis de tipos de estudio
+        alerts = {'critical': [], 'warning': [], 'success': []}
+        
         case_reports = sum(1 for a in articles if a.get('evidence_level') == 'Reporte de caso')
-        case_series = sum(1 for a in articles if a.get('evidence_level') == 'Serie de casos')
         rct = sum(1 for a in articles if a.get('evidence_level') == 'RCT')
-        meta_analysis = sum(1 for a in articles if a.get('evidence_level') == 'Meta-análisis')
         
         if case_reports / total > 0.5:
-            alerts['critical'].append({
-                'message': f'⚠️ {case_reports}/{total} ({case_reports/total*100:.0f}%) estudios son reportes de caso (evidencia muy limitada)',
-                'recommendation': 'Los resultados deben interpretarse con extrema cautela. Se necesitan estudios de mayor nivel evidencia.'
-            })
-        elif case_reports / total > 0.3:
-            alerts['warning'].append({
-                'message': f'📋 {case_reports}/{total} estudios son reportes de caso (>30% del total)',
-                'recommendation': 'Considere que la evidencia es predominantemente observacional.'
-            })
+            alerts['critical'].append({'message': f'⚠️ {case_reports}/{total} son reportes de caso', 'recommendation': 'Interpretar con cautela'})
         
         if rct > 0:
-            alerts['success'].append({
-                'message': f'✅ {rct} ensayo(s) randomizado(s) incluido(s)',
-                'recommendation': 'Fortaleza metodológica significativa.'
-            })
+            alerts['success'].append({'message': f'✅ {rct} ensayo(s) randomizado(s)', 'recommendation': ''})
         
-        if meta_analysis > 0:
-            alerts['success'].append({
-                'message': f'📊 {meta_analysis} meta-análisis(es) incluido(s)',
-                'recommendation': 'Alto nivel de evidencia sintetizada.'
-            })
+        low_quality = [a for a in articles if (a.get('methodological_score') or 0) < 30]
+        if len(low_quality) > total * 0.5:
+            alerts['critical'].append({'message': f'⚠️ {len(low_quality)}/{total} tienen baja calidad', 'recommendation': 'Hallazgos preliminares'})
         
-        # 2. Análisis de tamaños muestrales
-        small_samples = [a for a in articles if a.get('sample_size') and a['sample_size'] < 50]
-        large_samples = [a for a in articles if a.get('sample_size') and a['sample_size'] >= 200]
-        
-        if len(small_samples) > 0:
-            alerts['warning'].append({
-                'message': f'📏 {len(small_samples)} estudio(s) tienen N < 50 pacientes',
-                'recommendation': 'Los resultados pueden no ser generalizables.'
-            })
-        
-        if len(large_samples) >= 3:
-            alerts['success'].append({
-                'message': f'🎯 {len(large_samples)} estudio(s) con tamaño muestral ≥200',
-                'recommendation': 'Buena potencia estadística.'
-            })
-        
-        # 3. Análisis de calidad metodológica
-        high_quality = [a for a in articles if (a.get('methodological_score') or 0) >= 70]
-        low_quality = [a for a in articles if (a.get('methodological_score') or 0) < 50]
-        
-        if len(high_quality) >= len(articles) * 0.7:
-            alerts['success'].append({
-                'message': f'🏆 {len(high_quality)}/{len(articles)} estudios son de alta calidad metodológica (≥70/100)',
-                'recommendation': 'La evidencia es metodológicamente robusta.'
-            })
-        elif len(low_quality) > len(articles) * 0.5:
-            alerts['critical'].append({
-                'message': f'⚠️ {len(low_quality)}/{len(articles)} estudios tienen baja calidad metodológica (<50/100)',
-                'recommendation': 'Los hallazgos deben considerarse preliminares.'
-            })
-        
-        # 4. Análisis de tamaños del efecto
-        effect_studies = [a for a in articles if a.get('effect_value') and a['effect_value'] > 0]
-        if len(effect_studies) >= 3:
-            alerts['info'].append({
-                'message': f'📈 {len(effect_studies)} estudios reportan tamaños del efecto (HR/OR/RR)',
-                'recommendation': 'Posible realizar meta-análisis cuantitativo.'
-            })
-        
-        # 5. Análisis de heterogeneidad
-        positive_effect = [a for a in effect_studies if a.get('effect_value', 1) > 1]
-        negative_effect = [a for a in effect_studies if a.get('effect_value', 1) < 1]
-        
-        if len(positive_effect) > 0 and len(negative_effect) > 0:
-            alerts['warning'].append({
-                'message': f'🔄 Heterogeneidad detectada: {len(positive_effect)} estudios efecto positivo, {len(negative_effect)} efecto negativo',
-                'recommendation': 'Existe inconsistencia en la dirección del efecto.'
-            })
-        
-        # Determinar nivel de alerta general
         if alerts['critical']:
             overall_level = "🔴 CRÍTICO"
-            overall_message = "Existen limitaciones metodológicas graves que afectan la confianza en los resultados."
+            overall_message = "Limitaciones metodológicas graves."
         elif alerts['warning']:
             overall_level = "🟡 ADVERTENCIA"
-            overall_message = "Se identificaron limitaciones metodológicas que deben considerarse al interpretar los resultados."
-        elif alerts['success']:
-            overall_level = "🟢 FAVORABLE"
-            overall_message = "La evidencia muestra buena calidad metodológica."
+            overall_message = "Limitaciones a considerar."
         else:
-            overall_level = "🔵 INFORMATIVO"
-            overall_message = "Revise las recomendaciones para una interpretación adecuada."
+            overall_level = "🟢 FAVORABLE"
+            overall_message = "Buena calidad metodológica."
         
-        return {
-            'alerts': alerts,
-            'overall_level': overall_level,
-            'overall_message': overall_message,
-            'total_articles': total
-        }
+        return {'alerts': alerts, 'overall_level': overall_level, 'overall_message': overall_message, 'total_articles': total}
 
 
 # ============================================================================
-# NUEVA MEJORA v8.3: DETECCIÓN DE CONTRADICCIONES ENTRE ESTUDIOS
+# DETECCIÓN DE CONTRADICCIONES
 # ============================================================================
 
 class ContradictionDetector:
-    """Detecta contradicciones explícitas entre estudios"""
-    
     @staticmethod
     def find_contradictions(articles: List[Dict]) -> List[Dict]:
-        """Encuentra pares de artículos con conclusiones opuestas"""
         articles = deduplicate_articles(articles)
         contradictions = []
         
         for i, a1 in enumerate(articles):
             for a2 in articles[i+1:]:
-                conflict = None
-                
                 if a1.get('effect_value') and a2.get('effect_value'):
-                    if a1['effect_value'] > 1 and a2['effect_value'] < 1:
-                        conflict = {
-                            'type': 'effect_direction',
-                            'description': f"Dirección del efecto opuesta",
-                            'detail': f"{a1.get('authors', 'Estudio A')[:30]} reporta {a1.get('effect_type', 'HR')}={a1['effect_value']:.2f} (>1) vs {a2.get('authors', 'Estudio B')[:30]} reporta {a2.get('effect_type', 'HR')}={a2['effect_value']:.2f} (<1)"
-                        }
-                    elif a1['effect_value'] < 1 and a2['effect_value'] > 1:
-                        conflict = {
-                            'type': 'effect_direction',
-                            'description': f"Dirección del efecto opuesta",
-                            'detail': f"{a1.get('authors', 'Estudio A')[:30]} reporta {a1.get('effect_type', 'HR')}={a1['effect_value']:.2f} (<1) vs {a2.get('authors', 'Estudio B')[:30]} reporta {a2.get('effect_type', 'HR')}={a2['effect_value']:.2f} (>1)"
-                        }
-                
-                if not conflict:
-                    rel1 = a1.get('hypothesis_relation', 'unrelated')
-                    rel2 = a2.get('hypothesis_relation', 'unrelated')
-                    if (rel1 == 'confirms' and rel2 == 'contradicts') or (rel1 == 'contradicts' and rel2 == 'confirms'):
-                        conflict = {
-                            'type': 'hypothesis_relation',
-                            'description': f"Relación con hipótesis opuesta",
-                            'detail': f"{a1.get('authors', 'Estudio A')[:30]}: {rel1} vs {a2.get('authors', 'Estudio B')[:30]}: {rel2}"
-                        }
-                
-                if conflict:
-                    contradictions.append({
-                        'article1': a1,
-                        'article2': a2,
-                        'conflict': conflict
-                    })
-        
+                    if (a1['effect_value'] > 1 and a2['effect_value'] < 1) or (a1['effect_value'] < 1 and a2['effect_value'] > 1):
+                        contradictions.append({
+                            'article1': a1, 'article2': a2,
+                            'conflict': {'type': 'effect_direction', 'description': 'Dirección del efecto opuesta',
+                                        'detail': f"{a1.get('authors', 'A')[:30]} ({a1['effect_value']:.2f}) vs {a2.get('authors', 'B')[:30]} ({a2['effect_value']:.2f})"}
+                        })
         return contradictions
     
     @staticmethod
     def generate_contradiction_summary(contradictions: List[Dict]) -> str:
-        """Genera resumen de contradicciones encontradas"""
         if not contradictions:
-            return "✅ **No se detectaron contradicciones significativas** entre los estudios analizados."
-        
-        summary = f"⚠️ **Se detectaron {len(contradictions)} contradicción(es) entre estudios:**\n\n"
-        
-        for i, contra in enumerate(contradictions[:5], 1):
-            conflict = contra['conflict']
-            summary += f"{i}. **{conflict['description']}**\n"
-            summary += f"   {conflict['detail']}\n\n"
-        
-        if len(contradictions) > 5:
-            summary += f"... y {len(contradictions) - 5} contradicción(es) adicional(es).\n"
-        
-        summary += "\n**Recomendación:** Revisar los artículos en conflicto para identificar fuentes de heterogeneidad."
-        
-        return summary
+            return "✅ **No se detectaron contradicciones significativas**"
+        return f"⚠️ **Se detectaron {len(contradictions)} contradicción(es)**"
 
 
 # ============================================================================
-# NUEVA MEJORA v8.3: LÍNEA DE TIEMPO DE PUBLICACIONES
+# LÍNEA DE TIEMPO
 # ============================================================================
 
 class TemporalConsensusAnalyzer:
-    """Analiza la evolución temporal del consenso científico"""
-    
     @staticmethod
     def analyze_temporal_consensus(articles: List[Dict]) -> Dict:
         articles = deduplicate_articles(articles)
-        
         years_data = {}
+        
         for art in articles:
             year = art.get('pubdate', '')[:4]
             if year and year.isdigit() and 1990 <= int(year) <= datetime.now().year + 1:
                 if year not in years_data:
-                    years_data[year] = {
-                        'confirms': 0, 'contradicts': 0, 'nuances': 0, 
-                        'extends': 0, 'total': 0, 'avg_quality': []
-                    }
+                    years_data[year] = {'confirms': 0, 'total': 0}
                 years_data[year]['total'] += 1
-                relation = art.get('hypothesis_relation', 'unrelated')
-                if relation == 'confirms':
+                if art.get('hypothesis_relation') == 'confirms':
                     years_data[year]['confirms'] += 1
-                elif relation == 'contradicts':
-                    years_data[year]['contradicts'] += 1
-                elif relation == 'nuances':
-                    years_data[year]['nuances'] += 1
-                elif relation == 'extends':
-                    years_data[year]['extends'] += 1
-                
-                quality = art.get('quality_score', 0)
-                if quality:
-                    years_data[year]['avg_quality'].append(quality)
         
         for year, data in years_data.items():
             if data['total'] > 0:
                 data['confirms_pct'] = (data['confirms'] / data['total']) * 100
-                data['contradicts_pct'] = (data['contradicts'] / data['total']) * 100
-                data['avg_quality_score'] = sum(data['avg_quality']) / len(data['avg_quality']) if data['avg_quality'] else 0
         
         years_sorted = sorted(years_data.keys())
         if len(years_sorted) >= 3:
-            recent_years = years_sorted[-3:]
-            recent_avg_confirms = sum(years_data[y]['confirms_pct'] for y in recent_years) / 3
-            old_avg_confirms = sum(years_data[y]['confirms_pct'] for y in years_sorted[:3]) / 3
-            
-            if recent_avg_confirms > old_avg_confirms + 15:
-                trend = "📈 **Tendencia ALCISTA** - Aumenta la confirmación de la hipótesis"
-            elif recent_avg_confirms < old_avg_confirms - 15:
-                trend = "📉 **Tendencia BAJISTA** - Disminuye la confirmación de la hipótesis"
-            else:
-                trend = "➡️ **Tendencia ESTABLE** - El consenso se ha mantenido constante"
+            recent_avg = sum(years_data[y]['confirms_pct'] for y in years_sorted[-3:]) / 3
+            old_avg = sum(years_data[y]['confirms_pct'] for y in years_sorted[:3]) / 3
+            trend = "📈 ALCISTA" if recent_avg > old_avg + 15 else "📉 BAJISTA" if recent_avg < old_avg - 15 else "➡️ ESTABLE"
         else:
-            trend = "⚠️ **Datos insuficientes** para determinar tendencia"
+            trend = "⚠️ Datos insuficientes"
         
-        return {
-            'years_data': years_data,
-            'trend': trend,
-            'first_year': min(years_sorted) if years_sorted else None,
-            'last_year': max(years_sorted) if years_sorted else None,
-            'total_years': len(years_sorted)
-        }
+        return {'years_data': years_data, 'trend': trend}
     
     @staticmethod
     def create_temporal_plot(temporal_data: Dict) -> Optional[BytesIO]:
@@ -454,241 +489,146 @@ class TemporalConsensusAnalyzer:
             
             years = sorted(temporal_data['years_data'].keys())
             confirms_pct = [temporal_data['years_data'][y]['confirms_pct'] for y in years]
-            contradicts_pct = [temporal_data['years_data'][y]['contradicts_pct'] for y in years]
             total_studies = [temporal_data['years_data'][y]['total'] for y in years]
             
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-            
-            ax1.plot(years, confirms_pct, 'g-o', linewidth=2, markersize=8, label='Confirman (%)')
-            ax1.plot(years, contradicts_pct, 'r-s', linewidth=2, markersize=8, label='Contradicen (%)')
-            ax1.set_xlabel('Año de publicación')
-            ax1.set_ylabel('Porcentaje de estudios (%)')
-            ax1.set_title('Evolución del consenso científico por año')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-            ax1.set_ylim(0, 100)
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.bar(years, confirms_pct, color='green', alpha=0.7, label='Confirman (%)')
+            ax.set_xlabel('Año')
+            ax.set_ylabel('Porcentaje')
+            ax.set_title('Evolución del consenso científico')
+            ax.set_ylim(0, 100)
             
             for i, (year, n) in enumerate(zip(years, total_studies)):
-                ax1.annotate(f'n={n}', (year, confirms_pct[i]), 
-                            textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
-            
-            ax2.bar(years, confirms_pct, label='Confirman', color='green', alpha=0.7)
-            ax2.bar(years, contradicts_pct, bottom=confirms_pct, label='Contradicen', color='red', alpha=0.7)
-            
-            remaining = [100 - confirms_pct[i] - contradicts_pct[i] for i in range(len(years))]
-            ax2.bar(years, remaining, bottom=[confirms_pct[i] + contradicts_pct[i] for i in range(len(years))], 
-                   label='Matizan/Extienden', color='orange', alpha=0.5)
-            
-            ax2.set_xlabel('Año de publicación')
-            ax2.set_ylabel('Distribución (%)')
-            ax2.set_title('Distribución de relaciones con hipótesis por año')
-            ax2.legend(loc='upper right')
-            ax2.set_ylim(0, 100)
+                ax.annotate(f'n={n}', (year, confirms_pct[i]), textcoords="offset points", xytext=(0, 5), ha='center', fontsize=8)
             
             plt.tight_layout()
-            
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
             buf.seek(0)
             plt.close()
-            
             return buf
-        except Exception as e:
-            print(f"Error en gráfico temporal: {e}")
+        except:
             return None
     
     @staticmethod
     def generate_temporal_summary(temporal_data: Dict) -> str:
         if not temporal_data or not temporal_data.get('years_data'):
-            return "No hay suficientes datos para análisis temporal."
-        
-        years_data = temporal_data['years_data']
-        years_sorted = sorted(years_data.keys())
-        
-        if len(years_sorted) < 2:
-            return f"Estudios concentrados en un solo año ({years_sorted[0]})."
-        
-        summary = f"**📅 Análisis temporal ({temporal_data['first_year']} - {temporal_data['last_year']})**\n\n"
-        summary += f"• Período analizado: {temporal_data['total_years']} años\n"
-        summary += f"• {temporal_data['trend']}\n\n"
-        
-        max_year = max(years_data.keys(), key=lambda y: years_data[y]['total'])
-        summary += f"• **Mayor producción:** {max_year} ({years_data[max_year]['total']} estudios)\n"
-        
-        max_confirm_year = max(years_data.keys(), key=lambda y: years_data[y]['confirms_pct'])
-        summary += f"• **Mayor consenso:** {max_confirm_year} ({years_data[max_confirm_year]['confirms_pct']:.0f}% confirmación)\n"
-        
-        return summary
+            return "No hay suficientes datos."
+        return f"**📅 Análisis temporal:** {temporal_data['trend']}"
 
 
 # ============================================================================
-# NUEVA MEJORA v8.2: EXTRACCIÓN PICO
+# EXTRACCIÓN PICO
 # ============================================================================
 
 class PICOExtractor:
     @staticmethod
-    def extract_population(text: str) -> str:
-        text_lower = text.lower()
-        patterns = [
-            r'patients? with ([^.!]+)',
-            r'subjects? with ([^.!]+)',
-            r'population of ([^.!]+)',
-            r'enrolled ([^.!]+ patients?)',
-            r'study included ([^.!]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                return match.group(1).strip()[:100]
-        return "No especificada"
-    
-    @staticmethod
-    def extract_intervention(text: str) -> str:
-        text_lower = text.lower()
-        patterns = [
-            r'(?:treated with|received|underwent) ([^.!]+)',
-            r'intervention: ([^.!]+)',
-            r'exposed to ([^.!]+)',
-            r'(?:surgical|medical) ([^.!]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                return match.group(1).strip()[:100]
-        return "No especificada"
-    
-    @staticmethod
-    def extract_comparison(text: str) -> str:
-        text_lower = text.lower()
-        patterns = [
-            r'compared to ([^.!]+)',
-            r'vs\.? ([^.!]+)',
-            r'versus ([^.!]+)',
-            r'compared with ([^.!]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                return match.group(1).strip()[:100]
-        return "No especificada"
-    
-    @staticmethod
-    def extract_outcomes(text: str) -> List[str]:
-        text_lower = text.lower()
-        outcome_keywords = [
-            'mortality', 'death', 'survival', 'rupture', 'bleeding', 'hemorrhage',
-            'stroke', 'reinfarction', 'complication', 'heart failure', 'hf',
-            'mace', 'major adverse', 'recovery', 'improvement', 'remodeling'
-        ]
-        found = [kw for kw in outcome_keywords if kw in text_lower]
-        return found[:3] if found else ["No especificado"]
-    
-    @classmethod
-    def extract_all(cls, title: str, abstract: str) -> Dict:
-        full_text = f"{title} {abstract if abstract else ''}"
+    def extract_all(title: str, abstract: str) -> Dict:
+        text = f"{title} {abstract if abstract else ''}".lower()
+        pop_match = re.search(r'patients? with ([^.!]+)', text)
+        outcomes = [kw for kw in ['mortality', 'rupture', 'bleeding', 'stroke'] if kw in text]
+        
         return {
-            'population': cls.extract_population(full_text),
-            'intervention': cls.extract_intervention(full_text),
-            'comparison': cls.extract_comparison(full_text),
-            'outcomes': cls.extract_outcomes(full_text),
-            'pico_string': f"P: {cls.extract_population(full_text)[:50]} | I: {cls.extract_intervention(full_text)[:30]} | O: {', '.join(cls.extract_outcomes(full_text)[:2])}"
+            'population': pop_match.group(1)[:100] if pop_match else "No especificada",
+            'intervention': "No especificada",
+            'outcomes': ', '.join(outcomes) if outcomes else "No especificado"
         }
 
 
 # ============================================================================
-# DEDUPLICACIÓN DE ARTÍCULOS
+# DEDUPLICACIÓN
 # ============================================================================
 
 def deduplicate_articles(articles: List[Dict]) -> List[Dict]:
-    seen_pmids = set()
-    unique_articles = []
-    for article in articles:
-        pmid = article.get('pmid', '')
-        if pmid and pmid not in seen_pmids:
-            seen_pmids.add(pmid)
-            unique_articles.append(article)
-        elif not pmid:
-            title = article.get('title', '')[:100]
-            if title not in seen_pmids:
-                seen_pmids.add(title)
-                unique_articles.append(article)
-    return unique_articles
+    if not articles:
+        return []
+    seen = set()
+    unique = []
+    for a in articles:
+        pmid = a.get('pmid', '')
+        if pmid and pmid not in seen:
+            seen.add(pmid)
+            unique.append(a)
+    return unique
 
 
 # ============================================================================
-# ANÁLISIS DE CONSENSO Y RESUMEN EJECUTIVO
+# ANÁLISIS DE CONSENSO
 # ============================================================================
 
 class ConsensusAnalyzer:
     @staticmethod
     def calculate_consensus(articles: List[Dict]) -> Dict:
         if not articles:
-            return {'consensus_level': 'Sin datos', 'percentage': 0, 'details': {}}
+            return {'consensus_level': 'Sin datos', 'confirms_percentage': 0, 'relation_counts': {}, 'total_articles': 0}
         
         articles = deduplicate_articles(articles)
         relation_counts = Counter()
         for a in articles:
-            relation = a.get('hypothesis_relation', 'unrelated')
-            relation_counts[relation] += 1
+            relation_counts[a.get('hypothesis_relation', 'unrelated')] += 1
         
         total = len(articles)
-        confirms_pct = (relation_counts.get('confirms', 0) / total) * 100
-        contradicts_pct = (relation_counts.get('contradicts', 0) / total) * 100
-        nuances_pct = (relation_counts.get('nuances', 0) / total) * 100
-        extends_pct = (relation_counts.get('extends', 0) / total) * 100
+        confirms_pct = (relation_counts.get('confirms', 0) / total) * 100 if total > 0 else 0
         
         if confirms_pct >= 70:
             consensus_level = "MUY ALTO"
             consensus_color = "🟢"
-            consensus_message = "La evidencia es sólida y consistente. La hipótesis está ampliamente respaldada."
+            consensus_message = "La evidencia es sólida y consistente."
         elif confirms_pct >= 50:
             consensus_level = "MODERADO"
             consensus_color = "🟡"
-            consensus_message = "Existe respaldo mayoritario, pero hay evidencia que matiza o contradice parcialmente."
+            consensus_message = "Existe respaldo mayoritario."
         elif confirms_pct >= 30:
             consensus_level = "BAJO"
             consensus_color = "🟠"
-            consensus_message = "La evidencia es mixta. Se necesitan más estudios."
+            consensus_message = "La evidencia es mixta."
         else:
             consensus_level = "MUY BAJO / CONTROVERSIA"
             consensus_color = "🔴"
-            consensus_message = "Existe controversia significativa."
-        
-        high_quality_confirms = sum(1 for a in articles 
-                                    if a.get('hypothesis_relation') == 'confirms' 
-                                    and (a.get('evidence_score') or 0) >= 80)
+            consensus_message = "No hay evidencia explícita de confirmación."
         
         return {
             'consensus_level': consensus_level,
             'consensus_color': consensus_color,
             'consensus_message': consensus_message,
             'confirms_percentage': confirms_pct,
-            'contradicts_percentage': contradicts_pct,
-            'nuances_percentage': nuances_pct,
-            'extends_percentage': extends_pct,
-            'high_quality_confirms': high_quality_confirms,
-            'total_articles': total,
-            'relation_counts': dict(relation_counts)
+            'contradicts_percentage': (relation_counts.get('contradicts', 0) / total) * 100 if total > 0 else 0,
+            'nuances_percentage': (relation_counts.get('nuances', 0) / total) * 100 if total > 0 else 0,
+            'extends_percentage': (relation_counts.get('extends', 0) / total) * 100 if total > 0 else 0,
+            'relation_counts': dict(relation_counts),
+            'total_articles': total
         }
     
     @staticmethod
     def generate_executive_summary(articles: List[Dict], hypothesis: str, query: str) -> str:
+        if not articles:
+            return "❌ **No hay artículos para analizar.**"
+        
         articles = deduplicate_articles(articles)
         consensus = ConsensusAnalyzer.calculate_consensus(articles)
         
-        avg_quality = np.mean([a.get('quality_score', 0) or 0 for a in articles])
-        avg_evidence = np.mean([a.get('evidence_score', 0) or 0 for a in articles])
+        methodological_scores = [a.get('methodological_score', 0) for a in articles if a.get('methodological_score') is not None]
+        avg_methodological = sum(methodological_scores) / len(methodological_scores) if methodological_scores else 0
         
-        best_article = max(articles, key=lambda x: x.get('evidence_score', 0) or 0)
-        best_evidence = best_article.get('evidence_score', 0)
-        best_design = best_article.get('study_design', 'Estudio')
+        if articles:
+            best_article = max(articles, key=lambda x: x.get('methodological_score', 0) or 0)
+            best_authors = best_article.get('authors', 'Autor')[:80]
+            best_year = best_article.get('pubdate', 's.f.')[:4]
+            best_design = best_article.get('study_design', 'Estudio')
+            best_relation = best_article.get('hypothesis_relation', 'unrelated')
+            best_score = best_article.get('methodological_score', 0)
+        else:
+            best_authors = "No disponible"
+            best_year = "N/A"
+            best_design = "N/A"
+            best_relation = "N/A"
+            best_score = 0
         
-        years = [a.get('pubdate', '')[:4] for a in articles if a.get('pubdate') and len(a.get('pubdate', '')) >= 4]
-        year_counts = Counter(years)
+        relation_symbol = {'confirms': '✅', 'contradicts': '⚠️', 'nuances': '🔍', 'extends': '🚀', 'unrelated': '📚'}.get(best_relation, '📚')
         
         summary = f"""
 ╔════════════════════════════════════════════════════════════╗
-                         📋 RESUMEN EJECUTIVO                                       
+                         📋 RESUMEN EJECUTIVO v8.7                                   
 ╚════════════════════════════════════════════════════════════╝
 
 🔬 HIPÓTESIS EVALUADA:
@@ -698,217 +638,145 @@ class ConsensusAnalyzer:
    {consensus['consensus_message']}
 
 📈 DISTRIBUCIÓN DE EVIDENCIA:
-   • Confirman la hipótesis: {consensus['confirms_percentage']:.1f}% ({consensus['relation_counts'].get('confirms', 0)} estudios)
-   • Matizan la hipótesis: {consensus['nuances_percentage']:.1f}% ({consensus['relation_counts'].get('nuances', 0)} estudios)
-   • Extienden la hipótesis: {consensus['extends_percentage']:.1f}% ({consensus['relation_counts'].get('extends', 0)} estudios)
-   • Contradicen la hipótesis: {consensus['contradicts_percentage']:.1f}% ({consensus['relation_counts'].get('contradicts', 0)} estudios)
+   • Confirman: {consensus['confirms_percentage']:.1f}% ({consensus['relation_counts'].get('confirms', 0)} estudios)
+   • Matizan: {consensus['nuances_percentage']:.1f}% ({consensus['relation_counts'].get('nuances', 0)} estudios)
+   • Extienden: {consensus['extends_percentage']:.1f}% ({consensus['relation_counts'].get('extends', 0)} estudios)
+   • Contradicen: {consensus['contradicts_percentage']:.1f}% ({consensus['relation_counts'].get('contradicts', 0)} estudios)
 
 ⭐ CALIDAD DE LA EVIDENCIA:
-   • Calidad metodológica promedio: {avg_quality:.0f}/100
-   • Nivel de evidencia promedio: {avg_evidence:.0f}/100
-   • Estudios de alta calidad que CONFIRMAN: {consensus['high_quality_confirms']}
+   • Calidad metodológica promedio: {avg_methodological:.0f}/100
+   • Artículos analizados: {consensus['total_articles']}
 
-🏆 ESTUDIO DESTACADO:
-   • {best_article.get('authors', 'Autor')[:80]} ({best_article.get('pubdate', 's.f.')[:4]})
+🏆 MEJOR CALIDAD METODOLÓGICA:
+   • {best_authors} ({best_year})
    • Diseño: {best_design}
-   • Score evidencia: {best_evidence}/100
+   • Relación: {relation_symbol} {best_relation}
+   • Score metodológico: {best_score:.0f}/100
 
-"""
-        summary += "\n💡 RECOMENDACIÓN CLÍNICA:\n   "
-        if consensus['consensus_level'] in ["MUY ALTO", "MODERADO"] and consensus['confirms_percentage'] >= 50:
-            summary += "La evidencia respalda la hipótesis. Los hallazgos son consistentes y aplicables a la práctica clínica."
-        elif consensus['consensus_level'] == "BAJO":
-            summary += "La evidencia es mixta. Se recomienda cautela en la interpretación."
+💡 RECOMENDACIÓN CLÍNICA:
+   """
+        if consensus['confirms_percentage'] >= 50:
+            summary += "La evidencia respalda la hipótesis con confirmación textual explícita."
+        elif consensus['nuances_percentage'] >= 50:
+            summary += "La mayoría de los estudios matizan la hipótesis."
         else:
-            summary += "Existe controversia significativa. No se puede establecer una conclusión firme."
+            summary += "No se encontró evidencia textual explícita que confirme la hipótesis específica."
         
         return summary
 
 
 # ============================================================================
-# CONFIGURACIÓN DE EMBEDDINGS
+# CONFIGURACIÓN DE PAQUETES AI
 # ============================================================================
 
 AI_EMBEDDINGS_AVAILABLE = False
 BIOMED_EMBEDDER = None
 FALLBACK_EMBEDDER = None
 USE_FALLBACK = False
+MATPLOTLIB_AVAILABLE = False
+SKLEARN_AVAILABLE = False
+
+st.info("🔄 Cargando paquetes de IA (BioBERT, clustering, etc.)...")
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity
     from sklearn.cluster import KMeans
     from sklearn.decomposition import TruncatedSVD
     from sklearn.feature_extraction.text import TfidfVectorizer
-    
-    try:
-        from sentence_transformers import SentenceTransformer
-        import torch
-        
-        with st.spinner("🔄 Loading embeddings model..."):
-            try:
-                BIOMED_EMBEDDER = SentenceTransformer(
-                    'pritamdeka/S-Biomed-Roberta-snli-multinli-stsb',
-                    device='cpu'
-                )
-                AI_EMBEDDINGS_AVAILABLE = True
-                USE_FALLBACK = False
-                st.success("✅ BioBERT embeddings available")
-            except:
-                try:
-                    FALLBACK_EMBEDDER = SentenceTransformer(
-                        'all-MiniLM-L6-v2',
-                        device='cpu'
-                    )
-                    AI_EMBEDDINGS_AVAILABLE = True
-                    USE_FALLBACK = True
-                    st.warning("⚠️ BioBERT unavailable, using SBERT")
-                except:
-                    AI_EMBEDDINGS_AVAILABLE = False
-    except ImportError:
-        AI_EMBEDDINGS_AVAILABLE = False
-        
-except Exception as e:
-    print(f"⚠️ Some ML libraries not available: {e}")
-    AI_EMBEDDINGS_AVAILABLE = False
+    SKLEARN_AVAILABLE = True
+    st.success("✅ Scikit-learn disponible (clustering, TF-IDF)")
+except ImportError as e:
+    st.warning(f"⚠️ Scikit-learn no disponible: {e}")
 
 try:
     import matplotlib.pyplot as plt
     MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-    st.warning("⚠️ matplotlib no instalado")
+    st.success("✅ Matplotlib disponible (gráficos)")
+except ImportError as e:
+    st.warning(f"⚠️ Matplotlib no disponible: {e}")
 
-st.set_page_config(
-    page_title="PubMed AI Analyzer v8.4",
-    page_icon="🧠",
-    layout="wide"
-)
-
-
-# ============================================================================
-# CACHÉ DE EMBEDDINGS
-# ============================================================================
-
-class EmbeddingCache:
-    def __init__(self, cache_dir="./embedding_cache"):
-        self.cache_dir = cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
+try:
+    from sentence_transformers import SentenceTransformer
+    import torch
     
-    def _get_hash(self, text: str) -> str:
-        return hashlib.md5(text.encode()).hexdigest()[:16]
-    
-    def get(self, text: str) -> Optional[np.ndarray]:
-        hash_key = self._get_hash(text)
-        cache_file = os.path.join(self.cache_dir, f"{hash_key}.pkl")
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, 'rb') as f:
-                    return pickle.load(f)
-            except:
-                pass
-        return None
-    
-    def set(self, text: str, embedding: np.ndarray):
-        hash_key = self._get_hash(text)
-        cache_file = os.path.join(self.cache_dir, f"{hash_key}.pkl")
+    with st.spinner("🔄 Cargando modelo BioBERT..."):
         try:
-            with open(cache_file, 'wb') as f:
-                pickle.dump(embedding, f)
-        except:
-            pass
+            BIOMED_EMBEDDER = SentenceTransformer(
+                'pritamdeka/S-Biomed-Roberta-snli-multinli-stsb',
+                device='cpu'
+            )
+            AI_EMBEDDINGS_AVAILABLE = True
+            USE_FALLBACK = False
+            st.success("✅ BioBERT embeddings disponible (para relevancia y clustering)")
+        except Exception as e:
+            st.warning(f"⚠️ BioBERT no disponible: {e}")
+            try:
+                FALLBACK_EMBEDDER = SentenceTransformer(
+                    'all-MiniLM-L6-v2',
+                    device='cpu'
+                )
+                AI_EMBEDDINGS_AVAILABLE = True
+                USE_FALLBACK = True
+                st.success("✅ SBERT (fallback) disponible")
+            except Exception as e2:
+                st.warning(f"⚠️ SBERT no disponible: {e2}")
+                AI_EMBEDDINGS_AVAILABLE = False
+except ImportError as e:
+    st.warning(f"⚠️ SentenceTransformers no disponible: {e}")
+    AI_EMBEDDINGS_AVAILABLE = False
 
-embedding_cache = EmbeddingCache()
+st.info(f"📊 Estado: Embeddings={'✅' if AI_EMBEDDINGS_AVAILABLE else '❌'} | Clustering={'✅' if SKLEARN_AVAILABLE else '❌'} | Gráficos={'✅' if MATPLOTLIB_AVAILABLE else '❌'}")
+
+st.set_page_config(page_title="PubMed AI Analyzer v8.7", page_icon="🧠", layout="wide")
 
 
 # ============================================================================
-# SISTEMA DE PONDERACIÓN POR NIVEL DE EVIDENCIA
+# SISTEMA DE PONDERACIÓN
 # ============================================================================
 
 class EvidenceHierarchy:
-    EVIDENCE_LEVELS = {
-        'meta-analysis': {'level': 1, 'score': 100, 'name': 'Meta-análisis'},
-        'systematic_review': {'level': 1, 'score': 100, 'name': 'Revisión sistemática'},
-        'rct': {'level': 1, 'score': 95, 'name': 'RCT'},
-        'randomized_trial': {'level': 1, 'score': 95, 'name': 'Ensayo randomizado'},
-        'prospective_cohort': {'level': 2, 'score': 80, 'name': 'Cohorte prospectivo'},
-        'retrospective_cohort': {'level': 3, 'score': 60, 'name': 'Cohorte retrospectivo'},
-        'case_control': {'level': 3, 'score': 55, 'name': 'Caso-control'},
-        'case_series': {'level': 4, 'score': 35, 'name': 'Serie de casos'},
-        'case_report': {'level': 5, 'score': 20, 'name': 'Reporte de caso'},
-        'observational': {'level': 3, 'score': 50, 'name': 'Observacional'},
-    }
-    
     @classmethod
     def classify_study_design(cls, title: str, abstract: str, study_types: str) -> Tuple[str, int, int]:
         text = f"{title} {abstract} {study_types}".lower()
         
-        patterns = {
-            'meta-analysis': ['meta-analysis', 'meta analysis', 'systematic review'],
-            'rct': ['randomized controlled trial', 'randomised controlled trial', 'rct'],
-            'prospective_cohort': ['prospective cohort', 'prospective study'],
-            'retrospective_cohort': ['retrospective cohort', 'retrospective study'],
-            'case_control': ['case-control', 'case control'],
-            'case_series': ['case series'],
-            'case_report': ['case report'],
-        }
-        
-        for design, keywords in patterns.items():
-            if any(kw in text for kw in keywords):
-                info = cls.EVIDENCE_LEVELS.get(design, cls.EVIDENCE_LEVELS['observational'])
-                return info['name'], info['level'], info['score']
+        if 'meta-analysis' in text or 'systematic review' in text:
+            return 'Meta-análisis', 1, 100
+        if 'randomized controlled trial' in text or 'rct' in text:
+            return 'RCT', 1, 95
+        if 'prospective cohort' in text:
+            return 'Cohorte prospectivo', 2, 80
+        if 'retrospective cohort' in text:
+            return 'Cohorte retrospectivo', 3, 60
+        if 'case-control' in text:
+            return 'Caso-control', 3, 55
+        if 'case series' in text:
+            return 'Serie de casos', 4, 35
+        if 'case report' in text:
+            return 'Reporte de caso', 5, 20
         
         return 'No clasificado', 5, 10
     
     @classmethod
     def extract_sample_size(cls, text: str) -> Optional[int]:
-        patterns = [
-            r'n\s*[=:]\s*(\d+)',
-            r'sample size\s*[=:]\s*(\d+)',
-            r'patients?\s*[=:]\s*(\d+)',
-            r'(\d+)\s*patients?',
-        ]
+        patterns = [r'n\s*[=:]\s*(\d+)', r'patients?\s*[=:]\s*(\d+)', r'(\d+)\s*patients']
         for pattern in patterns:
             match = re.search(pattern, text.lower())
             if match:
-                return int(match.group(1))
+                val = int(match.group(1))
+                if 1 <= val <= 50000:
+                    return val
         return None
 
 
 class NumericalExtractor:
     @staticmethod
     def extract_all_numbers(text: str) -> Dict:
-        results = {'hr': [], 'rr': [], 'or': [], 'p_values': [], 'n': None}
+        results = {'hr': [], 'rr': [], 'or': [], 'n': None}
         
-        hr_pattern = r'HR[\s]*[=:]?[\s]*([0-9.]+)[\s]*\(([0-9.]+)[-\s]+([0-9.]+)\)'
-        for match in re.finditer(hr_pattern, text, re.IGNORECASE):
-            results['hr'].append({
-                'value': float(match.group(1)),
-                'ci_lower': float(match.group(2)),
-                'ci_upper': float(match.group(3))
-            })
-        
-        rr_pattern = r'RR[\s]*[=:]?[\s]*([0-9.]+)[\s]*\(([0-9.]+)[-\s]+([0-9.]+)\)'
-        for match in re.finditer(rr_pattern, text, re.IGNORECASE):
-            results['rr'].append({
-                'value': float(match.group(1)),
-                'ci_lower': float(match.group(2)),
-                'ci_upper': float(match.group(3))
-            })
-        
-        or_pattern = r'OR[\s]*[=:]?[\s]*([0-9.]+)[\s]*\(([0-9.]+)[-\s]+([0-9.]+)\)'
-        for match in re.finditer(or_pattern, text, re.IGNORECASE):
-            results['or'].append({
-                'value': float(match.group(1)),
-                'ci_lower': float(match.group(2)),
-                'ci_upper': float(match.group(3))
-            })
-        
-        p_pattern = r'p[\s]*[=<>]?\s*([0-9.]+[e-]?[0-9]*)'
-        for match in re.finditer(p_pattern, text, re.IGNORECASE):
-            try:
-                results['p_values'].append(float(match.group(1)))
-            except:
-                pass
+        for effect in ['HR', 'RR', 'OR']:
+            pattern = rf'{effect}[\s]*[=:]?[\s]*([0-9.]+)[\s]*\(([0-9.]+)[-\s]+([0-9.]+)\)'
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                results[effect.lower()].append({'value': float(match.group(1)), 'ci_lower': float(match.group(2)), 'ci_upper': float(match.group(3))})
         
         results['n'] = EvidenceHierarchy.extract_sample_size(text)
         return results
@@ -917,118 +785,56 @@ class NumericalExtractor:
     def get_best_effect_size(numbers: Dict) -> Optional[Dict]:
         for effect_type in ['hr', 'or', 'rr']:
             if numbers.get(effect_type):
-                return {
-                    'type': effect_type.upper(),
-                    'value': numbers[effect_type][0]['value'],
-                    'ci_lower': numbers[effect_type][0]['ci_lower'],
-                    'ci_upper': numbers[effect_type][0]['ci_upper']
-                }
+                return {'type': effect_type.upper(), 'value': numbers[effect_type][0]['value'],
+                       'ci_lower': numbers[effect_type][0]['ci_lower'], 'ci_upper': numbers[effect_type][0]['ci_upper']}
         return None
 
-
-class HypothesisRelationClassifier:
-    @staticmethod
-    def classify(article_text: str, hypothesis: str, embedding_model=None) -> Dict:
-        if not article_text or not hypothesis:
-            return {'relation': 'unrelated', 'confidence': 0}
-        
-        text_lower = article_text.lower()
-        
-        confirms_keywords = ['confirms', 'demonstrates', 'shows', 'consistent with', 'supports', 'validates']
-        nuances_keywords = ['however', 'although', 'but', 'except', 'whereas', 'while']
-        extends_keywords = ['furthermore', 'moreover', 'additionally', 'also', 'extends', 'expands']
-        contradicts_keywords = ['contrary to', 'contradicts', 'disagrees', 'opposite', 'unexpectedly']
-        
-        score_confirms = sum(1 for kw in confirms_keywords if kw in text_lower)
-        score_nuances = sum(1 for kw in nuances_keywords if kw in text_lower)
-        score_extends = sum(1 for kw in extends_keywords if kw in text_lower)
-        score_contradicts = sum(1 for kw in contradicts_keywords if kw in text_lower)
-        
-        embedding_score = 0.5
-        if embedding_model and AI_EMBEDDINGS_AVAILABLE:
-            try:
-                text_emb = embedding_model.encode([article_text[:1000]])[0]
-                hyp_emb = embedding_model.encode([hypothesis])[0]
-                embedding_score = cosine_similarity([text_emb], [hyp_emb])[0][0]
-            except:
-                pass
-        
-        scores = {
-            'confirms': score_confirms * 0.3 + embedding_score * 0.7,
-            'nuances': score_nuances * 0.5,
-            'extends': score_extends * 0.4,
-            'contradicts': score_contradicts * 0.6
-        }
-        
-        best_relation = max(scores, key=scores.get)
-        confidence = min(scores[best_relation], 1.0)
-        
-        if confidence < 0.2:
-            best_relation = 'unrelated'
-        
-        return {'relation': best_relation, 'confidence': confidence}
-
-
-# ============================================================================
-# CHECKLIST METODOLÓGICO
-# ============================================================================
 
 class MethodologicalChecklist:
     @staticmethod
     def check_article(article: Dict) -> Tuple[Dict, float]:
         text = f"{article.get('title', '')} {article.get('abstract', '')}".lower()
         
-        checklist = {
-            'Prospectivo': bool(re.search(r'prospective|longitudinal|cohort', text)),
-            'Aleatorizado': bool(re.search(r'randomized|randomised', text)),
-            'Cegamiento': bool(re.search(r'blind|masked|double-blind', text)),
-            'Multicéntrico': bool(re.search(r'multicenter|multi-center', text)),
-            'Análisis multivariado': bool(re.search(r'multivariable|multivariate|adjusted|cox', text)),
-            'Registro clínico': bool(re.search(r'clinicaltrials\.gov|nct\d+', text)),
-        }
+        score = 0
+        if re.search(r'prospective|longitudinal|cohort', text):
+            score += 16.67
+        if re.search(r'randomized|randomised', text):
+            score += 16.67
+        if re.search(r'blind|masked|double-blind', text):
+            score += 16.67
+        if re.search(r'multicenter|multi-center', text):
+            score += 16.67
+        if re.search(r'multivariable|multivariate|adjusted|cox', text):
+            score += 16.67
+        if re.search(r'clinicaltrials\.gov|nct\d+', text):
+            score += 16.67
         
-        score = sum(checklist.values()) / len(checklist) * 100
-        return checklist, score
+        return {}, score
 
 
 # ============================================================================
-# EXPORTACIÓN RIS Y BibTeX
+# EXPORTACIÓN
 # ============================================================================
 
 class ReferenceExporter:
     @staticmethod
     def to_ris(articles: List[Dict]) -> str:
-        articles = deduplicate_articles(articles)
-        ris_lines = []
-        for a in articles:
-            ris_lines.append("TY  - JOUR")
-            ris_lines.append(f"AU  - {a.get('authors', '')}")
-            ris_lines.append(f"TI  - {a.get('title', '')}")
-            ris_lines.append(f"JO  - {a.get('journal', '')}")
-            ris_lines.append(f"PY  - {a.get('pubdate', '')[:4]}")
-            ris_lines.append(f"ID  - {a.get('pmid', '')}")
-            ris_lines.append("ER  - ")
-            ris_lines.append("")
-        return "\n".join(ris_lines)
+        lines = []
+        for a in deduplicate_articles(articles):
+            lines.append(f"TY  - JOUR\nAU  - {a.get('authors', '')}\nTI  - {a.get('title', '')}\nJO  - {a.get('journal', '')}\nPY  - {a.get('pubdate', '')[:4]}\nID  - {a.get('pmid', '')}\nER  - \n")
+        return "\n".join(lines)
     
     @staticmethod
     def to_bibtex(articles: List[Dict]) -> str:
-        articles = deduplicate_articles(articles)
-        bib_lines = []
-        for i, a in enumerate(articles):
+        lines = []
+        for i, a in enumerate(deduplicate_articles(articles)):
             pmid = a.get('pmid', f'unknown_{i}')
-            bib_lines.append(f"@article{{pmid_{pmid},")
-            bib_lines.append(f"  title = {{{a.get('title', '')}}},")
-            bib_lines.append(f"  journal = {{{a.get('journal', '')}}},")
-            bib_lines.append(f"  year = {{{a.get('pubdate', '')[:4]}}},")
-            bib_lines.append(f"  pmid = {{{pmid}}}")
-            bib_lines.append("}")
-            bib_lines.append("")
-        return "\n".join(bib_lines)
+            lines.append(f"@article{{pmid_{pmid},\n  title = {{{a.get('title', '')}}},\n  journal = {{{a.get('journal', '')}}},\n  year = {{{a.get('pubdate', '')[:4]}}},\n  pmid = {{{pmid}}}\n}}\n")
+        return "\n".join(lines)
 
 
 # ============================================================================
-# GRÁFICOS
+# GRÁFICO
 # ============================================================================
 
 def plot_consensus_gauge(consensus: Dict) -> Optional[BytesIO]:
@@ -1063,7 +869,7 @@ def plot_consensus_gauge(consensus: Dict) -> Optional[BytesIO]:
 
 
 # ============================================================================
-# FUNCIONES DE UTILIDAD PARA PubMed
+# FUNCIONES DE PubMed
 # ============================================================================
 
 def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
@@ -1073,7 +879,7 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
             response = requests.get(url, params=params, timeout=30)
             if response.status_code == 429:
                 wait_time = delay * (2 ** attempt)
-                st.warning(f"⚠️ Rate limit. Waiting {wait_time}s...")
+                st.warning(f"⚠️ Rate limit. Esperando {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             response.raise_for_status()
@@ -1085,7 +891,7 @@ def make_request_with_retry(url, params, max_retries=5, initial_delay=5):
     return None
 
 
-def search_pubmed_complete(query, max_articles=3000, progress_callback=None):
+def search_pubmed_complete(query, max_articles=MAX_ARTICLES, progress_callback=None):
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     search_url = f"{base_url}esearch.fcgi"
     
@@ -1210,17 +1016,14 @@ def enhanced_article_analysis(title: str, abstract: str, hypothesis: str = "") -
     sample_size = numbers.get('n')
     best_effect = NumericalExtractor.get_best_effect_size(numbers)
     
-    embedder = get_embedder()
-    relation_info = HypothesisRelationClassifier.classify(full_text, hypothesis, embedder)
+    relation_info = HypothesisRelationClassifier.classify(title, abstract, hypothesis)
     
     all_outcomes = extract_all_outcomes(full_text)
     pico = PICOExtractor.extract_all(title, abstract)
     
-    article_dict = {'title': title, 'abstract': abstract}
-    checklist, methodological_score = MethodologicalChecklist.check_article(article_dict)
+    _, methodological_score = MethodologicalChecklist.check_article({'title': title, 'abstract': abstract})
     
     quality_score = (evidence_score + methodological_score) / 2
-    
     if sample_size and sample_size > 100:
         quality_score += 5
     if best_effect:
@@ -1237,18 +1040,15 @@ def enhanced_article_analysis(title: str, abstract: str, hypothesis: str = "") -
         'effect_value': best_effect['value'] if best_effect else 0,
         'effect_ci_lower': best_effect['ci_lower'] if best_effect else 0,
         'effect_ci_upper': best_effect['ci_upper'] if best_effect else 0,
-        'p_values': numbers['p_values'][:3] if numbers['p_values'] else [],
         'hypothesis_relation': relation_info['relation'],
         'relation_confidence': relation_info['confidence'],
+        'relation_reason': relation_info.get('reason', ''),
         'all_outcomes': all_outcomes,
         'quality_score': quality_score,
         'methodological_score': methodological_score,
-        'methodological_checklist': checklist,
         'pico_population': pico['population'],
         'pico_intervention': pico['intervention'],
-        'pico_comparison': pico['comparison'],
-        'pico_outcomes': ', '.join(pico['outcomes']),
-        'pico_string': pico['pico_string']
+        'pico_outcomes': pico['outcomes']
     }
 
 
@@ -1338,65 +1138,6 @@ def filter_articles_by_relevance(articles, relevance_threshold):
 
 
 # ============================================================================
-# TABLA GRADE
-# ============================================================================
-
-def add_grade_table_to_doc(doc, articles):
-    articles = deduplicate_articles(articles)
-    top_articles = sorted(articles, key=lambda x: x.get('evidence_score', 0), reverse=True)[:10]
-    
-    doc.add_heading('📊 Tabla de Evidencia GRADE (top 10 estudios)', level=2)
-    
-    table = doc.add_table(rows=1, cols=7)
-    table.style = 'Table Grid'
-    
-    headers = ['Estudio', 'Diseño', 'N', 'EF (IC95%)', 'Calidad', 'Relación', 'Score']
-    for i, header in enumerate(headers):
-        cell = table.rows[0].cells[i]
-        cell.text = header
-        cell.paragraphs[0].runs[0].bold = True
-    
-    for art in top_articles:
-        row = table.add_row().cells
-        authors = art.get('authors', 'Autor')[:30]
-        year = art.get('pubdate', '')[:4]
-        row[0].text = f"{authors} {year}"
-        row[1].text = art.get('study_design', 'ND')[:15]
-        n = art.get('sample_size', 'N/A')
-        row[2].text = str(n) if n else 'N/A'
-        
-        effect_type = art.get('effect_type', '')
-        effect_val = art.get('effect_value', 0)
-        if effect_val and effect_val > 0:
-            ci_lower = art.get('effect_ci_lower', 0)
-            ci_upper = art.get('effect_ci_upper', 0)
-            row[3].text = f"{effect_type}={effect_val:.2f} ({ci_lower:.2f}-{ci_upper:.2f})"
-        else:
-            row[3].text = 'NR'
-        
-        meth_score = art.get('methodological_score', 0) or 0
-        if meth_score >= 70:
-            quality = f"🟢 Alta ({meth_score:.0f})"
-        elif meth_score >= 50:
-            quality = f"🟡 Moderada ({meth_score:.0f})"
-        else:
-            quality = f"🟠 Baja ({meth_score:.0f})"
-        row[4].text = quality
-        
-        relation_map = {
-            'confirms': '✅ Confirma',
-            'nuances': '🔍 Matiza', 
-            'extends': '🚀 Extiende',
-            'contradicts': '⚠️ Contradice'
-        }
-        relation = art.get('hypothesis_relation', 'unrelated')
-        row[5].text = relation_map.get(relation, '📚 Otro')
-        row[6].text = f"{art.get('evidence_score', 0):.0f}/100"
-    
-    doc.add_paragraph()
-
-
-# ============================================================================
 # GENERACIÓN DE FLAVORS
 # ============================================================================
 
@@ -1406,21 +1147,17 @@ def generate_insight_for_relation(relation, articles, hypothesis):
     
     articles = deduplicate_articles(articles)
     n = len(articles)
-    best = articles[0]
-    best_evidence = best.get('evidence_score') or 0
+    
+    best = max(articles, key=lambda x: x.get('methodological_score', 0) or 0)
+    best_methodological = best.get('methodological_score') or 0
     best_design = best.get('study_design', 'Estudio')
     
-    effect_str = ""
-    effect_val = best.get('effect_value')
-    if effect_val and effect_val > 0:
-        effect_str = f" (HR={effect_val})"
-    
     insights = {
-        'confirms': f"**{n} estudios** confirman la hipótesis. El estudio de mayor nivel de evidencia es un {best_design}{effect_str} con puntaje de evidencia {best_evidence}/100.",
-        'nuances': f"**{n} estudios** matizan la hipótesis, añadiendo condiciones específicas.",
-        'extends': f"**{n} estudios** extienden el alcance de la hipótesis.",
-        'contradicts': f"**{n} estudios** presentan evidencia que contradice parcialmente la hipótesis.",
-        'unrelated': f"**{n} estudios** no abordan directamente la hipótesis."
+        'confirms': f"**{n} estudios** confirman la hipótesis. Mejor calidad: {best_design} (score {best_methodological}/100).",
+        'nuances': f"**{n} estudios** matizan la hipótesis.",
+        'extends': f"**{n} estudios** extienden la hipótesis.",
+        'contradicts': f"**{n} estudios** contradicen la hipótesis.",
+        'unrelated': f"**{n} estudios** no relacionados."
     }
     return insights.get(relation, f"{n} estudios analizados.")
 
@@ -1431,10 +1168,7 @@ def generate_flavors_by_thesis(articles, hypothesis):
     
     articles = deduplicate_articles(articles)
     
-    relation_groups = {
-        'confirms': [], 'nuances': [], 'extends': [], 
-        'contradicts': [], 'unrelated': []
-    }
+    relation_groups = {'confirms': [], 'nuances': [], 'extends': [], 'contradicts': [], 'unrelated': []}
     
     for article in articles:
         relation = article.get('hypothesis_relation', 'unrelated')
@@ -1444,7 +1178,7 @@ def generate_flavors_by_thesis(articles, hypothesis):
             relation_groups['unrelated'].append(article)
     
     for group in relation_groups.values():
-        group.sort(key=lambda x: x.get('evidence_score') or 0, reverse=True)
+        group.sort(key=lambda x: x.get('methodological_score', 0), reverse=True)
     
     flavors = {}
     relation_names = {
@@ -1452,7 +1186,7 @@ def generate_flavors_by_thesis(articles, hypothesis):
         'nuances': ('🔍 Matiza la Hipótesis', 'Artículos que añaden condiciones o matices'),
         'extends': ('🚀 Extiende la Hipótesis', 'Artículos que amplían el alcance'),
         'contradicts': ('⚠️ Contradice la Hipótesis', 'Artículos con evidencia contraria'),
-        'unrelated': ('📚 No Relacionados', 'Artículos que no abordan directamente la hipótesis')
+        'unrelated': ('📚 No Relacionados', 'Artículos que no abordan la hipótesis')
     }
     
     for relation, articles_group in relation_groups.items():
@@ -1460,8 +1194,8 @@ def generate_flavors_by_thesis(articles, hypothesis):
             continue
         
         name, description = relation_names.get(relation, ('Otros', ''))
-        ev_scores = [a.get('evidence_score') or 0 for a in articles_group]
-        avg_evidence = sum(ev_scores) / len(ev_scores) if ev_scores else 0
+        meth_scores = [a.get('methodological_score', 0) for a in articles_group]
+        avg_methodological = sum(meth_scores) / len(meth_scores) if meth_scores else 0
         has_effect = sum(1 for a in articles_group if a.get('effect_value') and a.get('effect_value') > 0)
         
         insight = generate_insight_for_relation(relation, articles_group, hypothesis)
@@ -1479,7 +1213,7 @@ def generate_flavors_by_thesis(articles, hypothesis):
             'description': description,
             'articles': articles_group,
             'n_articles': len(articles_group),
-            'avg_evidence_score': avg_evidence,
+            'avg_methodological_score': avg_methodological,
             'has_effect_size': has_effect,
             'insight': insight,
             'representative_articles': unique_repr
@@ -1489,7 +1223,7 @@ def generate_flavors_by_thesis(articles, hypothesis):
 
 
 def generate_traditional_clusters(articles, query_terms, hypothesis_terms):
-    if len(articles) < 3:
+    if len(articles) < 3 or not SKLEARN_AVAILABLE:
         return []
     
     articles = deduplicate_articles(articles)
@@ -1511,7 +1245,7 @@ def generate_traditional_clusters(articles, query_terms, hypothesis_terms):
             if len(cluster_indices) < 2:
                 continue
             cluster_articles = [articles[i] for i in cluster_indices]
-            cluster_articles.sort(key=lambda x: x.get('evidence_score') or 0, reverse=True)
+            cluster_articles.sort(key=lambda x: x.get('methodological_score') or 0, reverse=True)
             
             all_outcomes = []
             for a in cluster_articles:
@@ -1520,8 +1254,8 @@ def generate_traditional_clusters(articles, query_terms, hypothesis_terms):
             top_outcomes = [o for o, _ in outcome_counts.most_common(2)]
             name = f"Cluster sobre {', '.join(top_outcomes)}" if top_outcomes else f"Cluster {cluster_id + 1}"
             
-            ev_scores = [a.get('evidence_score') or 0 for a in cluster_articles]
-            avg_evidence = sum(ev_scores) / len(ev_scores) if ev_scores else 0
+            meth_scores = [a.get('methodological_score') or 0 for a in cluster_articles]
+            avg_methodological = sum(meth_scores) / len(meth_scores) if meth_scores else 0
             
             unique_repr = []
             seen_repr = set()
@@ -1538,7 +1272,7 @@ def generate_traditional_clusters(articles, query_terms, hypothesis_terms):
                 'articles': cluster_articles,
                 'n_articles': len(cluster_articles),
                 'representative_articles': unique_repr,
-                'avg_evidence': avg_evidence
+                'avg_methodological': avg_methodological
             })
         return flavors
     except Exception as e:
@@ -1551,12 +1285,14 @@ def generate_all_flavors_human_style(articles, hypothesis, query_terms, hypothes
         return {}
     
     articles = deduplicate_articles(articles)
+    articles = [FalseConfirmationValidator.validate(a, hypothesis) for a in articles]
+    
     flavors = {}
     
     if method in ["thesis", "both"]:
         flavors['by_thesis'] = generate_flavors_by_thesis(articles, hypothesis)
     
-    if method in ["clustering", "both"]:
+    if method in ["clustering", "both"] and SKLEARN_AVAILABLE:
         flavors['by_cluster'] = generate_traditional_clusters(articles, query_terms, hypothesis_terms)
     
     return flavors
@@ -1572,24 +1308,27 @@ def generate_flavor_summary_human_style(flavor_data, flavor_type, hypothesis):
     insight = flavor_data.get('insight', '')
     name = flavor_data.get('name', 'Flavor')
     
-    high_evidence = [a for a in articles if (a.get('evidence_score') or 0) >= 80]
+    high_methodological = [a for a in articles if (a.get('methodological_score') or 0) >= 70]
     
     if flavor_type == 'by_thesis':
         summary = f"### {name}\n\n{insight}\n\n"
-        if high_evidence:
-            summary += f"**📊 Evidencia de alta calidad:** {len(high_evidence)} estudios con nivel de evidencia ≥80/100.\n\n"
+        if high_methodological:
+            summary += f"**📊 Alta calidad metodológica:** {len(high_methodological)} estudios con calidad ≥70/100.\n\n"
         
-        best = articles[0] if articles else None
+        best = max(articles, key=lambda x: x.get('methodological_score') or 0) if articles else None
         if best:
-            summary += f"**⭐ Estudio destacado:** {best.get('authors', 'Autor')[:80]} ({best.get('pubdate', 's.f.')[:4]}). "
+            summary += f"**⭐ Mejor calidad metodológica:** {best.get('authors', 'Autor')[:80]} ({best.get('pubdate', 's.f.')[:4]}). "
             effect_val = best.get('effect_value')
             if effect_val and effect_val > 0:
-                summary += f"Reporta {best.get('effect_type', 'efecto')}={effect_val}. "
-            summary += f"Nivel de evidencia: {best.get('evidence_score') or 0}/100.\n\n"
+                summary += f"Reporta {best.get('effect_type', 'efecto')}={effect_val:.2f}. "
+            summary += f"Calidad metodológica: {best.get('methodological_score') or 0}/100.\n\n"
+            
+            if best.get('validation_note'):
+                summary += f"*{best.get('validation_note')}*\n\n"
     else:
         summary = f"### {flavor_data.get('name', 'Cluster')}\n\n"
         summary += f"Este grupo agrupa {n} artículos con temáticas similares. "
-        summary += f"Calidad media de evidencia: {flavor_data.get('avg_evidence', 0):.0f}/100.\n\n"
+        summary += f"Calidad metodológica media: {flavor_data.get('avg_methodological', 0):.0f}/100.\n\n"
     
     citations = []
     seen_pmids = set()
@@ -1613,8 +1352,59 @@ def generate_flavor_summary_human_style(flavor_data, flavor_type, hypothesis):
 
 
 # ============================================================================
-# DOCUMENTO COMPLETO
+# DOCUMENTO COMPLETO CON NUEVA SECCIÓN DE INTERPRETACIÓN
 # ============================================================================
+
+def add_grade_table_to_doc(doc, articles):
+    if not articles:
+        doc.add_paragraph("No hay artículos para mostrar.")
+        return
+    
+    articles = deduplicate_articles(articles)
+    top_articles = sorted(articles, key=lambda x: x.get('methodological_score', 0), reverse=True)[:10]
+    
+    doc.add_heading('📊 Tabla de Calidad Metodológica (top 10 estudios)', level=2)
+    doc.add_paragraph('NOTA: Esta tabla muestra la calidad METODOLÓGICA, NO la confirmación de hipótesis.')
+    
+    table = doc.add_table(rows=1, cols=7)
+    table.style = 'Table Grid'
+    
+    headers = ['Estudio', 'Diseño', 'N', 'EF (IC95%)', 'Calidad Metodológica', 'Relación', 'Score Diseño']
+    for i, header in enumerate(headers):
+        table.rows[0].cells[i].text = header
+    
+    for art in top_articles:
+        row = table.add_row().cells
+        row[0].text = f"{art.get('authors', 'Autor')[:30]} {art.get('pubdate', '')[:4]}"
+        row[1].text = art.get('study_design', 'ND')[:20]
+        
+        n = art.get('sample_size')
+        row[2].text = str(n) if n and n > 0 else 'NR'
+        
+        effect_val = art.get('effect_value', 0)
+        if effect_val > 0:
+            ci_lower = art.get('effect_ci_lower', 0)
+            ci_upper = art.get('effect_ci_upper', 0)
+            row[3].text = f"{art.get('effect_type', 'HR')}={effect_val:.2f} ({ci_lower:.2f}-{ci_upper:.2f})"
+        else:
+            row[3].text = 'NR'
+        
+        meth_score = art.get('methodological_score', 0) or 0
+        if meth_score >= 70:
+            quality = f"🟢 Alta ({meth_score:.0f})"
+        elif meth_score >= 50:
+            quality = f"🟡 Moderada ({meth_score:.0f})"
+        else:
+            quality = f"🟠 Baja ({meth_score:.0f})"
+        row[4].text = quality
+        
+        rel_map = {'confirms': '✅ Confirma', 'nuances': '🔍 Matiza', 'extends': '🚀 Extiende', 
+                   'contradicts': '⚠️ Contradice', 'unrelated': '📚 No relacionado'}
+        row[5].text = rel_map.get(art.get('hypothesis_relation', 'unrelated'), '📚 Otro')
+        row[6].text = f"{art.get('evidence_score', 0):.0f}/100"
+    
+    doc.add_paragraph()
+
 
 def create_document_with_flavors_human_style(flavors, hypothesis, query, total_articles, relevance_threshold, consensus):
     doc = Document()
@@ -1625,15 +1415,32 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
         section.left_margin = Inches(0.8)
         section.right_margin = Inches(0.8)
     
-    title = doc.add_heading('Análisis de Evidencia por Flavors v8.4', 0)
+    title = doc.add_heading('Análisis de Evidencia por Flavors v8.7', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     doc.add_paragraph(f'**Estrategia de búsqueda:** {str(query)[:200]}...')
     doc.add_paragraph(f'**Hipótesis:** "{str(hypothesis)[:200]}..."')
     doc.add_paragraph(f'**Artículos analizados:** {total_articles}')
     doc.add_paragraph(f'**Threshold de relevancia:** {relevance_threshold}')
-    doc.add_paragraph(f'**Fecha de generación:** {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+    doc.add_paragraph(f'**Fecha:** {datetime.now().strftime("%Y-%m-%d %H:%M")}')
     doc.add_paragraph()
+    
+    note_para = doc.add_paragraph()
+    note_para.add_run('⚠️ NOTA IMPORTANTE: ').bold = True
+    note_para.add_run('La clasificación se basa en evidencia textual EXPLÍCITA (frases como "confirms that").')
+    
+    doc.add_page_break()
+    
+    # Recolectar todos los artículos
+    all_articles = []
+    if flavors and 'by_thesis' in flavors:
+        for relation in ['confirms', 'nuances', 'extends', 'contradicts']:
+            if relation in flavors['by_thesis']:
+                all_articles.extend(flavors['by_thesis'][relation].get('articles', []))
+    
+    if not all_articles:
+        doc.add_paragraph("⚠️ **No se encontraron artículos para analizar.**")
+        return doc
     
     doc.add_page_break()
     
@@ -1641,27 +1448,10 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     exec_title = doc.add_heading('📋 RESUMEN EJECUTIVO Y ANÁLISIS DE CONSENSO', level=1)
     exec_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    all_articles = []
-    for relation in ['confirms', 'nuances', 'extends', 'contradicts']:
-        if relation in flavors.get('by_thesis', {}):
-            all_articles.extend(flavors['by_thesis'][relation].get('articles', []))
-    
     exec_summary = ConsensusAnalyzer.generate_executive_summary(all_articles, hypothesis, query)
-    
     for line in exec_summary.split('\n'):
         if line.strip():
-            if line.startswith('╔') or line.startswith('╚') or line.startswith('║'):
-                p = doc.add_paragraph()
-                p.add_run(line).font.size = Pt(8)
-            elif line.startswith('🔬') or line.startswith('📊') or line.startswith('⭐') or line.startswith('📅') or line.startswith('💡'):
-                p = doc.add_paragraph()
-                run = p.add_run(line)
-                run.bold = True
-                run.font.size = Pt(11)
-            elif line.startswith('   •'):
-                doc.add_paragraph(line, style='List Bullet')
-            else:
-                doc.add_paragraph(line)
+            doc.add_paragraph(line)
     
     doc.add_paragraph()
     
@@ -1675,6 +1465,39 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     
     doc.add_page_break()
     
+    # ================================================================
+    # NUEVA SECCIÓN: ¿QUÉ SIGNIFICA ESTO? (v8.7)
+    # ================================================================
+    doc.add_page_break()
+    
+    # Calcular métricas para el asistente interpretativo
+    methodological_scores = [a.get('methodological_score', 0) for a in all_articles if a.get('methodological_score') is not None]
+    avg_methodological = sum(methodological_scores) / len(methodological_scores) if methodological_scores else 0
+    
+    relevant_articles = len(all_articles)
+    
+    interpretation = InterpretiveAssistant.generate_interpretation(
+        consensus, total_articles, relevant_articles, hypothesis, avg_methodological
+    )
+    
+    for line in interpretation.split('\n'):
+        if line.strip():
+            if line.startswith('# '):
+                doc.add_heading(line[2:], level=1)
+            elif line.startswith('## '):
+                doc.add_heading(line[3:], level=2)
+            elif line.startswith('→'):
+                p = doc.add_paragraph()
+                p.add_run(line).italic = True
+            elif line.startswith('•'):
+                doc.add_paragraph(line, style='List Bullet')
+            elif line.startswith('1.') or line.startswith('2.') or line.startswith('3.') or line.startswith('4.'):
+                doc.add_paragraph(line, style='List Number')
+            else:
+                doc.add_paragraph(line)
+    
+    doc.add_page_break()
+    
     # ALERTAS DE CALIDAD
     doc.add_heading('🚦 Alertas de Calidad Metodológica', level=1)
     quality_alerts = QualityAlertSystem.generate_alerts(all_articles)
@@ -1682,24 +1505,10 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     doc.add_paragraph(f"**{quality_alerts['overall_message']}**")
     doc.add_paragraph()
     
-    if quality_alerts['alerts']['critical']:
+    if quality_alerts['alerts'].get('critical'):
         doc.add_heading('🔴 Alertas CRÍTICAS', level=2)
         for alert in quality_alerts['alerts']['critical']:
             doc.add_paragraph(f"• {alert['message']}", style='List Bullet')
-            doc.add_paragraph(f"  → {alert['recommendation']}", style='List Bullet')
-        doc.add_paragraph()
-    
-    if quality_alerts['alerts']['warning']:
-        doc.add_heading('🟡 Advertencias', level=2)
-        for alert in quality_alerts['alerts']['warning']:
-            doc.add_paragraph(f"• {alert['message']}", style='List Bullet')
-        doc.add_paragraph()
-    
-    if quality_alerts['alerts']['success']:
-        doc.add_heading('🟢 Fortalezas metodológicas', level=2)
-        for alert in quality_alerts['alerts']['success']:
-            doc.add_paragraph(f"• {alert['message']}", style='List Bullet')
-        doc.add_paragraph()
     
     doc.add_page_break()
     
@@ -1707,17 +1516,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     doc.add_heading('⚠️ Detección de Contradicciones entre Estudios', level=1)
     contradictions = ContradictionDetector.find_contradictions(all_articles)
     contradiction_summary = ContradictionDetector.generate_contradiction_summary(contradictions)
-    for line in contradiction_summary.split('\n'):
-        if line.strip():
-            doc.add_paragraph(line)
-    doc.add_paragraph()
-    
-    if contradictions:
-        doc.add_heading('Detalle:', level=2)
-        for i, contra in enumerate(contradictions[:5], 1):
-            conflict = contra['conflict']
-            doc.add_paragraph(f"{i}. **{conflict['description']}**")
-            doc.add_paragraph(f"   {conflict['detail']}", style='List Bullet')
+    doc.add_paragraph(contradiction_summary)
     
     doc.add_page_break()
     
@@ -1725,16 +1524,11 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     doc.add_heading('📅 Evolución Temporal del Consenso', level=1)
     temporal_data = TemporalConsensusAnalyzer.analyze_temporal_consensus(all_articles)
     temporal_summary = TemporalConsensusAnalyzer.generate_temporal_summary(temporal_data)
-    for line in temporal_summary.split('\n'):
-        if line.strip():
-            doc.add_paragraph(line)
+    doc.add_paragraph(temporal_summary)
     
     temporal_plot = TemporalConsensusAnalyzer.create_temporal_plot(temporal_data)
     if temporal_plot:
         doc.add_picture(temporal_plot, width=Inches(6))
-        doc.add_paragraph("Figura: Evolución del consenso científico por año.")
-    else:
-        doc.add_paragraph("No hay suficientes datos para gráfico temporal.")
     
     doc.add_page_break()
     
@@ -1745,6 +1539,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     # FLAVORS
     doc.add_heading('FLAVORS POR RELACIÓN CON LA HIPÓTESIS', level=1)
     doc.add_paragraph('Los siguientes flavors agrupan artículos según cómo se relacionan con la hipótesis.')
+    doc.add_paragraph('⚠️ La clasificación se basa en evidencia textual EXPLÍCITA.')
     doc.add_paragraph()
     
     thesis_flavors = flavors.get('by_thesis', {})
@@ -1766,7 +1561,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     # CLUSTERS
     if flavors.get('by_cluster'):
         doc.add_heading('CLUSTERS TEMÁTICOS', level=1)
-        doc.add_paragraph('Clusters por similitud temática.')
+        doc.add_paragraph('Clusters por similitud temática (basados en títulos y outcomes).')
         doc.add_paragraph()
         
         for cluster in flavors.get('by_cluster', []):
@@ -1791,7 +1586,7 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
     hdr_cells = table.rows[0].cells
     hdr_cells[0].text = 'Relación con Hipótesis'
     hdr_cells[1].text = 'N° Artículos'
-    hdr_cells[2].text = 'Score Evidencia'
+    hdr_cells[2].text = 'Calidad Metodológica Media'
     hdr_cells[3].text = 'Con tamaño del efecto'
     
     for relation, flavor_data in thesis_flavors.items():
@@ -1801,13 +1596,14 @@ def create_document_with_flavors_human_style(flavors, hypothesis, query, total_a
         row_cells = table.add_row().cells
         row_cells[0].text = flavor_data.get('name', relation)
         row_cells[1].text = str(flavor_data.get('n_articles', 0))
-        row_cells[2].text = f"{flavor_data.get('avg_evidence_score', 0):.0f}"
+        row_cells[2].text = f"{flavor_data.get('avg_methodological_score', 0):.0f}/100"
         row_cells[3].text = f"{flavor_data.get('has_effect_size', 0)} estudios"
     
     doc.add_paragraph()
     doc.add_paragraph('---')
-    doc.add_paragraph(f'*Documento generado por PubMed AI Analyzer v8.4*')
+    doc.add_paragraph(f'*Documento generado por PubMed AI Analyzer v8.7*')
     doc.add_paragraph(f'*Email configurado con: {get_email_config()["email_user"]}*')
+    doc.add_paragraph('*La clasificación "Confirma" requiere evidencia textual EXPLÍCITA.*')
     
     return doc
 
@@ -1827,12 +1623,15 @@ def export_articles_to_csv_enhanced(articles):
             'Año': article.get('pubdate', '')[:4],
             'Diseño': article.get('study_design', ''),
             'Nivel evidencia': article.get('evidence_level', ''),
-            'Score evidencia': article.get('evidence_score', 0),
+            'Score diseño': article.get('evidence_score', 0),
             'Score metodológico': article.get('methodological_score', 0),
             'Tamaño muestral': article.get('sample_size', ''),
             'Efecto': article.get('effect_type', ''),
             'Valor efecto': article.get('effect_value', 0),
             'Relación hipótesis': article.get('hypothesis_relation', ''),
+            'Confianza relación': article.get('relation_confidence', 0),
+            'Razón clasificación': article.get('relation_reason', ''),
+            'Nota validación': article.get('validation_note', ''),
             'PICO_Población': article.get('pico_population', ''),
             'PICO_Intervención': article.get('pico_intervention', ''),
             'PICO_Outcomes': article.get('pico_outcomes', '')
@@ -1847,7 +1646,7 @@ def export_articles_to_csv_enhanced(articles):
 
 def display_flavors_preview_v8(flavors, consensus):
     st.markdown("---")
-    st.markdown("## 📋 RESUMEN EJECUTIVO")
+    st.markdown("## 📋 RESUMEN EJECUTIVO v8.7")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -1857,7 +1656,7 @@ def display_flavors_preview_v8(flavors, consensus):
     with col3:
         st.metric("🎯 Consenso", consensus.get('consensus_level', 'ND'))
     with col4:
-        st.metric("⭐ Alta Calidad", consensus.get('high_quality_confirms', 0))
+        st.metric("⭐ Artículos", consensus.get('total_articles', 0))
     
     st.info(consensus.get('consensus_message', ''))
     
@@ -1867,7 +1666,7 @@ def display_flavors_preview_v8(flavors, consensus):
             st.image(consensus_fig, use_container_width=True)
     
     st.markdown("---")
-    st.markdown("## 🎨 Flavors Generados")
+    st.markdown("## 🎨 Flavors Generados (v8.7)")
     
     thesis_flavors = flavors.get('by_thesis', {})
     if thesis_flavors:
@@ -1878,13 +1677,15 @@ def display_flavors_preview_v8(flavors, consensus):
             with st.expander(f"{flavor_data.get('name', relation)} ({flavor_data.get('n_articles', 0)} artículos)", expanded=True):
                 st.markdown(f"**{flavor_data.get('description', '')}**")
                 st.markdown(f"📊 **Insight:** {flavor_data.get('insight', '')}")
-                st.markdown(f"⭐ **Score evidencia promedio:** {flavor_data.get('avg_evidence_score', 0):.0f}/100")
+                st.markdown(f"⭐ **Calidad metodológica promedio:** {flavor_data.get('avg_methodological_score', 0):.0f}/100")
                 
-                st.markdown("**📄 Artículos destacados:**")
+                st.markdown("**📄 Artículos destacados (mejor calidad metodológica):**")
                 for i, art in enumerate(flavor_data.get('representative_articles', [])[:5], 1):
                     title = art.get('title', 'Sin título')[:80]
-                    evidence = art.get('evidence_score') or 0
-                    st.markdown(f"   {i}. {title}... (ev={evidence})")
+                    meth_score = art.get('methodological_score') or 0
+                    st.markdown(f"   {i}. {title}... (calidad metodológica={meth_score:.0f})")
+                    if art.get('validation_note'):
+                        st.caption(f"   📝 {art.get('validation_note')}")
 
 
 def display_graphs_section(articles):
@@ -1895,7 +1696,6 @@ def display_graphs_section(articles):
     articles = deduplicate_articles(articles)
     st.markdown("## 📊 Análisis Gráfico")
     
-    # Gráfico temporal
     st.markdown("### 📅 Evolución temporal")
     temporal_data = TemporalConsensusAnalyzer.analyze_temporal_consensus(articles)
     temporal_plot = TemporalConsensusAnalyzer.create_temporal_plot(temporal_data)
@@ -1904,30 +1704,19 @@ def display_graphs_section(articles):
     else:
         st.info("No hay suficientes datos para gráfico temporal.")
     
-    # Alertas
     st.markdown("### 🚦 Alertas de calidad")
     quality_alerts = QualityAlertSystem.generate_alerts(articles)
     st.markdown(f"**Nivel general:** {quality_alerts['overall_level']}")
     
-    if quality_alerts['alerts']['critical']:
+    if quality_alerts['alerts'].get('critical'):
         with st.expander("🔴 Alertas CRÍTICAS", expanded=True):
             for alert in quality_alerts['alerts']['critical']:
-                st.warning(f"**{alert['message']}**\n\n→ {alert['recommendation']}")
+                st.warning(f"**{alert['message']}**")
     
-    if quality_alerts['alerts']['warning']:
-        with st.expander("🟡 Advertencias", expanded=False):
-            for alert in quality_alerts['alerts']['warning']:
-                st.info(alert['message'])
-    
-    # Contradicciones
     st.markdown("### ⚠️ Contradicciones")
     contradictions = ContradictionDetector.find_contradictions(articles)
     if contradictions:
         st.warning(f"Se detectaron {len(contradictions)} contradicción(es)")
-        for contra in contradictions[:3]:
-            conflict = contra['conflict']
-            st.markdown(f"**{conflict['description']}**")
-            st.caption(conflict['detail'])
     else:
         st.success("✅ No se detectaron contradicciones")
 
@@ -1967,13 +1756,12 @@ def process_and_generate_flavors(query, hypothesis, threshold, user_email, sessi
         progress_placeholder.progress(current / total, text=f"Procesando {current}/{total}...")
     
     with st.spinner("🔍 Buscando artículos..."):
-        id_list, total = search_pubmed_complete(query.strip(), max_articles=3000)
+        id_list, total = search_pubmed_complete(query.strip(), max_articles=MAX_ARTICLES)
         if not id_list:
             st.error("❌ No se encontraron artículos")
             return None, None, None, None, None
     
     all_articles = []
-    BLOCK_SIZE = 500
     total_blocks = (len(id_list) + BLOCK_SIZE - 1) // BLOCK_SIZE
     blocks_to_process = min(total_blocks, 6)
     
@@ -2014,7 +1802,7 @@ def process_and_generate_flavors(query, hypothesis, threshold, user_email, sessi
     
     st.success(f"✅ Procesados {len(all_articles)} artículos")
     
-    with st.spinner("🧠 Calculando relevancia..."):
+    with st.spinner("🧠 Calculando relevancia (usando embeddings si están disponibles)..."):
         all_articles = calculate_relevance_to_hypothesis(all_articles, hypothesis)
         filtered_articles = filter_articles_by_relevance(all_articles, threshold)
     
@@ -2030,7 +1818,7 @@ def process_and_generate_flavors(query, hypothesis, threshold, user_email, sessi
     consensus = ConsensusAnalyzer.calculate_consensus(filtered_articles)
     display_graphs_section(filtered_articles)
     
-    with st.spinner(f"🎨 Generando flavors..."):
+    with st.spinner(f"🎨 Generando flavors (con clustering si está disponible)..."):
         flavors = generate_all_flavors_human_style(filtered_articles, hypothesis, query_terms, hypothesis_terms, method=flavor_method)
     
     return flavors, filtered_articles, query, hypothesis, consensus
@@ -2070,8 +1858,8 @@ class UserSessionManager:
     def __init__(self, login):
         self.login = login
         self.storage = LocalStorage(login)
-        self.articles_file = f"{login}_articles_v84.csv"
-        self.sessions_file = f"{login}_sessions_v84.csv"
+        self.articles_file = f"{login}_articles_v87.csv"
+        self.sessions_file = f"{login}_sessions_v87.csv"
         self.current_session_id = None
     
     def create_session(self, query: str, hypothesis: str, relevance_threshold: float, email: str) -> str:
@@ -2110,7 +1898,7 @@ class UserSessionManager:
                 'authors': str(article.get('authors', ''))[:500],
                 'journal': str(article.get('journal', ''))[:200],
                 'abstract': str(article.get('abstract', ''))[:5000],
-                'quality_score': float(article.get('quality_score', 0) or 0),
+                'methodological_score': float(article.get('methodological_score', 0) or 0),
                 'evidence_level': str(article.get('evidence_level', '')),
                 'evidence_score': int(article.get('evidence_score', 0) or 0),
                 'sample_size': int(article.get('sample_size', 0) or 0),
@@ -2119,7 +1907,8 @@ class UserSessionManager:
                 'effect_ci_lower': float(article.get('effect_ci_lower', 0) or 0),
                 'effect_ci_upper': float(article.get('effect_ci_upper', 0) or 0),
                 'hypothesis_relation': str(article.get('hypothesis_relation', '')),
-                'methodological_score': float(article.get('methodological_score', 0) or 0),
+                'relation_confidence': float(article.get('relation_confidence', 0) or 0),
+                'relation_reason': str(article.get('relation_reason', ''))[:200],
                 'relevance_score': float(article.get('relevance_score', 0) or 0),
                 'processed_date': datetime.now().isoformat(),
                 'block_number': int(article.get('block_number', 0) or 0),
@@ -2172,8 +1961,9 @@ class UserSessionManager:
 # ============================================================================
 
 def main():
-    st.title("🧠 PubMed AI Analyzer v8.4")
-    st.markdown("*Análisis de evidencia con ENVÍO POR EMAIL, Alertas de Calidad, Detección de Contradicciones y Línea de Tiempo*")
+    st.title("🧠 PubMed AI Analyzer v8.7 (CON ASISTENTE INTERPRETATIVO)")
+    st.markdown("*Análisis de evidencia con clasificación CORREGIDA + Asistente que interpreta los resultados*")
+    st.markdown("⚠️ **Novedad v8.7:** Nueva sección **'¿Qué significa esto?'** que contextualiza los resultados numéricos y ofrece recomendaciones accionables.")
     
     if 'user_login' not in st.session_state:
         st.markdown("### 🔐 Identificación")
@@ -2215,33 +2005,21 @@ def main():
     )
     
     st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🤖 Paquetes AI cargados")
+    st.sidebar.markdown(f"- **Embeddings:** {'✅' if AI_EMBEDDINGS_AVAILABLE else '❌'}")
+    st.sidebar.markdown(f"- **Clustering:** {'✅' if SKLEARN_AVAILABLE else '❌'}")
+    st.sidebar.markdown(f"- **Gráficos:** {'✅' if MATPLOTLIB_AVAILABLE else '❌'}")
+    
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### 📧 Configuración de Email")
     
     email_config = EmailSender.get_email_config_status()
     if email_config['configured']:
         st.sidebar.success(f"✅ Email configurado")
         st.sidebar.info(f"📤 Desde: {email_config['sender_email']}")
-        if email_config['notification_email'] != "No configurado":
-            st.sidebar.info(f"📋 Copia a: {email_config['notification_email']}")
-        
-        # Botón de prueba
-        if st.sidebar.button("📧 Probar conexión SMTP"):
-            with st.spinner("Probando..."):
-                success, msg = EmailSender.test_connection()
-                if success:
-                    st.sidebar.success(msg)
-                else:
-                    st.sidebar.error(msg)
     else:
         st.sidebar.error("❌ Email NO configurado")
-        st.sidebar.info("Crear archivo .streamlit/secrets.toml con:")
-        st.sidebar.code("""
-smtp_server = "smtp.gmail.com"
-smtp_port = 587
-email_user = "tu_email@gmail.com"
-email_password = "tu_contraseña"
-notification_email = "copia@dominio.com"
-        """)
+        st.sidebar.info("Crear archivo .streamlit/secrets.toml")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📦 Exportación")
@@ -2249,7 +2027,7 @@ notification_email = "copia@dominio.com"
     st.sidebar.markdown("- CSV (datos completos)")
     st.sidebar.markdown("- RIS / BibTeX")
     
-    st.info("⚡ **v8.4:** 📧 ENVÍO POR EMAIL | 🚦 Alertas de calidad | ⚠️ Detección de contradicciones | 📅 Línea de tiempo | 📊 Tabla GRADE")
+    st.info("⚡ **v8.7 NUEVO:** Incluye sección **'¿Qué significa esto?'** que interpreta automáticamente los resultados y ofrece recomendaciones personalizadas.")
     st.markdown("---")
     
     default_query = '("myocardial infarction"[Mesh] OR "myocardial infarction"[tiab]) AND ("intramyocardial dissection"[tiab] OR "intramyocardial dissecting hematoma"[tiab])'
@@ -2257,15 +2035,15 @@ notification_email = "copia@dominio.com"
     
     query = st.text_area("**PubMed search strategy:**", value=default_query, height=100)
     hypothesis = st.text_area("**📌 Hipótesis:**", value=default_hypothesis, height=100)
-    threshold = st.slider("**Umbral de relevancia:**", 0.0, 0.9, 0.35, 0.05)
+    threshold = st.slider("**Umbral de relevancia (filtro preliminar):**", 0.0, 0.9, 0.35, 0.05)
     
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        generate_button = st.button("🚀 GENERAR FLAVORS (v8.4)", type="primary", use_container_width=True)
+        generate_button = st.button("🚀 GENERAR FLAVORS v8.7", type="primary", use_container_width=True)
     with col2:
         send_email = st.checkbox("📧 Enviar por email", value=True)
     with col3:
-        st.markdown("*Máx. 3000 artículos*")
+        st.markdown(f"*Máx. {MAX_ARTICLES} artículos*")
     
     if generate_button:
         if not query.strip() or not hypothesis.strip():
@@ -2298,7 +2076,7 @@ notification_email = "copia@dominio.com"
                     tab1, tab2, tab3, tab4 = st.tabs(["📄 DOCX", "📊 CSV", "📚 RIS", "📖 BibTeX"])
                     
                     with tab1:
-                        filename = f"flavors_v84_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                        filename = f"flavors_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
                         st.download_button(
                             "💾 DESCARGAR DOCX",
                             data=docx_bytes,
@@ -2325,7 +2103,7 @@ notification_email = "copia@dominio.com"
                             st.download_button(
                                 "📊 DESCARGAR CSV",
                                 data=csv_data,
-                                file_name=f"articles_v84_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                file_name=f"articles_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                 mime="text/csv",
                                 use_container_width=True
                             )
@@ -2335,7 +2113,7 @@ notification_email = "copia@dominio.com"
                         st.download_button(
                             "📚 DESCARGAR RIS",
                             data=ris_data,
-                            file_name=f"references_v84_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ris",
+                            file_name=f"references_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ris",
                             mime="application/x-research-info-systems",
                             use_container_width=True
                         )
@@ -2345,17 +2123,18 @@ notification_email = "copia@dominio.com"
                         st.download_button(
                             "📖 DESCARGAR BibTeX",
                             data=bib_data,
-                            file_name=f"references_v84_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bib",
+                            file_name=f"references_v87_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bib",
                             mime="text/plain",
                             use_container_width=True
                         )
                     
                     st.success("✅ ¡Proceso completado!")
+                    st.info("💡 **Novedad v8.7:** Revise la sección **'¿Qué significa esto?'** en el documento DOCX para interpretar contextualmente los resultados.")
                 else:
                     st.error("❌ No se pudieron generar flavors. Intente con umbral más bajo.")
     
     st.markdown("---")
-    st.markdown("*PubMed AI Analyzer v8.4 | Envío por email | Alertas de Calidad | Detección de Contradicciones | Línea de Tiempo*")
+    st.markdown("*PubMed AI Analyzer v8.7 | Clasificación por evidencia textual EXPLÍCITA | Asistente interpretativo integrado*")
 
 
 if __name__ == "__main__":
